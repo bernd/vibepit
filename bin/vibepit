@@ -1,0 +1,39 @@
+#!/bin/bash
+
+PROJECT_ROOT="$(realpath "${1:-"$(realpath .)"}")"
+
+if [ "$PROJECT_ROOT" = "$HOME" ]; then
+	echo "I don't run in your home directory. Point me to a project folder."
+	exit 1
+fi
+
+PROJECT_ID="$(echo -n "$PROJECT_ROOT" | tr -sc '[^A-Za-z0-9-]' '-' | sed -e 's,^-,,')"
+PROJECT_DATA_ROOT="$HOME/.local/share/vibepit/roots/${PROJECT_ID}"
+PROJECT_DATA_HOME="$PROJECT_DATA_ROOT/home"
+
+if [ ! -d "$PROJECT_DATA_ROOT" ]; then
+	echo "+ Creating projet root: $PROJECT_DATA_ROOT"
+	install -d -m 0700 "$PROJECT_DATA_ROOT"
+	install -d -m 0700 "$PROJECT_DATA_HOME"
+fi
+
+cat <<-__EOF > "$PROJECT_DATA_ROOT/label-file"
+vibepit.root=$PROJECT_DATA_ROOT
+vibepit.home=$PROJECT_DATA_HOME
+__EOF
+
+if [ ! -d "$PROJECT_ROOT" ]; then
+	install -d -m 0700 "$PROJECT_ROOT"
+fi
+
+args=(-ti --init --rm)
+args+=(--read-only --cap-drop all --security-opt=no-new-privileges)
+args+=(--hostname vibes)
+args+=(-e "TERM=$TERM")
+args+=(--label-file "$PROJECT_DATA_ROOT/label-file")
+args+=(--name "vibepit-$PROJECT_ID")
+args+=(--tmpfs /tmp)
+args+=(-v "${PROJECT_DATA_HOME}:/home/code")
+args+=(-v "${PROJECT_ROOT}:/src")
+
+docker run ${args[*]} vibepit:latest
