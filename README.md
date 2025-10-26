@@ -1,4 +1,4 @@
 Vibepit
 =======
 
-I pitty the vibes.
+I pity the vibes.
