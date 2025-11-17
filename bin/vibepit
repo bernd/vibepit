@@ -66,7 +66,7 @@ if [ -d "$PROJECT_DATA_ROOT" ] && [ "$clean_root" = "true" ] && [ -n "$PROJECT_I
 fi
 
 if [ ! -d "$PROJECT_DATA_ROOT" ]; then
-	echo "+ Creating projet root: $PROJECT_DATA_ROOT"
+	echo "+ Creating project root: $PROJECT_DATA_ROOT"
 	install -d -m 0700 "$PROJECT_DATA_ROOT"
 	install -d -m 0700 "$PROJECT_DATA_HOME"
 fi
