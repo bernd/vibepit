@@ -80,10 +80,18 @@ if [ ! -d "$PROJECT_ROOT" ]; then
 	install -d -m 0700 "$PROJECT_ROOT"
 fi
 
+term="${TERM:-linux}"
+case "$term" in
+	xterm-ghostty)
+		# The ghostty terminfo is not available in the container.
+		term="xterm-256color"
+		;;
+esac
+
 args=(-ti --init --rm)
 args+=(--read-only --cap-drop all --security-opt=no-new-privileges)
 args+=(--hostname vibes)
-args+=(-e "TERM=$TERM")
+args+=(-e "TERM=$term")
 args+=(--label-file "$PROJECT_DATA_ROOT/label-file")
 args+=(--name "vibepit-$PROJECT_ID")
 args+=(--tmpfs /tmp)
