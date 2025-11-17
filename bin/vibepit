@@ -56,7 +56,7 @@ if [ "$PROJECT_ROOT" = "$HOME" ]; then
 	exit 1
 fi
 
-PROJECT_ID="$(echo -n "$PROJECT_ROOT" | tr -sc '[^A-Za-z0-9-]' '-' | sed -e 's,^-,,')"
+PROJECT_ID="$(echo -n "$PROJECT_ROOT" | tr -sc '^A-Za-z0-9-' '-' | sed -e 's,^-,,')"
 PROJECT_DATA_ROOT="$HOME/.local/share/vibepit/roots/${PROJECT_ID}"
 PROJECT_DATA_HOME="$PROJECT_DATA_ROOT/home"
 
