@@ -58,6 +58,10 @@ RUN /bin/bash --login -c 'source "$HOME/.nvm/nvm.sh" && nvm install --lts' \
 RUN /bin/bash --login -c '$HOME/.local/bin/uv python install --default'
 RUN /bin/bash --login -c 'echo "fund=false" > $HOME/.npmrc'
 
+RUN mkdir -p "/home/$CODE_USER/bin"
+COPY bin/claude "/home/$CODE_USER/bin/claude"
+COPY bin/amp "/home/$CODE_USER/bin/amp"
+
 USER 0
 
 RUN mv /home/$CODE_USER /home/.${CODE_USER}.template \

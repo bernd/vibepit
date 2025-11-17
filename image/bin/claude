@@ -1,0 +1,10 @@
+#!/bin/bash
+
+claude="$HOME/.local/bin/claude"
+
+if [ ! -x "$claude" ]; then
+	echo "+ Installing Claude Code"
+	curl -fsSL https://claude.ai/install.sh | bash
+fi
+
+exec "$claude" "$@"
