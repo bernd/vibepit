@@ -17,6 +17,38 @@
 # specific language governing permissions and limitations
 # under the License. 
 
+usage() {
+	local msg="$1"
+	local name="$(basename "$0")"
+
+	if [ -n "$msg" ]; then
+		echo "$msg" 1>&2
+	fi
+	echo "Usage: $name [-C] [/path/to/project]" 1>&2
+	echo ""
+	echo " -C  Remove project root. (use after image update)"
+	exit 1
+}
+
+clean_root="false"
+
+while getopts ":Ch" opt; do
+	case "$opt" in
+		C)
+			clean_root="true"
+			;;
+		h)
+			usage
+			;;
+		\?)
+			usage "Invalid option: -$OPTARG"
+			;;
+	esac
+done
+
+# Remove parsed arguments from $@
+shift "$((OPTIND - 1))"
+
 PROJECT_ROOT="$(realpath "${1:-"$(realpath .)"}")"
 
 if [ "$PROJECT_ROOT" = "$HOME" ]; then
@@ -27,6 +59,11 @@ fi
 PROJECT_ID="$(echo -n "$PROJECT_ROOT" | tr -sc '[^A-Za-z0-9-]' '-' | sed -e 's,^-,,')"
 PROJECT_DATA_ROOT="$HOME/.local/share/vibepit/roots/${PROJECT_ID}"
 PROJECT_DATA_HOME="$PROJECT_DATA_ROOT/home"
+
+if [ -d "$PROJECT_DATA_ROOT" ] && [ "$clean_root" = "true" ] && [ -n "$PROJECT_ID" ]; then
+	echo "+ Removing project root: $PROJECT_DATA_ROOT"
+	rm -rf "$PROJECT_DATA_ROOT"
+fi
 
 if [ ! -d "$PROJECT_DATA_ROOT" ]; then
 	echo "+ Creating projet root: $PROJECT_DATA_ROOT"
