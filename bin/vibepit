@@ -105,4 +105,4 @@ args+=(--tmpfs /tmp)
 args+=(-v "${volume_name}:/home/code")
 args+=(-v "${project_root}:/src")
 
-docker run ${args[*]} vibepit:latest
+docker run ${args[*]} ghcr.io/bernd/vibepit:main
