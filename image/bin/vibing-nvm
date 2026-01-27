@@ -1,0 +1,14 @@
+#!/bin/bash
+
+set -eo pipefail
+
+version="$(curl -fsSL https://api.github.com/repos/nvm-sh/nvm/releases/latest | jq -r '.tag_name')"
+
+curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${version}/install.sh" | bash
+
+source "$HOME/.nvm/nvm.sh"
+
+nvm install --lts
+nvm install-latest-npm
+
+echo "fund=false" > "$HOME/.npmrc"

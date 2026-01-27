@@ -1,0 +1,5 @@
+#!/bin/bash
+
+set -eo pipefail
+
+curl -fsSL https://deno.land/install.sh | bash

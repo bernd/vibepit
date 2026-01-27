@@ -1,0 +1,7 @@
+#!/bin/bash
+
+set -eo pipefail
+
+curl -fsSL https://astral.sh/uv/install.sh | bash
+
+"$HOME/.local/bin/uv" python install --default

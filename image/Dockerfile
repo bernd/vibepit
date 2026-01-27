@@ -40,27 +40,10 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /var/log/*
 
-RUN curl -fsSL "https://godeb.s3.amazonaws.com/godeb-amd64.tar.gz" | \
-  tar -C "/usr/local/bin" -xzf - "godeb" \
-  && (cd /tmp && godeb install "$(godeb list | tail -1)")
-
 USER $CODE_UID
 
-RUN curl -fsSL https://astral.sh/uv/install.sh | bash
-RUN curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh | bash
-RUN curl -fsSL https://deno.land/install.sh | bash
-RUN curl -fsSL https://bun.sh/install | bash
-
-RUN /bin/bash --login -c 'source "$HOME/.nvm/nvm.sh" && nvm install --lts' \
-  && /bin/bash --login -c 'source "$HOME/.nvm/nvm.sh" && nvm install-latest-npm' \
-  && /bin/bash --login -c 'source "$HOME/.nvm/nvm.sh" && (cd $HOME/.local && npm install @anthropic-ai/claude-code)'
-
-RUN /bin/bash --login -c '$HOME/.local/bin/uv python install --default'
-RUN /bin/bash --login -c 'echo "fund=false" > $HOME/.npmrc'
-
-RUN mkdir -p "/home/$CODE_USER/bin"
-COPY bin/claude "/home/$CODE_USER/bin/claude"
-COPY bin/amp "/home/$CODE_USER/bin/amp"
+RUN install -d -m 0700 "/home/$CODE_USER/bin"
+COPY bin "/home/$CODE_USER/bin"
 
 USER 0
 

@@ -12,8 +12,9 @@ export HOME="/home/$CODE_USER"
 export NVM_DIR="$HOME/.nvm"
 
 paths=()
-paths+=("$HOME/.deno/bin")
+paths+=("$HOME/.local/bin")
 paths+=("$HOME/.bun/bin")
+paths+=("$HOME/.deno/bin")
 paths+=("$HOME/.local/node_modules/.bin")
 
 for path in ${paths[*]}; do

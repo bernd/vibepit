@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -eo pipefail
+
+version="${1:-21}"
+
+sudo apt-get update
+sudo apt-get install -y \
+	"openjdk-${version}-source" \
+	"openjdk-${version}-jdk-headless" \
+	"openjdk-${version}-jre-headless" \
+	"openjdk-${version}-dbg"
