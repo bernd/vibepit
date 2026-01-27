@@ -16,7 +16,9 @@ version="$(curl -fsSL "https://golang.org/dl/?mode=json&include=all" | jq -r '[.
 url="https://go.dev/dl/${version}.linux-${arch}.tar.gz"
 
 echo "+ Installing $version"
-curl -fsSL "$url" | sudo tar -C "/usr/local" -xzf -
 
-sudo ln -s "/usr/local/go/bin/go" "/usr/local/bin/go"
-sudo ln -s "/usr/local/go/bin/gofmt" "/usr/local/bin/gofmt"
+mkdir -p "$HOME/.local/bin"
+curl -fsSL "$url" | tar -C "$HOME/.local" -xzf -
+
+ln -s "$HOME/.local/go/bin/go" "$HOME/.local/bin/go"
+ln -s "$HOME/.local/go/bin/gofmt" "$HOME/.local/bin/gofmt"

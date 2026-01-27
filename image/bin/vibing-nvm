@@ -4,6 +4,7 @@ set -eo pipefail
 
 version="$(curl -fsSL https://api.github.com/repos/nvm-sh/nvm/releases/latest | jq -r '.tag_name')"
 
+echo "+ Installing NVM"
 curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${version}/install.sh" | bash
 
 source "$HOME/.nvm/nvm.sh"
