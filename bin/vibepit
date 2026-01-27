@@ -26,16 +26,16 @@ usage() {
 	fi
 	echo "Usage: $name [-C] [/path/to/project]" 1>&2
 	echo ""
-	echo " -C  Remove project root. (use after image update)"
+	echo " -C  Start with a clean vibepit volume. (removes /home/code)"
 	exit 1
 }
 
-clean_root="false"
+clean_volume="false"
 
 while getopts ":Ch" opt; do
 	case "$opt" in
 		C)
-			clean_root="true"
+			clean_volume="true"
 			;;
 		h)
 			usage
@@ -49,35 +49,34 @@ done
 # Remove parsed arguments from $@
 shift "$((OPTIND - 1))"
 
-PROJECT_ROOT="$(realpath "${1:-"$(realpath .)"}")"
+project_root="$(realpath "${1:-"$(realpath .)"}")"
+volume_name="vibepit-home"
 
-if [ "$PROJECT_ROOT" = "$HOME" ]; then
+if [ "$project_root" = "$HOME" ]; then
 	echo "I don't run in your home directory. Point me to a project folder."
 	exit 1
 fi
 
-PROJECT_ID="$(echo -n "$PROJECT_ROOT" | tr -sc '^A-Za-z0-9-' '-' | sed -e 's,^-,,')"
-PROJECT_DATA_ROOT="$HOME/.local/share/vibepit/roots/${PROJECT_ID}"
-PROJECT_DATA_HOME="$PROJECT_DATA_ROOT/home"
+running_vibepit="$(docker container ls -q -f "label=vibepit.project.dir=$project_root")"
 
-if [ -d "$PROJECT_DATA_ROOT" ] && [ "$clean_root" = "true" ] && [ -n "$PROJECT_ID" ]; then
-	echo "+ Removing project root: $PROJECT_DATA_ROOT"
-	rm -rf "$PROJECT_DATA_ROOT"
+if [ -n "$running_vibepit" ]; then
+	echo "+ Attaching to running session in $project_root"
+	docker exec -ti "$running_vibepit" /bin/bash
+	exit 0
 fi
 
-if [ ! -d "$PROJECT_DATA_ROOT" ]; then
-	echo "+ Creating project root: $PROJECT_DATA_ROOT"
-	install -d -m 0700 "$PROJECT_DATA_ROOT"
-	install -d -m 0700 "$PROJECT_DATA_HOME"
+if [ "$clean_volume" = "true" ]; then
+	echo "+ Removing volume: $volume_name"
+	docker volume rm "$volume_name"
 fi
 
-cat <<-__EOF > "$PROJECT_DATA_ROOT/label-file"
-vibepit.root=$PROJECT_DATA_ROOT
-vibepit.home=$PROJECT_DATA_HOME
-__EOF
-
-if [ ! -d "$PROJECT_ROOT" ]; then
-	install -d -m 0700 "$PROJECT_ROOT"
+if [ -z "$(docker volume ls -q -f "label=vibepit=true")" ]; then
+	echo "+ Creating volume: $volume_name"
+	docker volume create \
+		--label "vibepit=true" \
+		--label "vibepit.uid=$(id -u)" \
+		--label "vibepit.user=$(id -u -n)" \
+		"$volume_name" >/dev/null
 fi
 
 term="${TERM:-linux}"
@@ -88,14 +87,22 @@ case "$term" in
 		;;
 esac
 
+container_id="$(printf '%x%x%x' "$RANDOM" "$RANDOM" "$RANDOM")"
+
 args=(-ti --init --rm)
 args+=(--read-only --cap-drop all --security-opt=no-new-privileges)
 args+=(--hostname vibes)
 args+=(-e "TERM=$term")
-args+=(--label-file "$PROJECT_DATA_ROOT/label-file")
-args+=(--name "vibepit-$PROJECT_ID")
+args+=(-e "LANG=en_US.UTF-8")
+args+=(-e "LC_ALL=en_US.UTF-8")
+args+=(--label "vibepit=true")
+args+=(--label "vibepit.uid=$(id -u)")
+args+=(--label "vibepit.user=$(id -u -n)")
+args+=(--label "vibepit.volume=$volume_name")
+args+=(--label "vibepit.project.dir=$project_root")
+args+=(--name "vibepit-$container_id")
 args+=(--tmpfs /tmp)
-args+=(-v "${PROJECT_DATA_HOME}:/home/code")
-args+=(-v "${PROJECT_ROOT}:/src")
+args+=(-v "${volume_name}:/home/code")
+args+=(-v "${project_root}:/src")
 
 docker run ${args[*]} vibepit:latest

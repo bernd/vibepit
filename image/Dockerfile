@@ -1,7 +1,5 @@
 FROM ubuntu:25.10
 
-ARG NVM_VERSION=0.40.3
-
 ENV CODE_UID=1000
 ENV CODE_GID=1000
 ENV CODE_USER=code
@@ -19,20 +17,45 @@ RUN groupadd -g $CODE_GID $CODE_GROUP \
 RUN apt-get update \
   && apt-get dist-upgrade -V -y \
   && apt-get install -y --no-install-recommends \
+    7zip \
     build-essential \
+    bzip2 \
     ca-certificates \
+    cabextract \
     curl \
+    cpio \
+    file \
     git \
+    htop \
+    info \
+    ipcalc \
     jq \
     less \
+    locales \
     man-db \
+    manpages \
+    ncat \
+    netcat-openbsd \
+    openssl \
+    p7zip \
+    passwdqc \
+    pigz \
+    psmisc \
+    pv \
     pwgen \
+    python3 \
     ripgrep \
     rsync \
+    shellcheck \
     sqlite3 \
+    strace \
+    tree \
     unzip \
     vim \
     wget \
+    zip \
+    zstd \
+  && locale-gen en_US.UTF-8 \
   && apt-get autoremove --purge -y \
   && apt-get clean \
   && rm -rf /tmp/* \
@@ -40,19 +63,13 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /var/log/*
 
-USER $CODE_UID
-
-RUN install -d -m 0700 "/home/$CODE_USER/bin"
-COPY bin "/home/$CODE_USER/bin"
-
-USER 0
+RUN install -d  -m 0755 "/usr/local/bin"
+COPY bin "/usr/local/bin"
 
 RUN mv /home/$CODE_USER /home/.${CODE_USER}.template \
   && install -d 0750 -o $CODE_USER -g $CODE_GROUP /home/$CODE_USER
 
 WORKDIR /src
-
-RUN rm -rf /tmp/*
 
 COPY entrypoint.sh /entrypoint.sh
 

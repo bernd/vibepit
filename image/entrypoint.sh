@@ -2,25 +2,22 @@
 
 set -e
 
-if [ ! -f "$HOME/.home-dir-initialized" ]; then
+if [ ! -f "$HOME/.vibepit-initialized" ]; then
 	echo "+ Initializing $HOME"
 	rsync -aHS "/home/.${CODE_USER}.template/" "/home/$CODE_USER/"
-	date > "$HOME/.home-dir-initialized"
+	date > "$HOME/.vibepit-initialized"
 fi
 
 export HOME="/home/$CODE_USER"
-export NVM_DIR="$HOME/.nvm"
 
 paths=()
-paths+=("$HOME/.local/bin")
-paths+=("$HOME/.bun/bin")
-paths+=("$HOME/.deno/bin")
 paths+=("$HOME/.local/node_modules/.bin")
+paths+=("$HOME/.deno/bin")
+paths+=("$HOME/.bun/bin")
+paths+=("$HOME/.local/bin")
 
 for path in ${paths[*]}; do
-	if [ -d "$path" ]; then
-		export PATH="$path:$PATH"
-	fi
+	export PATH="$path:$PATH"
 done
 
 exec /bin/bash --login
