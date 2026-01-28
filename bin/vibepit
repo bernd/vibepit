@@ -78,7 +78,7 @@ fi
 
 if [ "$clean_volume" = "true" ]; then
 	echo "+ Removing volume: $volume_name"
-	"$docker_bin" volume rm "$volume_name"
+	"$docker_bin" volume rm "$volume_name" >/dev/null
 fi
 
 if [ -z "$("$docker_bin" volume ls -q -f "label=vibepit=true")" ]; then
