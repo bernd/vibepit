@@ -72,7 +72,7 @@ running_vibepit="$("$docker_bin" container ls -q -f "label=vibepit.project.dir=$
 
 if [ -n "$running_vibepit" ]; then
 	echo "+ Attaching to running session in $project_root"
-	"$docker_bin" exec -ti "$running_vibepit" /bin/bash
+	"$docker_bin" exec -ti "$running_vibepit" /bin/bash --login
 	exit 0
 fi
 
