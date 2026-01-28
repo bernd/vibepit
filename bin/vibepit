@@ -57,22 +57,33 @@ if [ "$project_root" = "$HOME" ]; then
 	exit 1
 fi
 
-running_vibepit="$(docker container ls -q -f "label=vibepit.project.dir=$project_root")"
+docker_bin="docker"
+
+if ! command -v "$docker_bin" >/dev/null; then
+	if command -v podman >/dev/null; then
+		docker_bin="podman"
+	else
+		echo "Missing docker or podman commands, abort."
+		exit 1
+	fi
+fi
+
+running_vibepit="$("$docker_bin" container ls -q -f "label=vibepit.project.dir=$project_root")"
 
 if [ -n "$running_vibepit" ]; then
 	echo "+ Attaching to running session in $project_root"
-	docker exec -ti "$running_vibepit" /bin/bash
+	"$docker_bin" exec -ti "$running_vibepit" /bin/bash
 	exit 0
 fi
 
 if [ "$clean_volume" = "true" ]; then
 	echo "+ Removing volume: $volume_name"
-	docker volume rm "$volume_name"
+	"$docker_bin" volume rm "$volume_name"
 fi
 
-if [ -z "$(docker volume ls -q -f "label=vibepit=true")" ]; then
+if [ -z "$("$docker_bin" volume ls -q -f "label=vibepit=true")" ]; then
 	echo "+ Creating volume: $volume_name"
-	docker volume create \
+	"$docker_bin" volume create \
 		--label "vibepit=true" \
 		--label "vibepit.uid=$(id -u)" \
 		--label "vibepit.user=$(id -u -n)" \
@@ -105,4 +116,4 @@ args+=(--tmpfs /tmp)
 args+=(-v "${volume_name}:/home/code")
 args+=(-v "${project_root}:/src")
 
-docker run ${args[*]} ghcr.io/bernd/vibepit:main
+"$docker_bin" run ${args[*]} ghcr.io/bernd/vibepit:main
