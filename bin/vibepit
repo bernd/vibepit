@@ -112,7 +112,7 @@ args+=(--label "vibepit.user=$(id -u -n)")
 args+=(--label "vibepit.volume=$volume_name")
 args+=(--label "vibepit.project.dir=$project_root")
 args+=(--name "vibepit-$container_id")
-args+=(--tmpfs /tmp)
+args+=(--tmpfs /tmp:exec)
 args+=(-v "${volume_name}:/home/code")
 args+=(-v "${project_root}:/src")
 
