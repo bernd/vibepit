@@ -1,0 +1,8 @@
+#!/bin/bash
+
+if ! command -v bun >/dev/null; then
+	echo "Bun not installed. Run: vibing-bun"
+	exit 1
+fi
+
+exec bun x ccusage@latest "$@"
