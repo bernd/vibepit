@@ -114,6 +114,7 @@ args+=(--label "vibepit.project.dir=$project_root")
 args+=(--name "vibepit-$container_id")
 args+=(--tmpfs /tmp:exec)
 args+=(-v "${volume_name}:/home/code")
-args+=(-v "${project_root}:/src")
+args+=(-v "${project_root}:${project_root}")
+args+=(-w "${project_root}")
 
 "$docker_bin" run ${args[*]} ghcr.io/bernd/vibepit:main

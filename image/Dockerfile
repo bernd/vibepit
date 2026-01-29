@@ -69,8 +69,6 @@ COPY bin "/usr/local/bin"
 RUN mv /home/$CODE_USER /home/.${CODE_USER}.template \
   && install -d 0750 -o $CODE_USER -g $CODE_GROUP /home/$CODE_USER
 
-WORKDIR /src
-
 COPY entrypoint.sh /entrypoint.sh
 
 USER $CODE_UID
