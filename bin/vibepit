@@ -66,7 +66,7 @@ fi
 
 # When executed in a project subdir, use the top-level Git dir as project root.
 if command -v git >/dev/null; then
-	git_root="$(git rev-parse --show-toplevel)"
+	git_root="$(git rev-parse --show-toplevel 2>/dev/null)"
 	if [ -n "$git_root" ]; then
 		project_root="$git_root"
 	fi
