@@ -1,0 +1,12 @@
+# vim: ft=sh
+
+# Vibepit shell settings
+
+# Alias to return to the current project dir.
+alias cdp='cd $VIBEPIT_PROJECT_DIR'
+
+if [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+	eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+fi
+
+export HOMEBREW_NO_ENV_HINTS=1

@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -eo pipefail
+
+brew_path="/home/linuxbrew/.linuxbrew/bin/brew"
+
+if [ ! -x "$brew_path" ]; then
+	echo "+ Installing Homebrew"
+	git clone "https://github.com/Homebrew/brew.git" "$HOME/.linuxbrew"
+fi
+
+if [ -z "$HOMEBREW_PREFIX" ]; then
+	eval "$("$brew_path" shellenv)"
+fi
+
+exec "$brew_path" "$@"
