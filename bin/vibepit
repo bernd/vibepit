@@ -18,27 +18,33 @@
 # under the License. 
 
 usage() {
-	local msg="$1"
-	local name="$(basename "$0")"
+	local msg name
+	msg="$1"
+	name"$(basename "$0")"
 
 	if [ -n "$msg" ]; then
 		echo "$msg" 1>&2
 	fi
-	echo "Usage: $name [-C] [/path/to/project]" 1>&2
+	echo "Usage: $name [options] [/path/to/project]" 1>&2
 	echo ""
 	echo " -C  Start with a clean vibepit volume. (removes /home/code)"
+	echo " -L  Start with a local vibepit:latest image. (for development)"
 	exit 1
 }
 
 clean_volume="false"
+image="ghcr.io/bernd/vibepit:main"
 
-while getopts ":Ch" opt; do
+while getopts ":ChL" opt; do
 	case "$opt" in
 		C)
 			clean_volume="true"
 			;;
 		h)
 			usage
+			;;
+		L)
+			image="vibepit:latest"
 			;;
 		\?)
 			usage "Invalid option: -$OPTARG"
@@ -106,6 +112,7 @@ args+=(--hostname vibes)
 args+=(-e "TERM=$term")
 args+=(-e "LANG=en_US.UTF-8")
 args+=(-e "LC_ALL=en_US.UTF-8")
+args+=(-e "VIBEPIT_PROJECT_DIR=$project_root")
 args+=(--label "vibepit=true")
 args+=(--label "vibepit.uid=$(id -u)")
 args+=(--label "vibepit.user=$(id -u -n)")
@@ -117,4 +124,4 @@ args+=(-v "${volume_name}:/home/code")
 args+=(-v "${project_root}:${project_root}")
 args+=(-w "${project_root}")
 
-"$docker_bin" run ${args[*]} ghcr.io/bernd/vibepit:main
+"$docker_bin" run ${args[*]} "$image"
