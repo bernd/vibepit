@@ -15,10 +15,11 @@ paths+=("$HOME/.local/node_modules/.bin")
 paths+=("$HOME/.deno/bin")
 paths+=("$HOME/.bun/bin")
 paths+=("$HOME/go/bin")
-paths+=("$HOME/.local/bin")
 
-for path in ${paths[*]}; do
+for path in "${paths[@]}"; do
 	export PATH="$path:$PATH"
 done
+
+echo "+ Welcome to the pit!"
 
 exec /bin/bash --login
