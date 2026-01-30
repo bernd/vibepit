@@ -67,8 +67,7 @@ RUN groupadd -g $CODE_GID $CODE_GROUP \
   && useradd -l -u $CODE_UID -s /bin/bash -d /home/$CODE_USER \
     -g $CODE_GROUP -c "Code" -m \
     $CODE_USER \
-  && chown -R ${CODE_UID}:${CODE_GID} /home/$CODE_USER \
-  && install -d -m 0700 -o $CODE_USER -g $CODE_GROUP /src
+  && chown -R ${CODE_UID}:${CODE_GID} /home/$CODE_USER
 
 # Homebrew on Linux wants write access to /home in non-sudo install mode...
 RUN install -d -m 0755 "/usr/local/bin" \
