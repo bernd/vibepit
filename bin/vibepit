@@ -122,6 +122,9 @@ args+=(-e "TERM=$term")
 args+=(-e "LANG=en_US.UTF-8")
 args+=(-e "LC_ALL=en_US.UTF-8")
 args+=(-e "VIBEPIT_PROJECT_DIR=$project_root")
+if [ -n "$COLORTERM" ]; then
+	args+=(-e "COLORTERM=$COLORTERM")
+fi
 args+=(--label "vibepit=true")
 args+=(--label "vibepit.uid=$(id -u)")
 args+=(--label "vibepit.user=$(id -u -n)")
