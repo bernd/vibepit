@@ -124,4 +124,8 @@ args+=(-v "${volume_name}:/home/code")
 args+=(-v "${project_root}:${project_root}")
 args+=(-w "${project_root}")
 
+if [ -e "/etc/localtime" ]; then
+	args+=(-v "/etc/localtime:/etc/localtime")
+fi
+
 "$docker_bin" run ${args[*]} "$image"
