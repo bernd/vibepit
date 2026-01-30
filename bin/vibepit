@@ -56,11 +56,20 @@ done
 shift "$((OPTIND - 1))"
 
 project_root="$(realpath "${1:-"$(realpath .)"}")"
+workdir="$project_root"
 volume_name="vibepit-home"
 
 if [ "$project_root" = "$HOME" ]; then
 	echo "I don't run in your home directory. Point me to a project folder."
 	exit 1
+fi
+
+# When executed in a project subdir, use the top-level Git dir as project root.
+if command -v git >/dev/null; then
+	git_root="$(git rev-parse --show-toplevel)"
+	if [ -n "$git_root" ]; then
+		project_root="$git_root"
+	fi
 fi
 
 docker_bin="docker"
@@ -122,7 +131,7 @@ args+=(--name "vibepit-$container_id")
 args+=(--tmpfs /tmp:exec)
 args+=(-v "${volume_name}:/home/code")
 args+=(-v "${project_root}:${project_root}")
-args+=(-w "${project_root}")
+args+=(-w "${workdir}")
 
 if [ -e "/etc/localtime" ]; then
 	args+=(-v "/etc/localtime:/etc/localtime")
