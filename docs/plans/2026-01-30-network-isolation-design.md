@@ -100,7 +100,63 @@ Two matching modes:
 - **Wildcard syntax.** Listing `*.example.com` allows subdomains of
   `example.com` but not `example.com` itself.
 
-Both modes apply to the HTTP proxy and the DNS server.
+Rules can optionally include a port: `example.com:443` matches only requests
+to port 443. `*.example.com:443` matches subdomains on port 443 only. Rules
+without a port match any port.
+
+Specificity ranking (highest to lowest):
+
+1. Exact hostname with port (`example.com:443`)
+2. Exact hostname, any port (`example.com`)
+3. Wildcard with port (`*.example.com:443`)
+4. Wildcard, any port (`*.example.com`)
+
+Both modes apply to the HTTP proxy and the DNS server (DNS ignores port
+rules since DNS queries have no port context).
+
+## CIDR Blocking
+
+The proxy blocks requests to private and link-local IP ranges by default,
+preventing agents from reaching host services or other containers via raw IP
+addresses. This also defends against DNS rebinding attacks where an allowed
+domain resolves to a private IP.
+
+Default blocked ranges:
+
+- `10.0.0.0/8` -- RFC 1918 private
+- `172.16.0.0/12` -- RFC 1918 private
+- `192.168.0.0/16` -- RFC 1918 private
+- `127.0.0.0/8` -- loopback
+- `169.254.0.0/16` -- link-local
+- `::1/128` -- IPv6 loopback
+- `fc00::/7` -- IPv6 unique local
+- `fe80::/10` -- IPv6 link-local
+
+### Enforcement in the HTTP proxy
+
+When a CONNECT or plain HTTP request targets an IP address directly, the proxy
+checks it against blocked CIDR ranges before establishing a connection. When
+the target is a domain, the proxy resolves it and validates the resolved IP
+against blocked ranges before connecting. An allowed domain that resolves to a
+blocked IP is rejected.
+
+### Enforcement in the DNS server
+
+After forwarding a query to the upstream resolver, the DNS server inspects the
+response. If any A or AAAA record resolves to a blocked CIDR range, the
+response is replaced with NXDOMAIN. This prevents the agent from learning
+private IPs even if it doesn't use the proxy for the actual connection.
+
+### Configuration
+
+Blocked CIDR ranges can be extended in the global or project config:
+
+```yaml
+block-cidr:
+  - 203.0.113.0/24
+```
+
+The default ranges are always blocked and cannot be removed.
 
 ## Configuration
 
