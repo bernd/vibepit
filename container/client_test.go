@@ -3,6 +3,8 @@ package container
 import (
 	"net"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNextIP(t *testing.T) {
@@ -61,6 +63,23 @@ func TestProxyContainerConfig(t *testing.T) {
 	if cfg.BinaryPath != "/usr/local/bin/vibepit" {
 		t.Error("unexpected binary path")
 	}
+}
+
+func TestProxyContainerConfigHasTLSFields(t *testing.T) {
+	cfg := ProxyContainerConfig{
+		BinaryPath: "/usr/bin/vibepit",
+		ConfigPath: "/tmp/config.json",
+		NetworkID:  "net-123",
+		ProxyIP:    "172.18.0.2",
+		Name:       "vibepit-proxy-test",
+		SessionID:  "session-abc",
+		TLSKeyPEM:  "key-pem",
+		TLSCertPEM: "cert-pem",
+		CACertPEM:  "ca-pem",
+		ProjectDir: "/home/user/project",
+	}
+	assert.Equal(t, "session-abc", cfg.SessionID)
+	assert.Equal(t, "ca-pem", cfg.CACertPEM)
 }
 
 func TestBoolPtr(t *testing.T) {
