@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -13,9 +14,28 @@ import (
 	"github.com/bernd/vibepit/proxy"
 )
 
+func mustParseURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	return u
+}
+
 // TestProxyServerIntegration starts the proxy server and validates filtering.
 // Run with: go test -tags=integration -v -run TestProxyServerIntegration
 func TestProxyServerIntegration(t *testing.T) {
+	// Generate ephemeral mTLS credentials for the control API.
+	creds, err := proxy.GenerateMTLSCredentials(10 * time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateMTLSCredentials: %v", err)
+	}
+
+	// Set the env vars required by LoadServerTLSConfigFromEnv.
+	t.Setenv(proxy.EnvProxyTLSKey, string(creds.ServerKeyPEM()))
+	t.Setenv(proxy.EnvProxyTLSCert, string(creds.ServerCertPEM()))
+	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
+
 	cfg := proxy.ProxyConfig{
 		Allow:    []string{"httpbin.org", "example.com"},
 		DNSOnly:  []string{"dns-only.example.com"},
@@ -38,7 +58,16 @@ func TestProxyServerIntegration(t *testing.T) {
 	go srv.Run(ctx)
 	time.Sleep(500 * time.Millisecond)
 
-	resp, err := http.Get("http://localhost:3129/config")
+	// Build an mTLS client for the control API.
+	clientTLS, err := creds.ClientTLSConfig()
+	if err != nil {
+		t.Fatalf("ClientTLSConfig: %v", err)
+	}
+	tlsClient := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: clientTLS},
+	}
+
+	resp, err := tlsClient.Get("https://127.0.0.1:3129/config")
 	if err != nil {
 		t.Fatalf("control API request: %v", err)
 	}
@@ -48,15 +77,14 @@ func TestProxyServerIntegration(t *testing.T) {
 		t.Errorf("control API status = %d, want 200", resp.StatusCode)
 	}
 
-	client := &http.Client{
+	// Use the HTTP proxy to verify blocked requests.
+	proxyClient := &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
+			Proxy: http.ProxyURL(mustParseURL("http://localhost:3128")),
 		},
 	}
-	os.Setenv("HTTP_PROXY", "http://localhost:3128")
-	defer os.Unsetenv("HTTP_PROXY")
 
-	blockedResp, err := client.Get("http://evil.com/")
+	blockedResp, err := proxyClient.Get("http://evil.com/")
 	if err != nil {
 		t.Fatalf("blocked request: %v", err)
 	}
