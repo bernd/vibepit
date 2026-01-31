@@ -18,7 +18,7 @@ import (
 func AllowCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "allow",
-		Usage:     "Add domains to the running proxy's allowlist",
+		Usage:     "Add domains to the proxy allowlist",
 		ArgsUsage: "<domain[:port]>...",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -37,7 +37,7 @@ func AllowCommand() *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			entries := cmd.Args().Slice()
 			if len(entries) == 0 {
-				return fmt.Errorf("at least one domain is required")
+				return cli.ShowSubcommandHelp(cmd)
 			}
 
 			httpClient, baseURL, err := controlAPIClient(ctx, cmd.String("addr"), cmd.String("session"))
@@ -45,7 +45,10 @@ func AllowCommand() *cli.Command {
 				return err
 			}
 
-			body, _ := json.Marshal(map[string]any{"entries": entries})
+			body, err := json.Marshal(map[string]any{"entries": entries})
+			if err != nil {
+				return fmt.Errorf("marshal allow entries: %w", err)
+			}
 			resp, err := httpClient.Post(
 				baseURL+"/allow",
 				"application/json",
@@ -63,7 +66,9 @@ func AllowCommand() *cli.Command {
 			var result struct {
 				Added []string `json:"added"`
 			}
-			json.NewDecoder(resp.Body).Decode(&result)
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return fmt.Errorf("decode allow response: %w", err)
+			}
 
 			for _, d := range result.Added {
 				fmt.Printf("+ allowed %s\n", d)
