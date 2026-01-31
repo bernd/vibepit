@@ -21,6 +21,7 @@ func main() {
 			cmd.ProxyCommand(),
 			cmd.MonitorCommand(),
 			cmd.AllowCommand(),
+			cmd.SessionsCommand(),
 		},
 	}
 	if err := app.Run(context.Background(), os.Args); err != nil {

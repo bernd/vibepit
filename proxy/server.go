@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -71,8 +72,23 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	go func() {
-		fmt.Printf("proxy: control API listening on %s\n", ControlAPIPort)
-		errCh <- http.ListenAndServe(ControlAPIPort, controlAPI)
+		tlsCfg, err := LoadServerTLSConfigFromEnv()
+		if err != nil {
+			errCh <- fmt.Errorf("control API TLS: %w", err)
+			return
+		}
+		if tlsCfg != nil {
+			fmt.Printf("proxy: control API listening on %s (mTLS)\n", ControlAPIPort)
+			ln, err := tls.Listen("tcp", ControlAPIPort, tlsCfg)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- http.Serve(ln, controlAPI)
+		} else {
+			fmt.Printf("proxy: control API listening on %s (no TLS)\n", ControlAPIPort)
+			errCh <- http.ListenAndServe(ControlAPIPort, controlAPI)
+		}
 	}()
 
 	select {

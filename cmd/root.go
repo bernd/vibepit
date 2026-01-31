@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,9 +12,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/proxy"
 	"github.com/urfave/cli/v3"
 )
 
@@ -167,17 +171,41 @@ func RootAction(ctx context.Context, cmd *cli.Command) error {
 		client.RemoveNetwork(ctx, netInfo.ID)
 	}()
 
+	// Generate ephemeral mTLS credentials for the control API.
+	fmt.Println("+ Generating mTLS credentials")
+	creds, err := proxy.GenerateMTLSCredentials(30 * 24 * time.Hour)
+	if err != nil {
+		return fmt.Errorf("mtls: %w", err)
+	}
+
+	// Generate a unique session ID.
+	sessionID := randomSessionID()
+
+	// Write client credentials so subcommands can find them.
+	sessionDir, err := WriteSessionCredentials(sessionID, creds)
+	if err != nil {
+		return fmt.Errorf("session credentials: %w", err)
+	}
+	defer CleanupSessionCredentials(sessionID)
+	fmt.Printf("+ Session: %s (credentials in %s)\n", sessionID, sessionDir)
+
 	fmt.Println("+ Starting proxy container")
-	proxyContainerID, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
+	proxyContainerID, controlPort, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
 		BinaryPath: selfBinary,
 		ConfigPath: tmpFile.Name(),
 		NetworkID:  netInfo.ID,
 		ProxyIP:    proxyIP,
 		Name:       "vibepit-proxy-" + containerID,
+		SessionID:  sessionID,
+		TLSKeyPEM:  string(creds.ServerKeyPEM()),
+		TLSCertPEM: string(creds.ServerCertPEM()),
+		CACertPEM:  string(creds.CACertPEM()),
+		ProjectDir: projectRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy container: %w", err)
 	}
+	fmt.Printf("+ Control API on 127.0.0.1:%s\n", controlPort)
 	defer func() {
 		fmt.Println("+ Stopping proxy container")
 		client.StopAndRemove(ctx, proxyContainerID)
@@ -218,4 +246,11 @@ func RootAction(ctx context.Context, cmd *cli.Command) error {
 
 func randomHex() string {
 	return fmt.Sprintf("%x%x%x", os.Getpid(), os.Getuid(), os.Getppid())
+}
+
+// randomSessionID returns a short random hex string for session identification.
+func randomSessionID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

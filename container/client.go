@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	LabelUser       = "x-vibepit.user"
 	LabelVolume     = "x-vibepit.volume"
 	LabelProjectDir = "x-vibepit.project.dir"
+	LabelSessionID  = "x-vibepit.session-id"
 
 	RoleProxy = "proxy"
 	RoleDev   = "dev"
@@ -298,18 +300,49 @@ type ProxyContainerConfig struct {
 	NetworkID  string
 	ProxyIP    string
 	Name       string
+	SessionID  string
+	TLSKeyPEM  string
+	TLSCertPEM string
+	CACertPEM  string
+	ProjectDir string
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
 // vibepit proxy binary, then connects it to the bridge network so it can
-// reach the internet.
-func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConfig) (string, error) {
+// reach the internet. The control API port (3129) is published to 127.0.0.1
+// with an OS-assigned host port. Returns the container ID and the assigned
+// host port.
+func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConfig) (string, string, error) {
+	var env []string
+	if cfg.TLSKeyPEM != "" {
+		env = append(env,
+			"VIBEPIT_PROXY_TLS_KEY="+cfg.TLSKeyPEM,
+			"VIBEPIT_PROXY_TLS_CERT="+cfg.TLSCertPEM,
+			"VIBEPIT_PROXY_CA_CERT="+cfg.CACertPEM,
+		)
+	}
+
+	labels := map[string]string{
+		LabelVibepit:    "true",
+		LabelRole:       RoleProxy,
+		LabelProjectDir: cfg.ProjectDir,
+	}
+	if cfg.SessionID != "" {
+		labels[LabelSessionID] = cfg.SessionID
+	}
+
+	containerPort, _ := nat.NewPort("tcp", "3129")
+
 	resp, err := c.docker.ContainerCreate(ctx,
 		&container.Config{
 			Image:      ProxyImage,
 			Cmd:        []string{ProxyBinaryPath, "proxy", "--config", ProxyConfigPath},
-			Labels:     map[string]string{LabelVibepit: "true", LabelRole: RoleProxy},
+			Labels:     labels,
+			Env:        env,
 			WorkingDir: "/",
+			ExposedPorts: nat.PortSet{
+				containerPort: struct{}{},
+			},
 		},
 		&container.HostConfig{
 			Binds: []string{
@@ -317,6 +350,11 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 				cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
 			},
 			RestartPolicy: container.RestartPolicy{Name: "no"},
+			PortBindings: nat.PortMap{
+				containerPort: []nat.PortBinding{
+					{HostIP: "127.0.0.1", HostPort: "0"},
+				},
+			},
 		},
 		&network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
@@ -331,15 +369,68 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		cfg.Name,
 	)
 	if err != nil {
-		return "", fmt.Errorf("create proxy container: %w", err)
+		return "", "", fmt.Errorf("create proxy container: %w", err)
 	}
 	if err := c.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return "", fmt.Errorf("start proxy container: %w", err)
+		return "", "", fmt.Errorf("start proxy container: %w", err)
 	}
 	if err := c.docker.NetworkConnect(ctx, "bridge", resp.ID, nil); err != nil {
-		return "", fmt.Errorf("connect proxy to bridge: %w", err)
+		return "", "", fmt.Errorf("connect proxy to bridge: %w", err)
 	}
-	return resp.ID, nil
+
+	// Inspect the container to discover the OS-assigned host port.
+	info, err := c.docker.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return "", "", fmt.Errorf("inspect proxy container: %w", err)
+	}
+	bindings := info.NetworkSettings.Ports[containerPort]
+	if len(bindings) == 0 {
+		return "", "", fmt.Errorf("no port binding found for control API")
+	}
+	controlPort := bindings[0].HostPort
+
+	return resp.ID, controlPort, nil
+}
+
+// ProxySession describes a running proxy for session discovery.
+type ProxySession struct {
+	ContainerID string
+	SessionID   string
+	ControlPort string
+	ProjectDir  string
+}
+
+// ListProxySessions returns all running vibepit proxy containers with their
+// session metadata. The control port is read from the container's published
+// port bindings rather than a label.
+func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", LabelVibepit+"=true"),
+			filters.Arg("label", LabelRole+"="+RoleProxy),
+		),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var sessions []ProxySession
+	for _, ctr := range containers {
+		controlPort := ""
+		for _, p := range ctr.Ports {
+			if p.PrivatePort == 3129 && p.PublicPort != 0 {
+				controlPort = fmt.Sprintf("%d", p.PublicPort)
+				break
+			}
+		}
+		sessions = append(sessions, ProxySession{
+			ContainerID: ctr.ID,
+			SessionID:   ctr.Labels[LabelSessionID],
+			ControlPort: controlPort,
+			ProjectDir:  ctr.Labels[LabelProjectDir],
+		})
+	}
+	return sessions, nil
 }
 
 // DevContainerConfig holds the parameters for the sandboxed dev container.

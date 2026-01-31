@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/bernd/vibepit/config"
 	"github.com/urfave/cli/v3"
@@ -30,6 +29,10 @@ func AllowCommand() *cli.Command {
 				Name:  "addr",
 				Usage: "Proxy control API address (auto-detected if omitted)",
 			},
+			&cli.StringFlag{
+				Name:  "session",
+				Usage: "Session ID or project path (skips interactive selection)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			entries := cmd.Args().Slice()
@@ -37,20 +40,14 @@ func AllowCommand() *cli.Command {
 				return fmt.Errorf("at least one domain is required")
 			}
 
-			addr := cmd.String("addr")
-			if addr == "" {
-				discovered, err := discoverProxyAddr(ctx)
-				if err != nil {
-					return fmt.Errorf("cannot find running proxy (use --addr to specify manually): %w", err)
-				}
-				addr = discovered
+			httpClient, baseURL, err := controlAPIClient(ctx, cmd.String("addr"), cmd.String("session"))
+			if err != nil {
+				return err
 			}
 
-			// POST entries to the proxy control API.
 			body, _ := json.Marshal(map[string]any{"entries": entries})
-			client := &http.Client{Timeout: 5 * time.Second}
-			resp, err := client.Post(
-				fmt.Sprintf("http://%s/allow", addr),
+			resp, err := httpClient.Post(
+				baseURL+"/allow",
 				"application/json",
 				bytes.NewReader(body),
 			)
@@ -76,7 +73,6 @@ func AllowCommand() *cli.Command {
 				return nil
 			}
 
-			// Find project root and persist to config.
 			projectRoot, err := findProjectRoot()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not find project root, skipping config save: %v\n", err)
