@@ -4,6 +4,11 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+var sessionFlag = &cli.StringFlag{
+	Name:  "session",
+	Usage: "Session ID or project path (skips interactive selection)",
+}
+
 func RootCommand() *cli.Command {
 	return &cli.Command{
 		Name:            "vibepit",

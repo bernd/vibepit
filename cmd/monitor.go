@@ -21,12 +21,7 @@ func MonitorCommand() *cli.Command {
 		Name:     "monitor",
 		Usage:    "Connect to a running proxy for logs and admin",
 		Category: "Utilities",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "session",
-				Usage: "Session ID or project path (skips interactive selection)",
-			},
-		},
+		Flags:    []cli.Flag{sessionFlag},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			session, err := discoverSession(ctx, cmd.String("session"))
 			if err != nil {

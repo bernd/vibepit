@@ -18,10 +18,7 @@ func AllowCommand() *cli.Command {
 				Name:  "no-save",
 				Usage: "Skip persisting to project config",
 			},
-			&cli.StringFlag{
-				Name:  "session",
-				Usage: "Session ID or project path (skips interactive selection)",
-			},
+			sessionFlag,
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			entries := cmd.Args().Slice()
@@ -62,4 +59,3 @@ func AllowCommand() *cli.Command {
 		},
 	}
 }
-
