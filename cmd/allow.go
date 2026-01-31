@@ -1,11 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 
 	"github.com/bernd/vibepit/config"
 	"github.com/urfave/cli/v3"
@@ -37,37 +34,17 @@ func AllowCommand() *cli.Command {
 				return fmt.Errorf("cannot find running proxy: %w", err)
 			}
 
-			httpClient, baseURL, err := controlAPIClient(session)
+			client, err := NewControlClient(session)
 			if err != nil {
 				return err
 			}
 
-			body, err := json.Marshal(map[string]any{"entries": entries})
+			added, err := client.Allow(entries)
 			if err != nil {
-				return fmt.Errorf("marshal allow entries: %w", err)
-			}
-			resp, err := httpClient.Post(
-				baseURL+"/allow",
-				"application/json",
-				bytes.NewReader(body),
-			)
-			if err != nil {
-				return fmt.Errorf("POST /allow: %w", err)
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("proxy returned %s", resp.Status)
+				return err
 			}
 
-			var result struct {
-				Added []string `json:"added"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				return fmt.Errorf("decode allow response: %w", err)
-			}
-
-			for _, d := range result.Added {
+			for _, d := range added {
 				fmt.Printf("+ allowed %s\n", d)
 			}
 

@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -19,20 +17,6 @@ type SessionInfo struct {
 	ControlPort string
 	SessionID   string
 	ProjectDir  string
-}
-
-// controlAPIClient returns an mTLS HTTP client and base URL for the proxy control API.
-func controlAPIClient(session *SessionInfo) (*http.Client, string, error) {
-	tlsCfg, err := LoadSessionTLSConfig(session.SessionID)
-	if err != nil {
-		return nil, "", fmt.Errorf("load TLS credentials: %w", err)
-	}
-	httpClient := &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
-	}
-	baseURL := fmt.Sprintf("https://127.0.0.1:%s", session.ControlPort)
-	return httpClient, baseURL, nil
 }
 
 // discoverSession finds running vibepit proxy containers and returns connection
@@ -113,12 +97,12 @@ func MonitorCommand() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("cannot find running proxy: %w", err)
 			}
-			httpClient, baseURL, err := controlAPIClient(session)
+			client, err := NewControlClient(session)
 			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Connecting to proxy at %s...\n\n", baseURL)
+			fmt.Println("Connecting to proxy...")
 
 			seen := 0
 
@@ -129,16 +113,12 @@ func MonitorCommand() *cli.Command {
 				default:
 				}
 
-				resp, err := httpClient.Get(baseURL + "/logs")
+				entries, err := client.Logs()
 				if err != nil {
 					fmt.Printf("connection error: %v (retrying...)\n", err)
 					time.Sleep(2 * time.Second)
 					continue
 				}
-
-				var entries []proxy.LogEntry
-				json.NewDecoder(resp.Body).Decode(&entries)
-				resp.Body.Close()
 
 				for i := seen; i < len(entries); i++ {
 					e := entries[i]
