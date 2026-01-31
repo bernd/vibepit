@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/proxy"
+	"github.com/charmbracelet/huh"
 )
 
 func sessionBaseDir() (string, error) {
@@ -24,6 +27,68 @@ func sessionDir(sessionID string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(base, sessionID), nil
+}
+
+// discoverSession finds running vibepit proxy containers and returns connection
+// info. If multiple sessions are running, prompts the user to select one.
+// If filter is non-empty, it matches against SessionID or ProjectDir.
+func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
+	client, err := ctr.NewClient()
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	sessions, err := client.ListProxySessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, fmt.Errorf("no running vibepit sessions found")
+	}
+
+	if filter != "" {
+		for _, s := range sessions {
+			if s.SessionID == filter || s.ProjectDir == filter {
+				return &SessionInfo{
+					ControlPort: s.ControlPort,
+					SessionID:   s.SessionID,
+					ProjectDir:  s.ProjectDir,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("no session matching %q found", filter)
+	}
+
+	if len(sessions) == 1 {
+		return &SessionInfo{
+			ControlPort: sessions[0].ControlPort,
+			SessionID:   sessions[0].SessionID,
+			ProjectDir:  sessions[0].ProjectDir,
+		}, nil
+	}
+
+	// Multiple sessions — interactive selection.
+	options := make([]huh.Option[int], len(sessions))
+	for i, s := range sessions {
+		options[i] = huh.NewOption(s.ProjectDir, i)
+	}
+	var selected int
+	err = huh.NewSelect[int]().
+		Title("Select a session").
+		Options(options...).
+		Value(&selected).
+		Run()
+	if err != nil {
+		return nil, fmt.Errorf("session selection: %w", err)
+	}
+
+	s := sessions[selected]
+	return &SessionInfo{
+		ControlPort: s.ControlPort,
+		SessionID:   s.SessionID,
+		ProjectDir:  s.ProjectDir,
+	}, nil
 }
 
 // WriteSessionCredentials persists the client TLS material for a session
