@@ -39,7 +39,7 @@ func MonitorCommand() *cli.Command {
 
 			fmt.Println("Connecting to proxy...")
 
-			seen := 0
+			var cursor uint64
 
 			for {
 				select {
@@ -48,15 +48,14 @@ func MonitorCommand() *cli.Command {
 				default:
 				}
 
-				entries, err := client.Logs()
+				entries, err := client.LogsAfter(cursor)
 				if err != nil {
 					fmt.Printf("connection error: %v (retrying...)\n", err)
 					time.Sleep(2 * time.Second)
 					continue
 				}
 
-				for i := seen; i < len(entries); i++ {
-					e := entries[i]
+				for _, e := range entries {
 					symbol := "+"
 					if e.Action == proxy.ActionBlock {
 						symbol = "x"
@@ -72,8 +71,8 @@ func MonitorCommand() *cli.Command {
 						host,
 						e.Reason,
 					)
+					cursor = e.ID
 				}
-				seen = len(entries)
 
 				time.Sleep(1 * time.Second)
 			}

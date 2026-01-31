@@ -45,6 +45,38 @@ func TestControlClient_Logs(t *testing.T) {
 	})
 }
 
+func TestControlClient_LogsAfter(t *testing.T) {
+	log := proxy.NewLogBuffer(100)
+	for i := 0; i < 30; i++ {
+		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
+	}
+
+	api := proxy.NewControlAPI(log, nil, proxy.NewAllowlist(nil))
+	client := testControlClient(t, api)
+
+	t.Run("returns last 25 entries for initial request", func(t *testing.T) {
+		entries, err := client.LogsAfter(0)
+		require.NoError(t, err)
+		require.Len(t, entries, 25)
+		assert.Equal(t, uint64(6), entries[0].ID)
+		assert.Equal(t, uint64(30), entries[24].ID)
+	})
+
+	t.Run("returns only new entries after cursor", func(t *testing.T) {
+		entries, err := client.LogsAfter(28)
+		require.NoError(t, err)
+		require.Len(t, entries, 2)
+		assert.Equal(t, uint64(29), entries[0].ID)
+		assert.Equal(t, uint64(30), entries[1].ID)
+	})
+
+	t.Run("returns empty when cursor is current", func(t *testing.T) {
+		entries, err := client.LogsAfter(30)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+}
+
 func TestControlClient_Stats(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow})

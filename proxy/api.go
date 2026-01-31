@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 )
 
 // ControlAPI serves proxy status and configuration over HTTP.
@@ -32,7 +33,11 @@ func (a *ControlAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, a.log.Entries())
+	var afterID uint64
+	if s := r.URL.Query().Get("after"); s != "" {
+		afterID, _ = strconv.ParseUint(s, 10, 64)
+	}
+	writeJSON(w, a.log.EntriesAfter(afterID))
 }
 
 func (a *ControlAPI) handleStats(w http.ResponseWriter, r *http.Request) {

@@ -39,6 +39,14 @@ func (c *ControlClient) Logs() ([]proxy.LogEntry, error) {
 	return entries, nil
 }
 
+func (c *ControlClient) LogsAfter(afterID uint64) ([]proxy.LogEntry, error) {
+	var entries []proxy.LogEntry
+	if err := c.get(fmt.Sprintf("/logs?after=%d", afterID), &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func (c *ControlClient) Stats() (map[string]proxy.DomainStats, error) {
 	var stats map[string]proxy.DomainStats
 	if err := c.get("/stats", &stats); err != nil {

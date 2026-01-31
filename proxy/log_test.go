@@ -1,8 +1,12 @@
 package proxy
 
 import (
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogBuffer(t *testing.T) {
@@ -39,6 +43,19 @@ func TestLogBuffer(t *testing.T) {
 		}
 	})
 
+	t.Run("assigns sequential IDs", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		buf.Add(LogEntry{Domain: "a.com"})
+		buf.Add(LogEntry{Domain: "b.com"})
+		buf.Add(LogEntry{Domain: "c.com"})
+
+		entries := buf.Entries()
+		require.Len(t, entries, 3)
+		assert.Equal(t, uint64(1), entries[0].ID)
+		assert.Equal(t, uint64(2), entries[1].ID)
+		assert.Equal(t, uint64(3), entries[2].ID)
+	})
+
 	t.Run("stats counts per domain", func(t *testing.T) {
 		buf := NewLogBuffer(100)
 		buf.Add(LogEntry{Domain: "a.com", Action: ActionAllow})
@@ -56,5 +73,81 @@ func TestLogBuffer(t *testing.T) {
 		if stats["b.com"].Blocked != 1 {
 			t.Errorf("b.com blocked = %d, want 1", stats["b.com"].Blocked)
 		}
+	})
+}
+
+func TestEntriesAfter(t *testing.T) {
+	t.Run("zero afterID returns last 25 entries", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for i := 0; i < 30; i++ {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.EntriesAfter(0)
+		require.Len(t, entries, 25)
+		assert.Equal(t, uint64(6), entries[0].ID)
+		assert.Equal(t, uint64(30), entries[24].ID)
+	})
+
+	t.Run("zero afterID with fewer than 25 entries returns all", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for i := 0; i < 5; i++ {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.EntriesAfter(0)
+		require.Len(t, entries, 5)
+		assert.Equal(t, uint64(1), entries[0].ID)
+	})
+
+	t.Run("returns entries after given ID", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for i := 0; i < 10; i++ {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.EntriesAfter(7)
+		require.Len(t, entries, 3)
+		assert.Equal(t, uint64(8), entries[0].ID)
+		assert.Equal(t, uint64(9), entries[1].ID)
+		assert.Equal(t, uint64(10), entries[2].ID)
+	})
+
+	t.Run("returns nil when no new entries", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for i := 0; i < 5; i++ {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.EntriesAfter(5)
+		assert.Nil(t, entries)
+	})
+
+	t.Run("works after buffer wraps", func(t *testing.T) {
+		buf := NewLogBuffer(3)
+		// Add 5 entries to a buffer of capacity 3; entries 1 and 2 are overwritten
+		for i := 0; i < 5; i++ {
+			buf.Add(LogEntry{Domain: fmt.Sprintf("%d.com", i+1)})
+		}
+
+		// Ask for entries after ID 2 (which has been evicted)
+		entries := buf.EntriesAfter(2)
+		require.Len(t, entries, 3)
+		assert.Equal(t, uint64(3), entries[0].ID)
+		assert.Equal(t, "3.com", entries[0].Domain)
+		assert.Equal(t, uint64(5), entries[2].ID)
+		assert.Equal(t, "5.com", entries[2].Domain)
+	})
+
+	t.Run("works after wrap with recent cursor", func(t *testing.T) {
+		buf := NewLogBuffer(3)
+		for i := 0; i < 5; i++ {
+			buf.Add(LogEntry{Domain: fmt.Sprintf("%d.com", i+1)})
+		}
+
+		entries := buf.EntriesAfter(4)
+		require.Len(t, entries, 1)
+		assert.Equal(t, uint64(5), entries[0].ID)
+		assert.Equal(t, "5.com", entries[0].Domain)
 	})
 }
