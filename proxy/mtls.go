@@ -214,16 +214,14 @@ const (
 )
 
 // LoadServerTLSConfigFromEnv reads PEM-encoded TLS material from environment
-// variables and returns a tls.Config for the control API. Returns (nil, nil)
-// if the env vars are not set, signaling that TLS should be disabled.
+// variables and returns a tls.Config for the control API. Returns an error
+// if any of the required env vars are missing — the control API must not
+// start without mTLS.
 func LoadServerTLSConfigFromEnv() (*tls.Config, error) {
 	keyPEM := os.Getenv(EnvProxyTLSKey)
 	certPEM := os.Getenv(EnvProxyTLSCert)
 	caPEM := os.Getenv(EnvProxyCACert)
 
-	if keyPEM == "" && certPEM == "" && caPEM == "" {
-		return nil, nil
-	}
 	if keyPEM == "" || certPEM == "" || caPEM == "" {
 		return nil, fmt.Errorf("all three TLS env vars must be set: %s, %s, %s",
 			EnvProxyTLSKey, EnvProxyTLSCert, EnvProxyCACert)

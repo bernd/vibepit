@@ -77,18 +77,13 @@ func (s *Server) Run(ctx context.Context) error {
 			errCh <- fmt.Errorf("control API TLS: %w", err)
 			return
 		}
-		if tlsCfg != nil {
-			fmt.Printf("proxy: control API listening on %s (mTLS)\n", ControlAPIPort)
-			ln, err := tls.Listen("tcp", ControlAPIPort, tlsCfg)
-			if err != nil {
-				errCh <- err
-				return
-			}
-			errCh <- http.Serve(ln, controlAPI)
-		} else {
-			fmt.Printf("proxy: control API listening on %s (no TLS)\n", ControlAPIPort)
-			errCh <- http.ListenAndServe(ControlAPIPort, controlAPI)
+		fmt.Printf("proxy: control API listening on %s (mTLS)\n", ControlAPIPort)
+		ln, err := tls.Listen("tcp", ControlAPIPort, tlsCfg)
+		if err != nil {
+			errCh <- err
+			return
 		}
+		errCh <- http.Serve(ln, controlAPI)
 	}()
 
 	select {

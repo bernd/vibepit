@@ -160,8 +160,9 @@ func TestServerTLSConfigFromEnv(t *testing.T) {
 }
 
 func TestServerTLSConfigFromEnvMissing(t *testing.T) {
-	// With no env vars set, returns nil (no TLS).
+	// With no env vars set, returns an error — the control API refuses to
+	// start without mTLS.
 	tlsCfg, err := LoadServerTLSConfigFromEnv()
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Nil(t, tlsCfg)
 }
