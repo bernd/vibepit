@@ -9,8 +9,10 @@ import (
 
 func ProxyCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "proxy",
-		Usage: "Run the proxy server (used inside proxy container)",
+		Name:     "proxy",
+		Usage:    "Run the proxy server (used inside proxy container)",
+		Category: "Internal",
+		Hidden:   true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "config",

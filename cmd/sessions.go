@@ -10,8 +10,9 @@ import (
 
 func SessionsCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "sessions",
-		Usage: "List active vibepit sessions",
+		Name:     "sessions",
+		Usage:    "List active sessions",
+		Category: "Utilities",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			client, err := ctr.NewClient()
 			if err != nil {

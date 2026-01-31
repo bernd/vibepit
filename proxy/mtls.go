@@ -50,7 +50,7 @@ func GenerateMTLSCredentials(lifetime time.Duration) (*MTLSCredentials, error) {
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          caSerial,
-		Subject:               pkix.Name{CommonName: "vibepit ephemeral CA"},
+		Subject:               pkix.Name{CommonName: "Vibepit Ephemeral CA"},
 		NotBefore:             now,
 		NotAfter:              notAfter,
 		IsCA:                  true,

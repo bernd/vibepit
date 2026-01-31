@@ -109,8 +109,9 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 
 func MonitorCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "monitor",
-		Usage: "Connect to a running proxy for logs and admin",
+		Name:     "monitor",
+		Usage:    "Connect to a running proxy for logs and admin",
+		Category: "Utilities",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "addr",
