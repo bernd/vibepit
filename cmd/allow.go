@@ -6,10 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 
 	"github.com/bernd/vibepit/config"
 	"github.com/urfave/cli/v3"
@@ -26,10 +22,6 @@ func AllowCommand() *cli.Command {
 				Usage: "Skip persisting to project config",
 			},
 			&cli.StringFlag{
-				Name:  "addr",
-				Usage: "Proxy control API address (auto-detected if omitted)",
-			},
-			&cli.StringFlag{
 				Name:  "session",
 				Usage: "Session ID or project path (skips interactive selection)",
 			},
@@ -40,7 +32,12 @@ func AllowCommand() *cli.Command {
 				return cli.ShowSubcommandHelp(cmd)
 			}
 
-			httpClient, baseURL, err := controlAPIClient(ctx, cmd.String("addr"), cmd.String("session"))
+			session, err := discoverSession(ctx, cmd.String("session"))
+			if err != nil {
+				return fmt.Errorf("cannot find running proxy: %w", err)
+			}
+
+			httpClient, baseURL, err := controlAPIClient(session)
 			if err != nil {
 				return err
 			}
@@ -78,13 +75,7 @@ func AllowCommand() *cli.Command {
 				return nil
 			}
 
-			projectRoot, err := findProjectRoot()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not find project root, skipping config save: %v\n", err)
-				return nil
-			}
-
-			projectPath := config.DefaultProjectPath(projectRoot)
+			projectPath := config.DefaultProjectPath(session.ProjectDir)
 			if err := config.AppendAllow(projectPath, entries); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
@@ -95,18 +86,3 @@ func AllowCommand() *cli.Command {
 	}
 }
 
-func findProjectRoot() (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	wd, _ = filepath.Abs(wd)
-
-	if gitRoot, err := exec.Command("git", "-C", wd, "rev-parse", "--show-toplevel").Output(); err == nil {
-		if root := strings.TrimSpace(string(gitRoot)); root != "" {
-			return root, nil
-		}
-	}
-
-	return wd, nil
-}

@@ -21,18 +21,8 @@ type SessionInfo struct {
 	ProjectDir  string
 }
 
-// controlAPIClient returns an HTTP client and base URL for the proxy control API.
-// If addr is non-empty, it uses plain HTTP to that address (for debugging).
-// Otherwise it discovers a running session and sets up mTLS.
-func controlAPIClient(ctx context.Context, addr, sessionFilter string) (*http.Client, string, error) {
-	if addr != "" {
-		return &http.Client{Timeout: 5 * time.Second}, fmt.Sprintf("http://%s", addr), nil
-	}
-
-	session, err := discoverSession(ctx, sessionFilter)
-	if err != nil {
-		return nil, "", fmt.Errorf("cannot find running proxy (use --addr to specify manually): %w", err)
-	}
+// controlAPIClient returns an mTLS HTTP client and base URL for the proxy control API.
+func controlAPIClient(session *SessionInfo) (*http.Client, string, error) {
 	tlsCfg, err := LoadSessionTLSConfig(session.SessionID)
 	if err != nil {
 		return nil, "", fmt.Errorf("load TLS credentials: %w", err)
@@ -114,16 +104,16 @@ func MonitorCommand() *cli.Command {
 		Category: "Utilities",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:  "addr",
-				Usage: "Proxy control API address (auto-detected if omitted)",
-			},
-			&cli.StringFlag{
 				Name:  "session",
 				Usage: "Session ID or project path (skips interactive selection)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			httpClient, baseURL, err := controlAPIClient(ctx, cmd.String("addr"), cmd.String("session"))
+			session, err := discoverSession(ctx, cmd.String("session"))
+			if err != nil {
+				return fmt.Errorf("cannot find running proxy: %w", err)
+			}
+			httpClient, baseURL, err := controlAPIClient(session)
 			if err != nil {
 				return err
 			}

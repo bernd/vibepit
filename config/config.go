@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/bernd/vibepit/proxy"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -111,6 +113,21 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
 		BlockCIDR: c.Global.BlockCIDR,
 		AllowHTTP: c.Global.AllowHTTP || c.Project.AllowHTTP,
 	}
+}
+
+// FindProjectRoot returns the Git repository root for the given path, or the
+// path itself if it is not inside a Git repository.
+func FindProjectRoot(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if root := strings.TrimSpace(string(out)); root != "" {
+			return root, nil
+		}
+	}
+	return abs, nil
 }
 
 func DefaultGlobalPath() string {

@@ -7,11 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/bernd/vibepit/config"
@@ -102,10 +100,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Use Git root if available.
-	if gitRoot, err := exec.Command("git", "-C", projectRoot, "rev-parse", "--show-toplevel").Output(); err == nil {
-		if root := strings.TrimSpace(string(gitRoot)); root != "" {
-			projectRoot = root
-		}
+	projectRoot, err = config.FindProjectRoot(projectRoot)
+	if err != nil {
+		return err
 	}
 
 	image := defaultImage
