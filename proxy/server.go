@@ -1,0 +1,84 @@
+package proxy
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+)
+
+const (
+	DefaultUpstreamDNS = "8.8.8.8:53"
+	ProxyPort          = ":3128"
+	DNSPort            = ":53"
+	ControlAPIPort     = ":3129"
+	LogBufferCapacity  = 10000
+)
+
+// ProxyConfig is the JSON config file passed to the proxy container.
+type ProxyConfig struct {
+	Allow     []string `json:"allow"`
+	DNSOnly   []string `json:"dns-only"`
+	BlockCIDR []string `json:"block-cidr"`
+	Upstream  string   `json:"upstream"`
+	AllowHTTP bool     `json:"allow-http"`
+}
+
+// Server runs the HTTP proxy, DNS server, and control API.
+type Server struct {
+	config ProxyConfig
+}
+
+func NewServer(configPath string) (*Server, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	var cfg ProxyConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	if cfg.Upstream == "" {
+		cfg.Upstream = DefaultUpstreamDNS
+	}
+
+	return &Server{config: cfg}, nil
+}
+
+func (s *Server) Run(ctx context.Context) error {
+	allowlist := NewAllowlist(s.config.Allow)
+	dnsOnlyList := NewAllowlist(s.config.DNSOnly)
+	cidr := NewCIDRBlocker(s.config.BlockCIDR)
+	log := NewLogBuffer(LogBufferCapacity)
+
+	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.AllowHTTP)
+	dnsServer := NewDNSServer(allowlist, dnsOnlyList, cidr, log, s.config.Upstream)
+	controlAPI := NewControlAPI(log, s.config, allowlist)
+
+	errCh := make(chan error, 3)
+
+	go func() {
+		fmt.Printf("proxy: HTTP proxy listening on %s\n", ProxyPort)
+		errCh <- http.ListenAndServe(ProxyPort, httpProxy.Handler())
+	}()
+
+	go func() {
+		fmt.Printf("proxy: DNS server listening on %s\n", DNSPort)
+		errCh <- dnsServer.ListenAndServe(DNSPort)
+	}()
+
+	go func() {
+		fmt.Printf("proxy: control API listening on %s\n", ControlAPIPort)
+		errCh <- http.ListenAndServe(ControlAPIPort, controlAPI)
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
