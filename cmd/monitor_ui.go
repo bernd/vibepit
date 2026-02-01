@@ -80,8 +80,8 @@ type allowResultMsg struct {
 type tickMsg struct{}
 
 const (
-	tickInterval  = 250 * time.Millisecond
-	pollEveryNth  = 4 // poll API every 4 ticks (~1s)
+	tickInterval = 250 * time.Millisecond
+	pollEveryNth = 4 // poll API every 4 ticks (~1s)
 )
 
 func doTick() tea.Cmd {
@@ -190,6 +190,10 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			vpHeight = 1
 		}
 		m.vpHeight = vpHeight
+		if len(m.items) <= m.offset+m.vpHeight {
+			// Viewport increased and we have more space.
+			m.newCount = 0
+		}
 		m.ensureCursorVisible()
 
 	case allowResultMsg:
@@ -197,6 +201,14 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = msg.err
 		} else if msg.index >= 0 && msg.index < len(m.items) {
 			m.items[msg.index].status = msg.status
+			domain := m.items[msg.index].entry.Domain
+			switch msg.status {
+			case statusTemp:
+				m.flash = fmt.Sprintf("allowed %s", domain)
+			case statusSaved:
+				m.flash = fmt.Sprintf("allowed and saved %s", domain)
+			}
+			m.flashExp = time.Now().Add(2 * time.Second)
 		}
 
 	case tickMsg:
@@ -218,7 +230,8 @@ func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.items = append(m.items, logItem{entry: e})
 					m.pollCursor = e.ID
 				}
-				if !wasAtEnd && len(entries) > 0 {
+				// Only show the new count if the new messages grow outside of the viewport.
+				if !wasAtEnd && len(entries) > 0 && len(m.items) > m.offset+m.vpHeight {
 					m.newCount += len(entries)
 				}
 				if wasAtEnd && len(m.items) > 0 {
