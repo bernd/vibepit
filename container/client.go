@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -398,6 +399,7 @@ type ProxySession struct {
 	SessionID   string
 	ControlPort string
 	ProjectDir  string
+	StartedAt   time.Time
 }
 
 // ListProxySessions returns all running vibepit proxy containers with their
@@ -428,6 +430,7 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 			SessionID:   ctr.Labels[LabelSessionID],
 			ControlPort: controlPort,
 			ProjectDir:  ctr.Labels[LabelProjectDir],
+			StartedAt:   time.Unix(ctr.Created, 0),
 		})
 	}
 	return sessions, nil

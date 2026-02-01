@@ -10,7 +10,6 @@ import (
 
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/proxy"
-	"github.com/charmbracelet/huh"
 )
 
 func sessionBaseDir() (string, error) {
@@ -69,26 +68,48 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 	}
 
 	// Multiple sessions — interactive selection.
-	options := make([]huh.Option[int], len(sessions))
-	for i, s := range sessions {
-		options[i] = huh.NewOption(s.ProjectDir, i)
-	}
-	var selected int
-	err = huh.NewSelect[int]().
-		Title("Select a session").
-		Options(options...).
-		Value(&selected).
-		Run()
+	return selectSession(sessions)
+}
+
+// discoverSessionOrAll returns a single SessionInfo if a filter matches or only
+// one session exists, or the full list of ProxySessions for interactive selection.
+func discoverSessionOrAll(ctx context.Context, filter string) (*SessionInfo, []ctr.ProxySession, error) {
+	client, err := ctr.NewClient()
 	if err != nil {
-		return nil, fmt.Errorf("session selection: %w", err)
+		return nil, nil, err
+	}
+	defer client.Close()
+
+	sessions, err := client.ListProxySessions(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, nil, fmt.Errorf("no running vibepit sessions found")
 	}
 
-	s := sessions[selected]
-	return &SessionInfo{
-		ControlPort: s.ControlPort,
-		SessionID:   s.SessionID,
-		ProjectDir:  s.ProjectDir,
-	}, nil
+	if filter != "" {
+		for _, s := range sessions {
+			if s.SessionID == filter || s.ProjectDir == filter {
+				return &SessionInfo{
+					ControlPort: s.ControlPort,
+					SessionID:   s.SessionID,
+					ProjectDir:  s.ProjectDir,
+				}, nil, nil
+			}
+		}
+		return nil, nil, fmt.Errorf("no session matching %q found", filter)
+	}
+
+	if len(sessions) == 1 {
+		return &SessionInfo{
+			ControlPort: sessions[0].ControlPort,
+			SessionID:   sessions[0].SessionID,
+			ProjectDir:  sessions[0].ProjectDir,
+		}, nil, nil
+	}
+
+	return nil, sessions, nil
 }
 
 // WriteSessionCredentials persists the client TLS material for a session

@@ -61,6 +61,9 @@ func (w *Window) SetFlash(msg string) {
 	w.flash = msg
 	w.flashExp = time.Now().Add(2 * time.Second)
 }
+func (w *Window) SetHeader(info *HeaderInfo) {
+	w.header = info
+}
 func (w *Window) SetError(err error) { w.err = err }
 func (w *Window) ClearError()        { w.err = nil }
 
@@ -104,6 +107,16 @@ func (w *Window) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if newScreen != w.screen {
 		w.screen = newScreen
+		// Notify the new screen of the current terminal dimensions so it
+		// can initialize its viewport height.
+		sizeMsg := tea.WindowSizeMsg{Width: w.width, Height: w.height}
+		newScreen2, cmd2 := w.screen.Update(sizeMsg, w)
+		if cmd2 != nil {
+			cmds = append(cmds, cmd2)
+		}
+		if newScreen2 != w.screen {
+			w.screen = newScreen2
+		}
 	}
 
 	return w, tea.Batch(cmds...)

@@ -23,18 +23,26 @@ func MonitorCommand() *cli.Command {
 		Category: "Utilities",
 		Flags:    []cli.Flag{sessionFlag},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			session, err := discoverSession(ctx, cmd.String("session"))
+			session, sessions, err := discoverSessionOrAll(ctx, cmd.String("session"))
 			if err != nil {
 				return fmt.Errorf("cannot find running proxy: %w", err)
 			}
-			client, err := NewControlClient(session)
-			if err != nil {
-				return err
+
+			if session != nil {
+				return runMonitor(session)
 			}
 
-			screen := newMonitorScreen(session, client)
-			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
-			w := tui.NewWindow(header, screen)
+			// Multiple sessions — start with selector, transition to monitor on select.
+			onSelect := func(info *SessionInfo) (tui.Screen, tea.Cmd) {
+				client, err := NewControlClient(info)
+				if err != nil {
+					return nil, func() tea.Msg { return sessionErrorMsg{err} }
+				}
+				return newMonitorScreen(info, client), nil
+			}
+			s := newSessionScreen(sessions, onSelect)
+			header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
+			w := tui.NewWindow(header, s)
 			p := tea.NewProgram(w, tea.WithAltScreen())
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("monitor UI: %w", err)
@@ -42,4 +50,19 @@ func MonitorCommand() *cli.Command {
 			return nil
 		},
 	}
+}
+
+func runMonitor(session *SessionInfo) error {
+	client, err := NewControlClient(session)
+	if err != nil {
+		return err
+	}
+	screen := newMonitorScreen(session, client)
+	header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
+	w := tui.NewWindow(header, screen)
+	p := tea.NewProgram(w, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("monitor UI: %w", err)
+	}
+	return nil
 }
