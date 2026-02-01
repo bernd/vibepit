@@ -3,10 +3,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/bernd/vibepit/proxy"
 	"github.com/urfave/cli/v3"
+	"golang.org/x/term"
 )
 
 // SessionInfo contains the information needed to connect to a proxy's control API.
@@ -32,7 +34,12 @@ func MonitorCommand() *cli.Command {
 				return err
 			}
 
-			fmt.Println("Connecting to proxy...")
+			width, _, _ := term.GetSize(int(os.Stdout.Fd()))
+			if width <= 0 {
+				width = 80
+			}
+			fmt.Println(RenderHeader(session, width))
+			fmt.Println()
 
 			var cursor uint64
 
