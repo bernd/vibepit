@@ -3,12 +3,9 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"time"
 
-	"github.com/bernd/vibepit/proxy"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/urfave/cli/v3"
-	"golang.org/x/term"
 )
 
 // SessionInfo contains the information needed to connect to a proxy's control API.
@@ -34,50 +31,12 @@ func MonitorCommand() *cli.Command {
 				return err
 			}
 
-			width, _, _ := term.GetSize(int(os.Stdout.Fd()))
-			if width <= 0 {
-				width = 80
+			m := newMonitorModel(session, client)
+			p := tea.NewProgram(m, tea.WithAltScreen())
+			if _, err := p.Run(); err != nil {
+				return fmt.Errorf("monitor UI: %w", err)
 			}
-			fmt.Println(RenderHeader(session, width))
-			fmt.Println()
-
-			var cursor uint64
-
-			for {
-				select {
-				case <-ctx.Done():
-					return nil
-				default:
-				}
-
-				entries, err := client.LogsAfter(cursor)
-				if err != nil {
-					fmt.Printf("connection error: %v (retrying...)\n", err)
-					time.Sleep(2 * time.Second)
-					continue
-				}
-
-				for _, e := range entries {
-					symbol := "+"
-					if e.Action == proxy.ActionBlock {
-						symbol = "x"
-					}
-					host := e.Domain
-					if e.Port != "" {
-						host = e.Domain + ":" + e.Port
-					}
-					fmt.Printf("[%s] %s %-5s %s %s\n",
-						e.Time.Format("15:04:05"),
-						symbol,
-						e.Source,
-						host,
-						e.Reason,
-					)
-					cursor = e.ID
-				}
-
-				time.Sleep(1 * time.Second)
-			}
+			return nil
 		},
 	}
 }

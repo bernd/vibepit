@@ -10,10 +10,12 @@ import (
 
 // Theme colors
 var (
-	colorCyan   = lipgloss.Color("#00d4ff")
-	colorPurple = lipgloss.Color("#8b5cf6")
-	colorOrange = lipgloss.Color("#f97316")
-	colorField  = lipgloss.Color("#0099cc")
+	colorCyan      = lipgloss.Color("#00d4ff")
+	colorPurple    = lipgloss.Color("#8b5cf6")
+	colorOrange    = lipgloss.Color("#f97316")
+	colorField     = lipgloss.Color("#0099cc")
+	colorError     = colorPurple // lipgloss.Color("#ef4444") - this one is too similar to the orange
+	colorHighlight = lipgloss.Color("#1e2d3d")
 )
 
 // letterGlyph holds the three rows of a block-art character.
