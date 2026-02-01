@@ -1,0 +1,13 @@
+  {
+    "name": "vibepit",
+    "owner": {
+      "name": "Vibepit"
+    },
+    "plugins": [
+      {
+        "name": "mounted-skills",
+        "source": "./plugins/mounted-skills",
+        "description": "Mounted skills from the host system."
+      }
+    ]
+  }

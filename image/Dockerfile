@@ -76,10 +76,15 @@ RUN install -d -m 0755 "/usr/local/bin" \
   && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/${CODE_USER}/.linuxbrew" \
   && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home" \
   && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/linuxbrew" \
-  && ln -s "/home/${CODE_USER}/.linuxbrew" "/home/linuxbrew/.linuxbrew"
+  && ln -s "/home/${CODE_USER}/.linuxbrew" "/home/linuxbrew/.linuxbrew" \
+  && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0555 "/etc/claude-code" \
+  && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0555 "/etc/claude-code/marketplace" \
+  && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0555 "/etc/claude-code/marketplace/vibepit"
 
 COPY bin /usr/local/bin
 COPY config/profile /etc/profile.d/999-vibepit.sh
+COPY config/claude-code/managed-settings.json /etc/claude-code/managed-settings.json
+COPY config/claude-code/marketplace /etc/claude-code/marketplace/vibepit
 
 RUN mv /home/$CODE_USER /home/.${CODE_USER}.template \
   && install -d 0750 -o $CODE_USER -g $CODE_GROUP /home/$CODE_USER

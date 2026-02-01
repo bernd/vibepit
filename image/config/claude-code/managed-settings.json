@@ -1,0 +1,13 @@
+  {
+    "extraKnownMarketplaces": {
+      "vibepit": {
+        "source": {
+          "source": "directory",
+          "path": "/etc/claude-code/marketplace/vibepit"
+        }
+      }
+    },
+    "enabledPlugins": {
+      "mounted-skills@vibepit": true
+    }
+  }
