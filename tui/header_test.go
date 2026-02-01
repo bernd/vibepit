@@ -18,7 +18,7 @@ func TestRenderHeader_CompactWhenShort(t *testing.T) {
 	lines := strings.Split(strings.TrimPrefix(header, "\n"), "\n")
 	assert.Equal(t, 1, len(lines), "compact header should be a single line")
 	assert.Contains(t, header, "VIBEPIT")
-	assert.Contains(t, header, "I PITY THE VIBES")
+	assert.Contains(t, header, "I pity the vibes")
 	assert.Contains(t, header, "abc123")
 	assert.Contains(t, header, "myproject")
 }
