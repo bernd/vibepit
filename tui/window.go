@@ -68,7 +68,7 @@ func (w *Window) SetError(err error) { w.err = err }
 func (w *Window) ClearError()        { w.err = nil }
 
 func (w *Window) headerHeight() int {
-	h := RenderHeader(w.header, w.width)
+	h := RenderHeader(w.header, w.width, w.height)
 	return strings.Count(h, "\n") + 1
 }
 
@@ -127,7 +127,7 @@ func (w *Window) View() string {
 		return "Starting..."
 	}
 
-	header := RenderHeader(w.header, w.width)
+	header := RenderHeader(w.header, w.width, w.height)
 	content := w.screen.View(w)
 	footer := w.renderFooter()
 

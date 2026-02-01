@@ -107,16 +107,53 @@ func applyGradient(s string, colorA, colorB lipgloss.Color) string {
 	return out.String()
 }
 
+// CompactHeaderThreshold is the terminal height below which the header
+// collapses to a single line.
+const CompactHeaderThreshold = 15
+
 type HeaderInfo struct {
 	ProjectDir string
 	SessionID  string
 }
 
+// renderCompactHeader produces a single-line header with gradient wordmark,
+// orange tagline, and session info separated by diagonal field characters.
+func renderCompactHeader(info *HeaderInfo, width int) string {
+	fieldChar := lipgloss.NewStyle().Foreground(ColorField).Render("╱")
+
+	name := applyGradient("VIBEPIT", ColorCyan, ColorPurple)
+	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I pity the vibes")
+	sessionInfo := lipgloss.NewStyle().Foreground(ColorField).Render(
+		fmt.Sprintf("%s ╱╱ %s", info.ProjectDir, info.SessionID))
+
+	leftPad := strings.Repeat(fieldChar, 3)
+	rightPad := strings.Repeat(fieldChar, 3)
+
+	// Fixed structure: "╱╱╱ VIBEPIT  tagline ╱...╱ session ╱╱╱"
+	// Calculate fill based on visual widths
+	nameWidth := ansi.StringWidth("VIBEPIT")
+	taglineWidth := ansi.StringWidth("I PITY THE VIBES")
+	fixedWidth := 3 + 1 + nameWidth + 2 + taglineWidth + 1 + 1 + ansi.StringWidth(sessionInfo) + 1 + 3
+	fill := width - fixedWidth
+	if fill < 1 {
+		fill = 1
+	}
+	fieldFill := strings.Repeat(fieldChar, fill)
+
+	line := leftPad + " " + name + "  " + tagline + " " + fieldFill + " " + sessionInfo + " " + rightPad
+
+	return "\n" + line
+}
+
 // RenderHeader produces the styled monitor header with wordmark, tagline,
 // session info, and diagonal line field.
-func RenderHeader(info *HeaderInfo, width int) string {
+func RenderHeader(info *HeaderInfo, width int, height int) string {
 	if width < 40 {
 		width = 40
+	}
+
+	if height > 0 && height < CompactHeaderThreshold {
+		return renderCompactHeader(info, width)
 	}
 
 	rows := buildWordmark("VIBEPIT")
