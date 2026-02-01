@@ -488,8 +488,9 @@ func (c *Client) StartDevContainer(ctx context.Context, cfg DevContainerConfig) 
 				LabelVolume:     cfg.VolumeName,
 				LabelProjectDir: cfg.ProjectDir,
 			},
-			Tty:       true,
-			OpenStdin: true,
+			Tty:        true,
+			OpenStdin:  true,
+			WorkingDir: cfg.WorkDir,
 		},
 		&container.HostConfig{
 			Binds:          binds,
