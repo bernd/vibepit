@@ -3,9 +3,9 @@ package cmd
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/bernd/vibepit/proxy"
+	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -13,30 +13,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMonitorModel_WindowSizeMsg(t *testing.T) {
-	m := newMonitorModel(&SessionInfo{
+func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
+	s := newMonitorScreen(&SessionInfo{
 		SessionID:  "test123456",
 		ProjectDir: "/home/user/project",
 	}, nil)
+	header := &tui.HeaderInfo{ProjectDir: "/home/user/project", SessionID: "test123456"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	model := updated.(monitorModel)
-
-	assert.Equal(t, 100, model.width)
-	assert.Equal(t, 40, model.height)
-	assert.Greater(t, model.vpHeight, 0)
+	for i := 0; i < n; i++ {
+		s.items = append(s.items, logItem{
+			entry: proxy.LogEntry{
+				ID:     uint64(i + 1),
+				Domain: fmt.Sprintf("domain%d.com", i),
+				Action: proxy.ActionBlock,
+				Source: proxy.SourceProxy,
+			},
+		})
+	}
+	s.cursor.ItemCount = len(s.items)
+	if len(s.items) > 0 {
+		s.cursor.Pos = len(s.items) - 1
+	}
+	return s, w
 }
 
-func TestMonitorModel_ViewContainsHeader(t *testing.T) {
-	m := newMonitorModel(&SessionInfo{
-		SessionID:  "test123456",
-		ProjectDir: "/home/user/project",
-	}, nil)
+func footerKeyDescs(keys []tui.FooterKey) []string {
+	var descs []string
+	for _, k := range keys {
+		descs = append(descs, k.Desc)
+	}
+	return descs
+}
 
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	model := updated.(monitorModel)
+func TestMonitorScreen_WindowSizeMsg(t *testing.T) {
+	s, w := makeTestSetup(0)
 
-	view := model.View()
+	assert.Equal(t, 100, w.Width())
+	assert.Equal(t, 40, w.Height())
+	assert.Greater(t, w.VpHeight(), 0)
+	assert.Equal(t, w.VpHeight(), s.cursor.VpHeight)
+}
+
+func TestMonitorScreen_ViewContainsHeader(t *testing.T) {
+	_, w := makeTestSetup(0)
+	view := w.View()
 	assert.Contains(t, view, "I PITY THE VIBES")
 }
 
@@ -100,17 +122,12 @@ func TestRenderLogLine_AllowStatuses(t *testing.T) {
 			}
 			line := renderLogLine(item, false)
 			require.Contains(t, line, tt.expectedSymbol)
-			// The allow status symbol should take precedence over block —
-			// the line should not start with "x" as the symbol.
-			// We check that the symbol position (after timestamp bracket)
-			// does not contain "x" by verifying "] x" is absent.
 			require.NotContains(t, line, "] x")
 		})
 	}
 }
 
 func TestRenderLogLine_Highlighted(t *testing.T) {
-	// Force a color profile so lipgloss actually emits ANSI sequences.
 	lipgloss.DefaultRenderer().SetColorProfile(termenv.ANSI)
 	defer lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii)
 
@@ -127,205 +144,174 @@ func TestRenderLogLine_Highlighted(t *testing.T) {
 	require.NotEqual(t, normal, highlighted, "highlighted line should differ from normal")
 }
 
-func makeModelWithItems(n int) monitorModel {
-	m := newMonitorModel(&SessionInfo{
-		SessionID:  "test123456",
-		ProjectDir: "/home/user/project",
-	}, nil)
-	m.vpHeight = 10
-	m.width = 100
-	m.height = 20
-	for i := 0; i < n; i++ {
-		m.items = append(m.items, logItem{
-			entry: proxy.LogEntry{
-				ID:     uint64(i + 1),
-				Domain: fmt.Sprintf("domain%d.com", i),
-				Action: proxy.ActionBlock,
-				Source: proxy.SourceProxy,
-			},
-		})
-	}
-	m.cursor = len(m.items) - 1
-	return m
-}
-
-func TestMonitorModel_AllowAction(t *testing.T) {
+func TestMonitorScreen_AllowAction(t *testing.T) {
 	t.Run("allowResultMsg updates item status", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.cursor = 2
+		s, w := makeTestSetup(5)
+		s.cursor.Pos = 2
 
-		updated, _ := m.Update(allowResultMsg{index: 2, status: statusTemp})
-		model := updated.(monitorModel)
-
-		assert.Equal(t, statusTemp, model.items[2].status)
+		s.Update(allowResultMsg{index: 2, status: statusTemp}, w)
+		assert.Equal(t, statusTemp, s.items[2].status)
 	})
 
-	t.Run("allowResultMsg with error sets model error", func(t *testing.T) {
-		m := makeModelWithItems(5)
+	t.Run("allowResultMsg with error sets window error", func(t *testing.T) {
+		s, w := makeTestSetup(5)
 
-		updated, _ := m.Update(allowResultMsg{index: 0, err: fmt.Errorf("connection failed")})
-		model := updated.(monitorModel)
-
-		assert.Error(t, model.err)
-		assert.Contains(t, model.err.Error(), "connection failed")
+		s.Update(allowResultMsg{index: 0, err: fmt.Errorf("connection failed")}, w)
+		assert.Error(t, w.Err())
+		assert.Contains(t, w.Err().Error(), "connection failed")
 	})
 
 	t.Run("allowResultMsg saved status", func(t *testing.T) {
-		m := makeModelWithItems(5)
+		s, w := makeTestSetup(5)
 
-		updated, _ := m.Update(allowResultMsg{index: 3, status: statusSaved})
-		model := updated.(monitorModel)
-
-		assert.Equal(t, statusSaved, model.items[3].status)
+		s.Update(allowResultMsg{index: 3, status: statusSaved}, w)
+		assert.Equal(t, statusSaved, s.items[3].status)
 	})
 }
 
-func TestMonitorModel_FlashOnAlreadyAllowed(t *testing.T) {
-	m := makeModelWithItems(5)
-	m.items[2].entry.Action = proxy.ActionAllow // not blocked
-	m.cursor = 2
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	model := updated.(monitorModel)
-	assert.Equal(t, "already allowed", model.flash)
+func TestMonitorScreen_FlashOnAlreadyAllowed(t *testing.T) {
+	s, w := makeTestSetup(5)
+	s.items[2].entry.Action = proxy.ActionAllow // not blocked
+	s.cursor.Pos = 2
+	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, w)
+	assert.Equal(t, "already allowed", w.Flash())
 }
 
-func TestMonitorModel_CursorNavigation(t *testing.T) {
+func TestMonitorScreen_CursorNavigation(t *testing.T) {
 	t.Run("j moves cursor down", func(t *testing.T) {
-		m := makeModelWithItems(20)
-		m.cursor = 5
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 6, model.cursor)
+		s, w := makeTestSetup(20)
+		s.cursor.Pos = 5
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		assert.Equal(t, 6, s.cursor.Pos)
 	})
 
 	t.Run("k moves cursor up", func(t *testing.T) {
-		m := makeModelWithItems(20)
-		m.cursor = 5
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 4, model.cursor)
+		s, w := makeTestSetup(20)
+		s.cursor.Pos = 5
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, w)
+		assert.Equal(t, 4, s.cursor.Pos)
 	})
 
 	t.Run("j at end stays at end", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.cursor = 4
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 4, model.cursor)
+		s, w := makeTestSetup(5)
+		s.cursor.Pos = 4
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		assert.Equal(t, 4, s.cursor.Pos)
 	})
 
 	t.Run("k at start stays at start", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.cursor = 0
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 0, model.cursor)
+		s, w := makeTestSetup(5)
+		s.cursor.Pos = 0
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, w)
+		assert.Equal(t, 0, s.cursor.Pos)
 	})
 
 	t.Run("G jumps to end", func(t *testing.T) {
-		m := makeModelWithItems(20)
-		m.cursor = 0
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 19, model.cursor)
+		s, w := makeTestSetup(20)
+		s.cursor.Pos = 0
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
+		assert.Equal(t, 19, s.cursor.Pos)
 	})
 
 	t.Run("g jumps to start", func(t *testing.T) {
-		m := makeModelWithItems(20)
-		m.cursor = 15
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 0, model.cursor)
+		s, w := makeTestSetup(20)
+		s.cursor.Pos = 15
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}, w)
+		assert.Equal(t, 0, s.cursor.Pos)
 	})
 }
 
-func TestRenderFooter(t *testing.T) {
+func TestMonitorScreen_Footer(t *testing.T) {
 	t.Run("shows base keybindings", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "navigate")
-		assert.Contains(t, footer, "Home")
-		assert.Contains(t, footer, "End")
-		assert.Contains(t, footer, "quit")
+		s, w := makeTestSetup(5)
+		keys := s.FooterKeys(w)
+		descs := footerKeyDescs(keys)
+		assert.Contains(t, descs, "navigate")
+		assert.Contains(t, descs, "jump")
+		// "quit" is added by Window, verify via full view
+		view := w.View()
+		assert.Contains(t, view, "quit")
 	})
 
 	t.Run("shows allow keys on blocked entry", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.cursor = 2
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "allow")
-		assert.Contains(t, footer, "allow+save")
+		s, w := makeTestSetup(5)
+		s.cursor.Pos = 2
+		keys := s.FooterKeys(w)
+		descs := footerKeyDescs(keys)
+		assert.Contains(t, descs, "allow")
+		assert.Contains(t, descs, "allow+save")
 	})
 
 	t.Run("hides allow keys on allowed entry", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.items[2].entry.Action = proxy.ActionAllow
-		m.cursor = 2
-		footer := m.renderFooter(100)
-		assert.NotContains(t, footer, "allow")
+		s, w := makeTestSetup(5)
+		s.items[2].entry.Action = proxy.ActionAllow
+		s.cursor.Pos = 2
+		keys := s.FooterKeys(w)
+		descs := footerKeyDescs(keys)
+		assert.NotContains(t, descs, "allow")
+		assert.NotContains(t, descs, "allow+save")
 	})
 
 	t.Run("shows save key on temp-allowed entry", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.items[2].status = statusTemp
-		m.cursor = 2
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "save")
-		assert.NotContains(t, footer, "allow+save")
+		s, w := makeTestSetup(5)
+		s.items[2].status = statusTemp
+		s.cursor.Pos = 2
+		keys := s.FooterKeys(w)
+		descs := footerKeyDescs(keys)
+		assert.Contains(t, descs, "save")
+		assert.NotContains(t, descs, "allow+save")
 	})
 
 	t.Run("shows new message count", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.newCount = 3
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "3 new")
+		s, w := makeTestSetup(5)
+		s.newCount = 3
+		status := s.FooterStatus(w)
+		assert.Contains(t, status, "3 new")
 	})
 
 	t.Run("shows connection error", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.err = fmt.Errorf("connection refused")
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "connection refused")
+		_, w := makeTestSetup(5)
+		w.SetError(fmt.Errorf("connection refused"))
+		view := w.View()
+		assert.Contains(t, view, "connection refused")
 	})
 
 	t.Run("shows flash message", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.flash = "already allowed"
-		m.flashExp = time.Now().Add(2 * time.Second)
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "already allowed")
+		_, w := makeTestSetup(5)
+		w.SetFlash("already allowed")
+		view := w.View()
+		assert.Contains(t, view, "already allowed")
 	})
 
 	t.Run("error takes priority over flash", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.err = fmt.Errorf("connection refused")
-		m.flash = "already allowed"
-		m.flashExp = time.Now().Add(2 * time.Second)
-		footer := m.renderFooter(100)
-		assert.Contains(t, footer, "connection refused")
-		assert.NotContains(t, footer, "already allowed")
+		_, w := makeTestSetup(5)
+		w.SetError(fmt.Errorf("connection refused"))
+		w.SetFlash("already allowed")
+		view := w.View()
+		assert.Contains(t, view, "connection refused")
+		assert.NotContains(t, view, "already allowed")
 	})
 }
 
-func TestMonitorModel_NewCount(t *testing.T) {
+func TestMonitorScreen_NewCount(t *testing.T) {
 	t.Run("increments when cursor not at end", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.cursor = 2 // not at end (4)
-		m.items = append(m.items, logItem{
+		s, _ := makeTestSetup(5)
+		s.cursor.Pos = 2 // not at end (4)
+		s.items = append(s.items, logItem{
 			entry: proxy.LogEntry{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
 		})
-		m.newCount += 1
-		assert.Equal(t, 1, m.newCount)
-		assert.Equal(t, 2, m.cursor)
+		s.cursor.ItemCount = len(s.items)
+		s.newCount += 1
+		assert.Equal(t, 1, s.newCount)
+		assert.Equal(t, 2, s.cursor.Pos)
 	})
 
 	t.Run("resets when cursor reaches end via G", func(t *testing.T) {
-		m := makeModelWithItems(5)
-		m.cursor = 2
-		m.newCount = 10
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-		model := updated.(monitorModel)
-		assert.Equal(t, 0, model.newCount)
-		assert.Equal(t, 4, model.cursor)
+		s, w := makeTestSetup(5)
+		s.cursor.Pos = 2
+		s.newCount = 10
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
+		assert.Equal(t, 0, s.newCount)
+		assert.Equal(t, 4, s.cursor.Pos)
 	})
 }

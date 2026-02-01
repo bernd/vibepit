@@ -10,7 +10,6 @@ import (
 	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // allowStatus tracks whether a log entry has been temporarily or permanently
@@ -23,54 +22,29 @@ const (
 	statusSaved             // saved to persistent allow list
 )
 
+const pollInterval = time.Second
+
 // logItem wraps a proxy log entry with its allow-list status.
 type logItem struct {
 	entry  proxy.LogEntry
 	status allowStatus
 }
 
-// monitorModel is the bubbletea model for the interactive monitor TUI.
-type monitorModel struct {
-	session    *SessionInfo
-	client     *ControlClient
-	width      int
-	height     int
-	pollCursor uint64 // cursor for API polling (LogEntry.ID)
-	cursor     int    // highlighted line index
-	offset     int    // scroll offset (first visible line)
-	vpHeight   int    // number of visible lines
-	items      []logItem
-	err        error
-	flash      string
-	flashExp   time.Time
-	newCount   int // unseen log entries when cursor is not following tail
-	tickFrame  int // animation frame for the tailing indicator
+// monitorScreen implements tui.Screen for the log monitor.
+type monitorScreen struct {
+	session       *SessionInfo
+	client        *ControlClient
+	cursor        tui.Cursor
+	pollCursor    uint64
+	items         []logItem
+	newCount      int
+	firstTickSeen bool
 }
 
-func newMonitorModel(session *SessionInfo, client *ControlClient) monitorModel {
-	return monitorModel{
+func newMonitorScreen(session *SessionInfo, client *ControlClient) *monitorScreen {
+	return &monitorScreen{
 		session: session,
 		client:  client,
-	}
-}
-
-func headerInfoFromSession(session *SessionInfo) *tui.HeaderInfo {
-	return &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
-}
-
-func (m monitorModel) headerHeight() int {
-	h := tui.RenderHeader(headerInfoFromSession(m.session), m.width)
-	return strings.Count(h, "\n") + 1
-}
-
-// ensureCursorVisible adjusts the scroll offset so the cursor is within the
-// visible window.
-func (m *monitorModel) ensureCursorVisible() {
-	if m.cursor < m.offset {
-		m.offset = m.cursor
-	}
-	if m.cursor >= m.offset+m.vpHeight {
-		m.offset = m.cursor - m.vpHeight + 1
 	}
 }
 
@@ -81,23 +55,9 @@ type allowResultMsg struct {
 	err    error
 }
 
-// tickMsg triggers a periodic poll of the proxy log buffer.
-type tickMsg struct{}
-
-const (
-	tickInterval = 250 * time.Millisecond
-	pollEveryNth = 4 // poll API every 4 ticks (~1s)
-)
-
-func doTick() tea.Cmd {
-	return tea.Tick(tickInterval, func(time.Time) tea.Msg {
-		return tickMsg{}
-	})
-}
-
-func (m monitorModel) allowCmd(index int, domain string, save bool) tea.Cmd {
+func (s *monitorScreen) allowCmd(index int, domain string, save bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := m.client.Allow([]string{domain})
+		_, err := s.client.Allow([]string{domain})
 		if err != nil {
 			return allowResultMsg{index: index, err: err}
 		}
@@ -105,7 +65,7 @@ func (m monitorModel) allowCmd(index int, domain string, save bool) tea.Cmd {
 		status := statusTemp
 		if save {
 			status = statusSaved
-			projectPath := config.DefaultProjectPath(m.session.ProjectDir)
+			projectPath := config.DefaultProjectPath(s.session.ProjectDir)
 			if err := config.AppendAllow(projectPath, []string{domain}); err != nil {
 				return allowResultMsg{index: index, err: err}
 			}
@@ -114,142 +74,137 @@ func (m monitorModel) allowCmd(index int, domain string, save bool) tea.Cmd {
 	}
 }
 
-func (m monitorModel) Init() tea.Cmd {
-	return tea.Batch(doTick(), tea.WindowSize())
-}
-
-func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
+func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "a":
-			if m.cursor >= 0 && m.cursor < len(m.items) {
-				item := m.items[m.cursor]
+		case "a", "A":
+			if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
+				item := s.items[s.cursor.Pos]
 				if item.entry.Action == proxy.ActionBlock && item.status == statusNone {
-					return m, m.allowCmd(m.cursor, item.entry.Domain, false)
+					return s, s.allowCmd(s.cursor.Pos, item.entry.Domain, msg.String() == "A")
 				}
-				m.flash = "already allowed"
-				m.flashExp = time.Now().Add(2 * time.Second)
-			}
-		case "A":
-			if m.cursor >= 0 && m.cursor < len(m.items) {
-				item := m.items[m.cursor]
-				if item.entry.Action == proxy.ActionBlock && item.status == statusNone {
-					return m, m.allowCmd(m.cursor, item.entry.Domain, true)
-				}
-				m.flash = "already allowed"
-				m.flashExp = time.Now().Add(2 * time.Second)
+				w.SetFlash("already allowed")
 			}
 		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "j", "down":
-			if m.cursor < len(m.items)-1 {
-				m.cursor++
-				m.ensureCursorVisible()
-				if m.cursor == len(m.items)-1 {
-					m.newCount = 0
+			return s, tea.Quit
+		default:
+			oldAtEnd := s.cursor.AtEnd()
+			if s.cursor.HandleKey(msg) {
+				if !oldAtEnd && s.cursor.AtEnd() {
+					s.newCount = 0
 				}
+				return s, nil
 			}
-		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-				m.ensureCursorVisible()
-			}
-		case "G", "end":
-			if len(m.items) > 0 {
-				m.cursor = len(m.items) - 1
-				m.newCount = 0
-				m.ensureCursorVisible()
-			}
-		case "g", "home":
-			m.cursor = 0
-			m.ensureCursorVisible()
-		case "pgdown":
-			m.cursor += m.vpHeight
-			if m.cursor >= len(m.items) {
-				m.cursor = len(m.items) - 1
-			}
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			m.ensureCursorVisible()
-			if m.cursor == len(m.items)-1 {
-				m.newCount = 0
-			}
-		case "pgup":
-			m.cursor -= m.vpHeight
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			m.ensureCursorVisible()
 		}
 
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		headerH := m.headerHeight()
-		vpHeight := m.height - headerH - 2 // 1 separator after header + 1 footer line
-		if vpHeight < 1 {
-			vpHeight = 1
+		s.cursor.VpHeight = w.VpHeight()
+		if len(s.items) <= s.cursor.Offset+s.cursor.VpHeight {
+			s.newCount = 0
 		}
-		m.vpHeight = vpHeight
-		if len(m.items) <= m.offset+m.vpHeight {
-			// Viewport increased and we have more space.
-			m.newCount = 0
-		}
-		m.ensureCursorVisible()
+		s.cursor.EnsureVisible()
 
 	case allowResultMsg:
 		if msg.err != nil {
-			m.err = msg.err
-		} else if msg.index >= 0 && msg.index < len(m.items) {
-			m.items[msg.index].status = msg.status
-			domain := m.items[msg.index].entry.Domain
+			w.SetError(msg.err)
+		} else if msg.index >= 0 && msg.index < len(s.items) {
+			s.items[msg.index].status = msg.status
+			domain := s.items[msg.index].entry.Domain
 			switch msg.status {
 			case statusTemp:
-				m.flash = fmt.Sprintf("allowed %s", domain)
+				w.SetFlash(fmt.Sprintf("allowed %s", domain))
 			case statusSaved:
-				m.flash = fmt.Sprintf("allowed and saved %s", domain)
+				w.SetFlash(fmt.Sprintf("allowed and saved %s", domain))
+			case statusNone:
+				// ignored
 			}
-			m.flashExp = time.Now().Add(2 * time.Second)
 		}
 
-	case tickMsg:
-		m.tickFrame++
-		if m.flash != "" && time.Now().After(m.flashExp) {
-			m.flash = ""
-		}
-		// Poll the API every Nth tick to avoid excessive requests.
-		if m.tickFrame%pollEveryNth == 0 {
-			entries, err := m.client.LogsAfter(m.pollCursor)
+	case tui.TickMsg:
+		if w.IntervalElapsed(pollInterval) || !s.firstTickSeen {
+			entries, err := s.client.LogsAfter(s.pollCursor)
 			if err != nil {
-				m.err = err
+				w.SetError(err)
 			} else {
-				m.err = nil
-				// Auto-follow: if cursor was at the last item (or no items yet),
-				// advance it to the new last item after appending.
-				wasAtEnd := len(m.items) == 0 || m.cursor == len(m.items)-1
+				w.ClearError()
+				wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
 				for _, e := range entries {
-					m.items = append(m.items, logItem{entry: e})
-					m.pollCursor = e.ID
+					s.items = append(s.items, logItem{entry: e})
+					s.pollCursor = e.ID
 				}
-				// Only show the new count if the new messages grow outside of the viewport.
-				if !wasAtEnd && len(entries) > 0 && len(m.items) > m.offset+m.vpHeight {
-					m.newCount += len(entries)
+				s.cursor.ItemCount = len(s.items)
+				if !wasAtEnd && len(entries) > 0 && len(s.items) > s.cursor.Offset+s.cursor.VpHeight {
+					s.newCount += len(entries)
 				}
-				if wasAtEnd && len(m.items) > 0 {
-					m.cursor = len(m.items) - 1
-					m.newCount = 0
-					m.ensureCursorVisible()
+				if wasAtEnd && len(s.items) > 0 {
+					s.cursor.Pos = len(s.items) - 1
+					s.newCount = 0
+					s.cursor.EnsureVisible()
 				}
 			}
 		}
-		cmds = append(cmds, doTick())
+		s.firstTickSeen = true
 	}
 
-	return m, tea.Batch(cmds...)
+	return s, nil
+}
+
+func (s *monitorScreen) View(w *tui.Window) string {
+	var logLines []string
+	end := s.cursor.Offset + s.cursor.VpHeight
+	if end > len(s.items) {
+		end = len(s.items)
+	}
+	for i := s.cursor.Offset; i < end; i++ {
+		logLines = append(logLines, renderLogLine(s.items[i], i == s.cursor.Pos))
+	}
+	for len(logLines) < s.cursor.VpHeight {
+		logLines = append(logLines, "")
+	}
+	return strings.Join(logLines, "\n")
+}
+
+var trigrams = []string{"☱", "☲", "☴"}
+
+func (s *monitorScreen) FooterStatus(w *tui.Window) string {
+	isTailing := len(s.items) == 0 || s.cursor.AtEnd()
+	var indicator string
+	if isTailing {
+		glyph := trigrams[w.TickFrame()%len(trigrams)]
+		indicator = lipgloss.NewStyle().Foreground(tui.ColorCyan).Render(glyph)
+	} else {
+		indicator = lipgloss.NewStyle().Foreground(tui.ColorField).Render("☐")
+	}
+
+	if s.newCount > 0 {
+		newMsg := lipgloss.NewStyle().Foreground(tui.ColorOrange).
+			Render(fmt.Sprintf("↓ %d new", s.newCount))
+		return indicator + " " + newMsg
+	}
+	return indicator
+}
+
+func (s *monitorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
+	var keys []tui.FooterKey
+
+	if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
+		item := s.items[s.cursor.Pos]
+		switch {
+		case item.entry.Action == proxy.ActionBlock && item.status == statusNone:
+			keys = append(keys,
+				tui.FooterKey{Key: "a", Desc: "allow"},
+				tui.FooterKey{Key: "A", Desc: "allow+save"},
+			)
+		case item.status == statusTemp:
+			keys = append(keys,
+				tui.FooterKey{Key: "A", Desc: "save"},
+			)
+		}
+	}
+
+	keys = append(keys, s.cursor.FooterKeys()...)
+	return keys
 }
 
 func renderLogLine(item logItem, highlighted bool) string {
@@ -260,7 +215,7 @@ func renderLogLine(item logItem, highlighted bool) string {
 	marker := "  "
 	if highlighted {
 		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("▸") + base.Render(" ")
+		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
 	}
 
 	var symbol string
@@ -289,97 +244,4 @@ func renderLogLine(item logItem, highlighted bool) string {
 	reasonStr := base.Render(e.Reason)
 	sp := base.Render(" ")
 	return marker + base.Render("[") + ts + base.Render("]") + sp + symbol + sp + src + sp + hostStr + sp + reasonStr
-}
-
-// tailingIndicator returns an animated trigram when live-tailing, or a pause
-// icon when the cursor is not following the tail.
-var trigrams = []string{"☱", "☲", "☴"}
-
-func (m monitorModel) tailingIndicator() string {
-	isTailing := len(m.items) == 0 || m.cursor == len(m.items)-1
-	if isTailing {
-		glyph := trigrams[m.tickFrame%len(trigrams)]
-		return lipgloss.NewStyle().Foreground(tui.ColorCyan).Render(glyph)
-	}
-	return lipgloss.NewStyle().Foreground(tui.ColorField).Render("⏸")
-}
-
-func (m monitorModel) renderFooter(width int) string {
-	keyStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
-	descStyle := lipgloss.NewStyle().Foreground(tui.ColorField)
-
-	indicator := m.tailingIndicator() + " "
-
-	// Left side: status indicators
-	var left string
-	if m.err != nil {
-		left = lipgloss.NewStyle().Foreground(tui.ColorError).
-			Render(fmt.Sprintf("connection error: %v", m.err))
-	} else if m.flash != "" && time.Now().Before(m.flashExp) {
-		left = lipgloss.NewStyle().Foreground(tui.ColorOrange).Render(m.flash)
-	} else if m.newCount > 0 {
-		left = lipgloss.NewStyle().Foreground(tui.ColorOrange).
-			Render(fmt.Sprintf("↓ %d new", m.newCount))
-	}
-	left = indicator + left
-
-	var keys []string
-
-	if m.cursor >= 0 && m.cursor < len(m.items) {
-		item := m.items[m.cursor]
-		switch {
-		case item.entry.Action == proxy.ActionBlock && item.status == statusNone:
-			keys = append(keys,
-				keyStyle.Render("a")+" "+descStyle.Render("allow"),
-				keyStyle.Render("A")+" "+descStyle.Render("allow+save"),
-			)
-		case item.status == statusTemp:
-			keys = append(keys,
-				keyStyle.Render("A")+" "+descStyle.Render("save"),
-			)
-		}
-	}
-
-	// Right side: context-sensitive keybindings
-	keys = append(keys, []string{
-		keyStyle.Render("↑/↓ k/j") + " " + descStyle.Render("navigate"),
-		keyStyle.Render("Home/End g/G") + " " + descStyle.Render("jump"),
-		keyStyle.Render("q") + " " + descStyle.Render("quit"),
-	}...)
-
-	right := strings.Join(keys, "  ")
-
-	// Pad between left and right
-	leftWidth := ansi.StringWidth(left)
-	rightWidth := ansi.StringWidth(right)
-	gap := width - leftWidth - rightWidth
-	if gap < 2 {
-		gap = 2
-	}
-
-	return left + strings.Repeat(" ", gap) + right
-}
-
-func (m monitorModel) View() string {
-	if m.width == 0 {
-		return "Starting..."
-	}
-
-	header := tui.RenderHeader(headerInfoFromSession(m.session), m.width)
-
-	var logLines []string
-	end := m.offset + m.vpHeight
-	if end > len(m.items) {
-		end = len(m.items)
-	}
-	for i := m.offset; i < end; i++ {
-		logLines = append(logLines, renderLogLine(m.items[i], i == m.cursor))
-	}
-	for len(logLines) < m.vpHeight {
-		logLines = append(logLines, "")
-	}
-
-	footer := m.renderFooter(m.width)
-
-	return header + "\n" + strings.Join(logLines, "\n") + "\n" + footer
 }

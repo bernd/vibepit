@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/urfave/cli/v3"
 )
@@ -31,8 +32,10 @@ func MonitorCommand() *cli.Command {
 				return err
 			}
 
-			m := newMonitorModel(session, client)
-			p := tea.NewProgram(m, tea.WithAltScreen())
+			screen := newMonitorScreen(session, client)
+			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
+			w := tui.NewWindow(header, screen)
+			p := tea.NewProgram(w, tea.WithAltScreen())
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("monitor UI: %w", err)
 			}
