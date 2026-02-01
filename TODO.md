@@ -1,6 +1,7 @@
 TODO
 ====
 
+- Rename `x-vibepit` labels to `vibepit` or `dev.vibepit`
 - We can't mount the vibepit binary into the proxy container on macOS.
   - Need another custom container image?
   - Embed the Linux binary into the macOS binary?
