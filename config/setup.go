@@ -5,9 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/bernd/vibepit/proxy"
-	"github.com/charmbracelet/huh"
 )
 
 // RunFirstTimeSetup shows an interactive preset selector and writes the project
@@ -52,80 +49,11 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 	return selected, writeReconfiguredProjectConfig(projectConfigPath, selected, cfg.Allow, cfg.DNSOnly)
 }
 
-// runPresetSelector builds and runs the huh multi-select form. preChecked
+// runPresetSelector builds and runs the TUI preset selector. preChecked
 // controls which options are initially selected; detected lists preset names
 // that were auto-detected from the project directory.
 func runPresetSelector(preChecked map[string]bool, detected []string) ([]string, error) {
-	reg := proxy.NewPresetRegistry()
-	allPresets := reg.All()
-
-	detectedSet := make(map[string]bool, len(detected))
-	for _, d := range detected {
-		detectedSet[d] = true
-	}
-
-	// Build options in visual order:
-	// 1. Detected presets
-	// 2. default (if not detected)
-	// 3. Remaining Package Managers (not detected)
-	// 4. Infrastructure presets
-	type entry struct {
-		preset  proxy.Preset
-		section string
-	}
-
-	var detectedEntries []entry
-	var defaultEntry *entry
-	var pkgEntries []entry
-	var infraEntries []entry
-
-	for _, p := range allPresets {
-		if detectedSet[p.Name] {
-			detectedEntries = append(detectedEntries, entry{preset: p, section: "Detected"})
-		} else if p.Name == "default" {
-			e := entry{preset: p, section: "Defaults"}
-			defaultEntry = &e
-		} else if p.Group == "Package Managers" {
-			pkgEntries = append(pkgEntries, entry{preset: p, section: "Package Managers"})
-		} else if p.Group == "Infrastructure" {
-			infraEntries = append(infraEntries, entry{preset: p, section: "Infrastructure"})
-		}
-	}
-
-	var ordered []entry
-	if len(detectedEntries) > 0 {
-		ordered = append(ordered, detectedEntries...)
-	}
-	if defaultEntry != nil {
-		ordered = append(ordered, *defaultEntry)
-	}
-	ordered = append(ordered, pkgEntries...)
-	ordered = append(ordered, infraEntries...)
-
-	options := make([]huh.Option[string], 0, len(ordered))
-	for _, e := range ordered {
-		label := e.preset.Name + " - " + e.preset.Description
-		opt := huh.NewOption(label, e.preset.Name).Selected(preChecked[e.preset.Name])
-		options = append(options, opt)
-	}
-
-	var selected []string
-
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Select network presets").
-				Description("Space to toggle, Enter to confirm").
-				Options(options...).
-				Value(&selected),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return nil, fmt.Errorf("preset selector: %w", err)
-	}
-
-	return selected, nil
+	return runPresetSelectorTUI(preChecked, detected)
 }
 
 func writeProjectConfig(path string, presets []string) error {
