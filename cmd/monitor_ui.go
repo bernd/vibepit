@@ -7,6 +7,7 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
+	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -53,8 +54,12 @@ func newMonitorModel(session *SessionInfo, client *ControlClient) monitorModel {
 	}
 }
 
+func headerInfoFromSession(session *SessionInfo) *tui.HeaderInfo {
+	return &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
+}
+
 func (m monitorModel) headerHeight() int {
-	h := RenderHeader(m.session, m.width)
+	h := tui.RenderHeader(headerInfoFromSession(m.session), m.width)
 	return strings.Count(h, "\n") + 1
 }
 
@@ -254,31 +259,31 @@ func renderLogLine(item logItem, highlighted bool) string {
 	base := lipgloss.NewStyle()
 	marker := "  "
 	if highlighted {
-		base = base.Background(colorHighlight)
-		marker = lipgloss.NewStyle().Foreground(colorCyan).Background(colorHighlight).Render("▸") + base.Render(" ")
+		base = base.Background(tui.ColorHighlight)
+		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("▸") + base.Render(" ")
 	}
 
 	var symbol string
 	var sourceColor lipgloss.Color
 	switch {
 	case item.status == statusTemp:
-		symbol = base.Foreground(colorOrange).Render("a")
-		sourceColor = colorOrange
+		symbol = base.Foreground(tui.ColorOrange).Render("a")
+		sourceColor = tui.ColorOrange
 	case item.status == statusSaved:
-		symbol = base.Foreground(colorOrange).Bold(true).Render("A")
-		sourceColor = colorOrange
+		symbol = base.Foreground(tui.ColorOrange).Bold(true).Render("A")
+		sourceColor = tui.ColorOrange
 	case e.Action == proxy.ActionBlock:
-		symbol = base.Foreground(colorError).Render("x")
-		sourceColor = colorError
+		symbol = base.Foreground(tui.ColorError).Render("x")
+		sourceColor = tui.ColorError
 	default:
-		symbol = base.Foreground(colorCyan).Render("+")
-		sourceColor = colorCyan
+		symbol = base.Foreground(tui.ColorCyan).Render("+")
+		sourceColor = tui.ColorCyan
 	}
 	host := e.Domain
 	if e.Port != "" {
 		host = e.Domain + ":" + e.Port
 	}
-	ts := base.Foreground(colorField).Render(e.Time.Format("15:04:05"))
+	ts := base.Foreground(tui.ColorField).Render(e.Time.Format("15:04:05"))
 	src := base.Foreground(sourceColor).Render(fmt.Sprintf("%-5s", string(e.Source)))
 	hostStr := base.Render(host)
 	reasonStr := base.Render(e.Reason)
@@ -294,26 +299,26 @@ func (m monitorModel) tailingIndicator() string {
 	isTailing := len(m.items) == 0 || m.cursor == len(m.items)-1
 	if isTailing {
 		glyph := trigrams[m.tickFrame%len(trigrams)]
-		return lipgloss.NewStyle().Foreground(colorCyan).Render(glyph)
+		return lipgloss.NewStyle().Foreground(tui.ColorCyan).Render(glyph)
 	}
-	return lipgloss.NewStyle().Foreground(colorField).Render("⏸")
+	return lipgloss.NewStyle().Foreground(tui.ColorField).Render("⏸")
 }
 
 func (m monitorModel) renderFooter(width int) string {
-	keyStyle := lipgloss.NewStyle().Foreground(colorCyan)
-	descStyle := lipgloss.NewStyle().Foreground(colorField)
+	keyStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
+	descStyle := lipgloss.NewStyle().Foreground(tui.ColorField)
 
 	indicator := m.tailingIndicator() + " "
 
 	// Left side: status indicators
 	var left string
 	if m.err != nil {
-		left = lipgloss.NewStyle().Foreground(colorError).
+		left = lipgloss.NewStyle().Foreground(tui.ColorError).
 			Render(fmt.Sprintf("connection error: %v", m.err))
 	} else if m.flash != "" && time.Now().Before(m.flashExp) {
-		left = lipgloss.NewStyle().Foreground(colorOrange).Render(m.flash)
+		left = lipgloss.NewStyle().Foreground(tui.ColorOrange).Render(m.flash)
 	} else if m.newCount > 0 {
-		left = lipgloss.NewStyle().Foreground(colorOrange).
+		left = lipgloss.NewStyle().Foreground(tui.ColorOrange).
 			Render(fmt.Sprintf("↓ %d new", m.newCount))
 	}
 	left = indicator + left
@@ -360,7 +365,7 @@ func (m monitorModel) View() string {
 		return "Starting..."
 	}
 
-	header := RenderHeader(m.session, m.width)
+	header := tui.RenderHeader(headerInfoFromSession(m.session), m.width)
 
 	var logLines []string
 	end := m.offset + m.vpHeight

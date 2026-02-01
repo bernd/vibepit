@@ -1,4 +1,4 @@
-package cmd
+package tui
 
 import (
 	"fmt"
@@ -10,12 +10,12 @@ import (
 
 // Theme colors
 var (
-	colorCyan      = lipgloss.Color("#00d4ff")
-	colorPurple    = lipgloss.Color("#8b5cf6")
-	colorOrange    = lipgloss.Color("#f97316")
-	colorField     = lipgloss.Color("#0099cc")
-	colorError     = colorPurple // lipgloss.Color("#ef4444") - this one is too similar to the orange
-	colorHighlight = lipgloss.Color("#1e2d3d")
+	ColorCyan      = lipgloss.Color("#00d4ff")
+	ColorPurple    = lipgloss.Color("#8b5cf6")
+	ColorOrange    = lipgloss.Color("#f97316")
+	ColorField     = lipgloss.Color("#0099cc")
+	ColorError     = ColorPurple // lipgloss.Color("#ef4444") - this one is too similar to the orange
+	ColorHighlight = lipgloss.Color("#1e2d3d")
 )
 
 // letterGlyph holds the three rows of a block-art character.
@@ -107,9 +107,14 @@ func applyGradient(s string, colorA, colorB lipgloss.Color) string {
 	return out.String()
 }
 
+type HeaderInfo struct {
+	ProjectDir string
+	SessionID  string
+}
+
 // RenderHeader produces the styled monitor header with wordmark, tagline,
 // session info, and diagonal line field.
-func RenderHeader(session *SessionInfo, width int) string {
+func RenderHeader(info *HeaderInfo, width int) string {
 	if width < 40 {
 		width = 40
 	}
@@ -117,19 +122,19 @@ func RenderHeader(session *SessionInfo, width int) string {
 	rows := buildWordmark("VIBEPIT")
 	wordmarkWidth := ansi.StringWidth(rows[0])
 
-	tagline := lipgloss.NewStyle().Foreground(colorOrange).Italic(true).Render("I PITY THE VIBES")
+	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I PITY THE VIBES")
 
-	sessionInfo := lipgloss.NewStyle().Foreground(colorField).Render(
-		fmt.Sprintf("%s ╱╱ %s", session.ProjectDir, session.SessionID),
+	sessionInfo := lipgloss.NewStyle().Foreground(ColorField).Render(
+		fmt.Sprintf("%s ╱╱ %s", info.ProjectDir, info.SessionID),
 	)
 
-	fieldChar := lipgloss.NewStyle().Foreground(colorField).Render("╱")
+	fieldChar := lipgloss.NewStyle().Foreground(ColorField).Render("╱")
 	leftFieldCharLen := 3              // left field chars
 	leftPadLen := leftFieldCharLen + 2 // spacing
 
 	var lines []string
 	for i := 0; i < 3; i++ {
-		coloredRow := applyGradient(rows[i], colorCyan, colorPurple)
+		coloredRow := applyGradient(rows[i], ColorCyan, ColorPurple)
 		leftPad := strings.Repeat(fieldChar, leftFieldCharLen)
 		remaining := width - wordmarkWidth - leftPadLen
 		if remaining < 0 {
