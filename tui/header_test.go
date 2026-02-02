@@ -15,7 +15,7 @@ func TestRenderHeader_CompactWhenShort(t *testing.T) {
 		ProjectDir: "myproject",
 	}, 80, 10)
 
-	lines := strings.Split(strings.TrimPrefix(header, "\n"), "\n")
+	lines := strings.Split(header, "\n")
 	assert.Equal(t, 1, len(lines), "compact header should be a single line")
 	assert.Contains(t, header, "VIBEPIT")
 	assert.Contains(t, header, "I pity the vibes")
@@ -29,7 +29,7 @@ func TestRenderHeader_FullWhenTall(t *testing.T) {
 		ProjectDir: "myproject",
 	}, 80, 30)
 
-	lines := strings.Split(strings.TrimPrefix(header, "\n"), "\n")
+	lines := strings.Split(header, "\n")
 	assert.GreaterOrEqual(t, len(lines), 4, "full header should have at least 4 lines")
 }
 
@@ -39,7 +39,7 @@ func TestRenderHeader_CompactAtThreshold(t *testing.T) {
 		SessionID:  "abc123",
 		ProjectDir: "myproject",
 	}, 80, tui.CompactHeaderThreshold-1)
-	compactLines := strings.Split(strings.TrimPrefix(compact, "\n"), "\n")
+	compactLines := strings.Split(compact, "\n")
 	assert.Equal(t, 1, len(compactLines))
 
 	// height at threshold should be full
@@ -47,7 +47,7 @@ func TestRenderHeader_CompactAtThreshold(t *testing.T) {
 		SessionID:  "abc123",
 		ProjectDir: "myproject",
 	}, 80, tui.CompactHeaderThreshold)
-	fullLines := strings.Split(strings.TrimPrefix(full, "\n"), "\n")
+	fullLines := strings.Split(full, "\n")
 	assert.GreaterOrEqual(t, len(fullLines), 4)
 }
 

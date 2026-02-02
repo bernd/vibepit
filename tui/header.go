@@ -142,7 +142,7 @@ func renderCompactHeader(info *HeaderInfo, width int) string {
 
 	line := leftPad + " " + name + "  " + tagline + " " + fieldFill + " " + sessionInfo + " " + rightPad
 
-	return "\n" + line
+	return line
 }
 
 // RenderHeader produces the styled monitor header with wordmark, tagline,
@@ -189,5 +189,5 @@ func RenderHeader(info *HeaderInfo, width int, height int) string {
 	}
 	lines = append(lines, strings.Repeat(" ", leftPadLen)+tagline+strings.Repeat(" ", gap)+sessionInfo)
 
-	return "\n" + strings.Join(lines, "\n")
+	return strings.Join(lines, "\n")
 }

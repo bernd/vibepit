@@ -90,7 +90,7 @@ func (w *Window) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w.width = msg.Width
 		w.height = msg.Height
 		headerH := w.headerHeight()
-		w.vpHeight = max(w.height-headerH-2, 1) // 1 separator after header + 1 footer line
+		w.vpHeight = max(w.height-headerH-1, 1) // 1 footer line
 
 	case TickMsg:
 		w.tickFrame++
