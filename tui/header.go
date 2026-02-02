@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -116,6 +117,16 @@ type HeaderInfo struct {
 	SessionID  string
 }
 
+// ProjectDirWithHome replaces the home directory path in the project dir
+// with "$HOME" to shorten the value.
+func (info HeaderInfo) ProjectDirWithHome() string {
+	home := os.Getenv("HOME")
+	if home != "" && strings.HasPrefix(info.ProjectDir, home) {
+		return fmt.Sprintf("$HOME%s", strings.TrimPrefix(info.ProjectDir, home))
+	}
+	return info.ProjectDir
+}
+
 // renderCompactHeader produces a single-line header with gradient wordmark,
 // orange tagline, and session info separated by diagonal field characters.
 func renderCompactHeader(info *HeaderInfo, width int) string {
@@ -124,7 +135,7 @@ func renderCompactHeader(info *HeaderInfo, width int) string {
 	name := applyGradient("VIBEPIT", ColorCyan, ColorPurple)
 	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I pity the vibes")
 	sessionInfo := lipgloss.NewStyle().Foreground(ColorField).Render(
-		fmt.Sprintf("%s ╱╱ %s", info.ProjectDir, info.SessionID))
+		fmt.Sprintf("%s ╱╱ %s", info.ProjectDirWithHome(), info.SessionID))
 
 	leftPad := strings.Repeat(fieldChar, 3)
 	rightPad := strings.Repeat(fieldChar, 3)
@@ -162,7 +173,7 @@ func RenderHeader(info *HeaderInfo, width int, height int) string {
 	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I PITY THE VIBES")
 
 	sessionInfo := lipgloss.NewStyle().Foreground(ColorField).Render(
-		fmt.Sprintf("%s ╱╱ %s", info.ProjectDir, info.SessionID),
+		fmt.Sprintf("%s ╱╱ %s", info.ProjectDirWithHome(), info.SessionID),
 	)
 
 	fieldChar := lipgloss.NewStyle().Foreground(ColorField).Render("╱")
