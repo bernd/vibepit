@@ -41,3 +41,5 @@ TODO
 - Let the proxy return a better message that describes why the connect attempt
   was denied. Maybe that helps agents to tell users what to do.
   ("connection denied to to firewall policy - use vibepit add or monitor to allow...")
+- Use xdg library to work on macOS
+- Create end-to-end tests with testcontainers
