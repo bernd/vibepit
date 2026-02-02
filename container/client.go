@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -241,33 +242,29 @@ type NetworkInfo struct {
 	ProxyIP string
 }
 
-// CreateNetwork creates an internal Docker network and lets Docker assign the
-// subnet. It inspects the created network to derive a static IP for the proxy
-// (gateway + 1).
+// CreateNetwork creates an internal Docker network with a random /24 subnet
+// and derives a static IP for the proxy (gateway + 1). The subnet is
+// explicitly specified so that Docker allows static IP assignment.
 func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, error) {
+	subnet, gateway, err := randomSubnet()
+	if err != nil {
+		return NetworkInfo{}, fmt.Errorf("generate subnet: %w", err)
+	}
+
 	resp, err := c.docker.NetworkCreate(ctx, name, network.CreateOptions{
 		Internal: true,
 		Labels:   map[string]string{LabelVibepit: "true"},
+		IPAM: &network.IPAM{
+			Config: []network.IPAMConfig{
+				{
+					Subnet:  subnet,
+					Gateway: gateway.String(),
+				},
+			},
+		},
 	})
 	if err != nil {
 		return NetworkInfo{}, fmt.Errorf("create network: %w", err)
-	}
-
-	info, err := c.docker.NetworkInspect(ctx, resp.ID, network.InspectOptions{})
-	if err != nil {
-		c.docker.NetworkRemove(ctx, resp.ID)
-		return NetworkInfo{}, fmt.Errorf("inspect network: %w", err)
-	}
-
-	if len(info.IPAM.Config) == 0 || info.IPAM.Config[0].Gateway == "" {
-		c.docker.NetworkRemove(ctx, resp.ID)
-		return NetworkInfo{}, fmt.Errorf("network %s has no IPAM gateway", name)
-	}
-
-	gateway := net.ParseIP(info.IPAM.Config[0].Gateway)
-	if gateway == nil {
-		c.docker.NetworkRemove(ctx, resp.ID)
-		return NetworkInfo{}, fmt.Errorf("invalid gateway IP in network %s", name)
 	}
 
 	proxyIP := nextIP(gateway)
@@ -275,6 +272,20 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 		ID:      resp.ID,
 		ProxyIP: proxyIP.String(),
 	}, nil
+}
+
+// randomSubnet generates a random /24 subnet in the 10.x.x.0/8 range,
+// returning the CIDR string and gateway IP (x.x.x.1). There is a small
+// chance (~1/65k) of colliding with an existing Docker network, in which
+// case network creation will fail with a "pool overlaps" error.
+func randomSubnet() (string, net.IP, error) {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", nil, err
+	}
+	gateway := net.IPv4(10, b[0], b[1], 1)
+	subnet := fmt.Sprintf("10.%d.%d.0/24", b[0], b[1])
+	return subnet, gateway, nil
 }
 
 // nextIP returns the IP address immediately following ip.
