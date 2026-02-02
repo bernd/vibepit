@@ -38,3 +38,6 @@ TODO
   - The docker-in-docker container should also not be connected to the internet
     - Otherwise, this would be a way for the sandbox to escape
   - Have the proxy container proxy requests from the docker-in-docker container
+- Let the proxy return a better message that describes why the connect attempt
+  was denied. Maybe that helps agents to tell users what to do.
+  ("connection denied to to firewall policy - use vibepit add or monitor to allow...")
