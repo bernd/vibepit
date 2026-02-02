@@ -25,3 +25,5 @@ TODO
 - Allow searching for domains in the network setup UI to let users check
   if something is included or in which preset something can be found.
 - Add a nicely-colored PS1 prompt to the sandbox shell. (use theme colors)
+- Account the traffic bytes for each contacted hostname in memory. Allows
+  showing traffic information and accounting of LLM inference payload size.
