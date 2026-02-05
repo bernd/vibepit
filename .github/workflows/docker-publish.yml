@@ -16,6 +16,7 @@ env:
 
 jobs:
   build:
+    name: "Build ${{ matrix.edition.uid }}/${{ matrix.edition.gid }}"
 
     runs-on: ubuntu-latest
     permissions:
@@ -24,6 +25,18 @@ jobs:
       # This is used to complete the identity challenge
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
+
+    strategy:
+      matrix:
+        edition:
+          # Linux default user uid/gid
+          - uid: "1000"
+            gid: "1000"
+            platforms: "linux/amd64,linux/arm64"
+          # macOS default user uid/gid
+          - uid: "501"
+            gid: "20"
+            platforms: "linux/arm64"
 
     steps:
       - name: Checkout repository
@@ -63,12 +76,13 @@ jobs:
 
       # Build and push Docker image with Buildx (don't push on PR)
       # https://github.com/docker/build-push-action
-      - name: Build and push Docker image
+      - name: Build and push Docker image (uid=${{ matrix.edition.uid }} gid=${{ matrix.edition.gid }})
         id: build-and-push
         uses: docker/build-push-action@v6.18.0
         with:
           context: image
-          platforms: "linux/amd64,linux/arm64"
+          platforms: "${{ matrix.edition.platforms }}"
+          build-args: "CODE_UID=${{ matrix.edition.uid }},CODE_GID=${{ matrix.edition.gid }}"
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
