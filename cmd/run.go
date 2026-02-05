@@ -21,7 +21,7 @@ import (
 const (
 	defaultImage      = "ghcr.io/bernd/vibepit:main"
 	localImage        = "vibepit:latest"
-	volumeName        = "x-vibepit-home"
+	volumeName        = "vibepit-home"
 	networkNamePrefix = "vibepit-net-"
 )
 

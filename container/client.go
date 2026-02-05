@@ -20,13 +20,13 @@ import (
 )
 
 const (
-	LabelVibepit    = "x-vibepit"
-	LabelRole       = "x-vibepit.role"
-	LabelUID        = "x-vibepit.uid"
-	LabelUser       = "x-vibepit.user"
-	LabelVolume     = "x-vibepit.volume"
-	LabelProjectDir = "x-vibepit.project.dir"
-	LabelSessionID  = "x-vibepit.session-id"
+	LabelVibepit    = "vibepit"
+	LabelRole       = "vibepit.role"
+	LabelUID        = "vibepit.uid"
+	LabelUser       = "vibepit.user"
+	LabelVolume     = "vibepit.volume"
+	LabelProjectDir = "vibepit.project.dir"
+	LabelSessionID  = "vibepit.session-id"
 
 	RoleProxy = "proxy"
 	RoleDev   = "dev"
