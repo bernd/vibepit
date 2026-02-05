@@ -16,7 +16,9 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	dockerclient "github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/go-connections/nat"
+	"golang.org/x/term"
 )
 
 const (
@@ -74,7 +76,7 @@ func NewClient() (*Client, error) {
 func (c *Client) Close() error { return c.docker.Close() }
 
 // EnsureImage pulls the image if it is not available locally.
-func (c *Client) EnsureImage(ctx context.Context, ref string) error {
+func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) error {
 	images, err := c.docker.ImageList(ctx, image.ListOptions{
 		Filters: filters.NewArgs(filters.Arg("reference", ref)),
 	})
@@ -85,16 +87,29 @@ func (c *Client) EnsureImage(ctx context.Context, ref string) error {
 		return nil
 	}
 
+	return c.PullImage(ctx, ref, quiet)
+}
+
+// PullImage pulls the latest version of the image.
+func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	fmt.Printf("+ Pulling image: %s\n", ref)
 	reader, err := c.docker.ImagePull(ctx, ref, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	defer reader.Close()
-	// Drain the pull output to complete the operation.
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
-		return fmt.Errorf("pull image %s: %w", ref, err)
+
+	if quiet {
+		// Drain the pull output to complete the operation.
+		_, err = io.Copy(io.Discard, reader)
+		if err != nil {
+			return fmt.Errorf("pull image %s: %w", ref, err)
+		}
+	} else {
+		isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+		if err := jsonmessage.DisplayJSONMessagesStream(reader, os.Stdout, os.Stdout.Fd(), isTerminal, nil); err != nil {
+			return fmt.Errorf("pull image %s: %w", ref, err)
+		}
 	}
 	return nil
 }

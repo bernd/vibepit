@@ -180,10 +180,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	selfBinary, _ = filepath.EvalSymlinks(selfBinary)
 
 	// Pull images that are not available locally.
-	if err := client.EnsureImage(ctx, image); err != nil {
+	if err := client.EnsureImage(ctx, image, false); err != nil {
 		return fmt.Errorf("image: %w", err)
 	}
-	if err := client.EnsureImage(ctx, ctr.ProxyImage); err != nil {
+	if err := client.EnsureImage(ctx, ctr.ProxyImage, false); err != nil {
 		return fmt.Errorf("proxy image: %w", err)
 	}
 

@@ -23,6 +23,7 @@ func RootCommand() *cli.Command {
 			ProxyCommand(),
 			SessionsCommand(),
 			MonitorCommand(),
+			UpdateCommand(),
 		},
 	}
 }
