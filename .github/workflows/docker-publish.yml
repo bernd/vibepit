@@ -2,7 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "next" ]
     paths:
       - "image/**"
 
@@ -84,7 +84,7 @@ jobs:
           platforms: "${{ matrix.edition.platforms }}"
           build-args: "CODE_UID=${{ matrix.edition.uid }},CODE_GID=${{ matrix.edition.gid }}"
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: "${{ github.ref }}-uid-${{ matrix.edition.uid }}-gid-${{ matrix.edition.gid }}"
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
