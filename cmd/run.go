@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	defaultImagePrefix = "ghcr.io/bernd/vibepit:main"
+	defaultImagePrefix = "ghcr.io/bernd/vibepit:next"
 	localImage         = "vibepit:latest"
 	volumeName         = "vibepit-home"
 	networkNamePrefix  = "vibepit-net-"
