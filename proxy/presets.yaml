@@ -5,9 +5,11 @@
 
 - name: "default"
   group: "Defaults"
-  description: "Anthropic services and GitHub"
+  description: "Anthropic, GitHub, Homebrew"
   includes:
     - "anthropic"
+    - "cdn-github"
+    - "homebrew"
     - "vcs-github"
 
 # --- Infrastructure ---
@@ -181,6 +183,19 @@
     - "*.modelcontextprotocol.io:443"
 
 # --- Package Managers ---
+
+- name: "cdn-github"
+  group: "Package Managers"
+  description: "GitHub Container Registry"
+  domains:
+    - "ghcr.io:443"
+    - "pkg-containers.githubusercontent.com:443"
+
+- name: "homebrew"
+  group: "Package Managers"
+  description: "Homebrew downloads"
+  domains:
+    - "formulae.brew.sh:443"
 
 - name: "pkg-node"
   group: "Package Managers"
