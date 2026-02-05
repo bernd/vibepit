@@ -86,7 +86,7 @@ jobs:
             CODE_UID=${{ matrix.edition.uid }}
             CODE_GID=${{ matrix.edition.gid }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: "${{ github.ref_name }}-uid-${{ matrix.edition.uid }}-gid-${{ matrix.edition.gid }}"
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-uid-${{ matrix.edition.uid }}-gid-${{ matrix.edition.gid }}"
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
