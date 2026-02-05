@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	defaultImage      = "ghcr.io/bernd/vibepit:main"
-	localImage        = "vibepit:latest"
-	volumeName        = "vibepit-home"
-	networkNamePrefix = "vibepit-net-"
+	defaultImagePrefix = "ghcr.io/bernd/vibepit:main"
+	localImage         = "vibepit:latest"
+	volumeName         = "vibepit-home"
+	networkNamePrefix  = "vibepit-net-"
 )
 
 const (
@@ -68,6 +68,10 @@ func RunCommand() *cli.Command {
 	}
 }
 
+func imageName(u *user.User) string {
+	return fmt.Sprintf("%s-uid-%s-gid-%s", defaultImagePrefix, u.Uid, u.Gid)
+}
+
 func RunAction(ctx context.Context, cmd *cli.Command) error {
 	projectRoot := cmd.Args().First()
 	if projectRoot == "" {
@@ -105,7 +109,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	image := defaultImage
+	image := imageName(u)
 	if cmd.Bool(localFlag) {
 		image = localImage
 	}
