@@ -31,7 +31,6 @@ import (
 	"os"
 	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -81,7 +80,7 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 
 	// Forward SIGWINCH to the container.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH)
+	notifyResize(sigCh)
 	defer signal.Stop(sigCh)
 	go func() {
 		for range sigCh {
