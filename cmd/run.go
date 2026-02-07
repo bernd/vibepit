@@ -157,10 +157,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	merged := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
 
-	if err := merged.ValidateHostPorts(); err != nil {
-		return err
-	}
-
 	uid, _ := strconv.Atoi(u.Uid)
 
 	if cmd.Bool(cleanFlag) {
@@ -198,6 +194,23 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	merged.ProxyIP = proxyIP
 	merged.HostGateway = "host-gateway"
 
+	// Generate random ports for proxy services, avoiding user's host ports.
+	excluded := make(map[int]bool, len(merged.AllowHostPorts))
+	for _, p := range merged.AllowHostPorts {
+		excluded[p] = true
+	}
+	proxyPort, err := config.RandomProxyPort(excluded)
+	if err != nil {
+		return fmt.Errorf("proxy port: %w", err)
+	}
+	excluded[proxyPort] = true
+	controlAPIPort, err := config.RandomProxyPort(excluded)
+	if err != nil {
+		return fmt.Errorf("control API port: %w", err)
+	}
+	merged.ProxyPort = proxyPort
+	merged.ControlAPIPort = controlAPIPort
+
 	proxyConfig, _ := json.Marshal(merged)
 	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
 	if err != nil {
@@ -232,16 +245,17 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	fmt.Println("+ Starting proxy container")
 	proxyContainerID, controlPort, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
-		BinaryPath: selfBinary,
-		ConfigPath: tmpFile.Name(),
-		NetworkID:  netInfo.ID,
-		ProxyIP:    proxyIP,
-		Name:       "vibepit-proxy-" + containerID,
-		SessionID:  sessionID,
-		TLSKeyPEM:  string(creds.ServerKeyPEM()),
-		TLSCertPEM: string(creds.ServerCertPEM()),
-		CACertPEM:  string(creds.CACertPEM()),
-		ProjectDir: projectRoot,
+		BinaryPath:     selfBinary,
+		ConfigPath:     tmpFile.Name(),
+		NetworkID:      netInfo.ID,
+		ProxyIP:        proxyIP,
+		ControlAPIPort: controlAPIPort,
+		Name:           "vibepit-proxy-" + containerID,
+		SessionID:      sessionID,
+		TLSKeyPEM:      string(creds.ServerKeyPEM()),
+		TLSCertPEM:     string(creds.ServerCertPEM()),
+		CACertPEM:      string(creds.CACertPEM()),
+		ProjectDir:     projectRoot,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy container: %w", err)
@@ -268,6 +282,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		VolumeName: volumeName,
 		NetworkID:  netInfo.ID,
 		ProxyIP:    proxyIP,
+		ProxyPort:  proxyPort,
 		Name:       "vibepit-" + containerID,
 		Term:       term,
 		ColorTerm:  os.Getenv("COLORTERM"),

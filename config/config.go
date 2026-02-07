@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,26 +45,26 @@ type MergedConfig struct {
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip,omitempty"`
 	HostGateway    string   `json:"host-gateway,omitempty"`
+	ProxyPort      int      `json:"proxy-port,omitempty"`
+	ControlAPIPort int      `json:"control-api-port,omitempty"`
 }
 
-// reservedProxyPorts are ports used internally by the proxy and cannot be
-// forwarded to the host.
-var reservedProxyPorts = map[int]string{
-	53:   "DNS server",
-	2222: "SSH server",
-	3128: "HTTP proxy",
-	3129: "control API",
-}
-
-// ValidateHostPorts checks that none of the configured host ports conflict
-// with ports reserved by the proxy.
-func (m *MergedConfig) ValidateHostPorts() error {
-	for _, port := range m.AllowHostPorts {
-		if service, ok := reservedProxyPorts[port]; ok {
-			return fmt.Errorf("allow-host-ports: port %d is reserved for %s", port, service)
+// RandomProxyPort returns a random port in the ephemeral range (49152-65535)
+// that is not in the excluded set.
+func RandomProxyPort(excluded map[int]bool) (int, error) {
+	const lo, hi = 49152, 65535
+	rangeSize := hi - lo + 1
+	for i := 0; i < 100; i++ {
+		var b [2]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return 0, err
+		}
+		port := lo + int(binary.BigEndian.Uint16(b[:]))%rangeSize
+		if !excluded[port] {
+			return port, nil
 		}
 	}
-	return nil
+	return 0, fmt.Errorf("failed to find available port after 100 attempts")
 }
 
 func Load(globalPath, projectPath string) (*Config, error) {

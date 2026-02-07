@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -38,8 +39,8 @@ const (
 	HomeMountPath     = "/home/code"
 	ContainerHostname = "vibes"
 
-	ProxyImage   = "gcr.io/distroless/base-debian13:latest"
-	ProxyPortNum = "3128"
+	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
+	LabelControlPort = "vibepit.control-port"
 )
 
 // Client wraps the Docker/Podman API, trying Docker first then falling back
@@ -320,23 +321,24 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 
 // ProxyContainerConfig holds the parameters for starting the in-network proxy.
 type ProxyContainerConfig struct {
-	BinaryPath string
-	ConfigPath string
-	NetworkID  string
-	ProxyIP    string
-	Name       string
-	SessionID  string
-	TLSKeyPEM  string
-	TLSCertPEM string
-	CACertPEM  string
-	ProjectDir string
+	BinaryPath     string
+	ConfigPath     string
+	NetworkID      string
+	ProxyIP        string
+	ControlAPIPort int
+	Name           string
+	SessionID      string
+	TLSKeyPEM      string
+	TLSCertPEM     string
+	CACertPEM      string
+	ProjectDir     string
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
 // vibepit proxy binary, then connects it to the bridge network so it can
-// reach the internet. The control API port (3129) is published to 127.0.0.1
-// with an OS-assigned host port. Returns the container ID and the assigned
-// host port.
+// reach the internet. The control API port is published to 127.0.0.1 with
+// an OS-assigned host port. Returns the container ID and the assigned host
+// port.
 func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConfig) (string, string, error) {
 	var env []string
 	if cfg.TLSKeyPEM != "" {
@@ -347,16 +349,19 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		)
 	}
 
+	portStr := strconv.Itoa(cfg.ControlAPIPort)
+
 	labels := map[string]string{
-		LabelVibepit:    "true",
-		LabelRole:       RoleProxy,
-		LabelProjectDir: cfg.ProjectDir,
+		LabelVibepit:     "true",
+		LabelRole:        RoleProxy,
+		LabelProjectDir:  cfg.ProjectDir,
+		LabelControlPort: portStr,
 	}
 	if cfg.SessionID != "" {
 		labels[LabelSessionID] = cfg.SessionID
 	}
 
-	containerPort, _ := nat.NewPort("tcp", "3129")
+	containerPort, _ := nat.NewPort("tcp", portStr)
 
 	resp, err := c.docker.ContainerCreate(ctx,
 		&container.Config{
@@ -428,8 +433,8 @@ type ProxySession struct {
 }
 
 // ListProxySessions returns all running vibepit proxy containers with their
-// session metadata. The control port is read from the container's published
-// port bindings rather than a label.
+// session metadata. The control port is read from the container label, falling
+// back to the first published port binding for older containers.
 func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) {
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
 		Filters: filters.NewArgs(
@@ -443,11 +448,13 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 
 	var sessions []ProxySession
 	for _, ctr := range containers {
-		controlPort := ""
-		for _, p := range ctr.Ports {
-			if p.PrivatePort == 3129 && p.PublicPort != 0 {
-				controlPort = fmt.Sprintf("%d", p.PublicPort)
-				break
+		controlPort := ctr.Labels[LabelControlPort]
+		if controlPort == "" {
+			for _, p := range ctr.Ports {
+				if p.PublicPort != 0 {
+					controlPort = fmt.Sprintf("%d", p.PublicPort)
+					break
+				}
 			}
 		}
 		sessions = append(sessions, ProxySession{
@@ -469,6 +476,7 @@ type DevContainerConfig struct {
 	VolumeName string
 	NetworkID  string
 	ProxyIP    string
+	ProxyPort  int
 	Name       string
 	Term       string
 	ColorTerm  string
@@ -479,15 +487,16 @@ type DevContainerConfig struct {
 // StartDevContainer creates and starts the sandboxed development container
 // with proxy environment variables and a read-only root filesystem.
 func (c *Client) StartDevContainer(ctx context.Context, cfg DevContainerConfig) (string, error) {
+	proxyURL := fmt.Sprintf("http://%s:%d", cfg.ProxyIP, cfg.ProxyPort)
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
 		"LANG=en_US.UTF-8",
 		"LC_ALL=en_US.UTF-8",
 		fmt.Sprintf("VIBEPIT_PROJECT_DIR=%s", cfg.ProjectDir),
-		fmt.Sprintf("HTTP_PROXY=http://%s:%s", cfg.ProxyIP, ProxyPortNum),
-		fmt.Sprintf("HTTPS_PROXY=http://%s:%s", cfg.ProxyIP, ProxyPortNum),
-		fmt.Sprintf("http_proxy=http://%s:%s", cfg.ProxyIP, ProxyPortNum),
-		fmt.Sprintf("https_proxy=http://%s:%s", cfg.ProxyIP, ProxyPortNum),
+		"HTTP_PROXY=" + proxyURL,
+		"HTTPS_PROXY=" + proxyURL,
+		"http_proxy=" + proxyURL,
+		"https_proxy=" + proxyURL,
 		"NO_PROXY=localhost,127.0.0.1",
 		"no_proxy=localhost,127.0.0.1",
 	}

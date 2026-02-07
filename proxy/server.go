@@ -12,9 +12,7 @@ import (
 
 const (
 	DefaultUpstreamDNS = "8.8.8.8:53"
-	ProxyPort          = ":3128"
 	DNSPort            = ":53"
-	ControlAPIPort     = ":3129"
 	LogBufferCapacity  = 10000
 )
 
@@ -28,6 +26,8 @@ type ProxyConfig struct {
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip"`
 	HostGateway    string   `json:"host-gateway"`
+	ProxyPort      int      `json:"proxy-port"`
+	ControlAPIPort int      `json:"control-api-port"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
@@ -71,11 +71,14 @@ func (s *Server) Run(ctx context.Context) error {
 		httpProxy.SetHostVibepit(s.config.HostGateway, s.config.AllowHostPorts)
 	}
 
+	proxyAddr := fmt.Sprintf(":%d", s.config.ProxyPort)
+	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
+
 	errCh := make(chan error, 3)
 
 	go func() {
-		fmt.Printf("proxy: HTTP proxy listening on %s\n", ProxyPort)
-		errCh <- http.ListenAndServe(ProxyPort, httpProxy.Handler())
+		fmt.Printf("proxy: HTTP proxy listening on %s\n", proxyAddr)
+		errCh <- http.ListenAndServe(proxyAddr, httpProxy.Handler())
 	}()
 
 	go func() {
@@ -89,8 +92,8 @@ func (s *Server) Run(ctx context.Context) error {
 			errCh <- fmt.Errorf("control API TLS: %w", err)
 			return
 		}
-		fmt.Printf("proxy: control API listening on %s (mTLS)\n", ControlAPIPort)
-		ln, err := tls.Listen("tcp", ControlAPIPort, tlsCfg)
+		fmt.Printf("proxy: control API listening on %s (mTLS)\n", controlAddr)
+		ln, err := tls.Listen("tcp", controlAddr, tlsCfg)
 		if err != nil {
 			errCh <- err
 			return

@@ -85,9 +85,9 @@ allow-host-ports:
 No boolean flag. If the list is empty or absent, no SSH tunnels are created.
 The SSH server always starts regardless of config.
 
-**Validation:** Ports that conflict with proxy services (53, 3128, 3129, and
-the SSH server port) are rejected at config load time with a clear error
-message.
+**Validation:** Port 53 is reserved for DNS. All other proxy services (HTTP
+proxy, control API, SSH) use random ports from the ephemeral range
+(49152-65535) to avoid conflicts with user-configured host ports.
 
 ### Access Control
 

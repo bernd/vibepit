@@ -94,19 +94,19 @@ allow-host-ports:
 		}
 	})
 
-	t.Run("rejects reserved proxy ports", func(t *testing.T) {
-		reserved := []int{53, 2222, 3128, 3129}
-		for _, port := range reserved {
-			mc := MergedConfig{AllowHostPorts: []int{port}}
-			if err := mc.ValidateHostPorts(); err == nil {
-				t.Errorf("expected error for reserved port %d, got nil", port)
+	t.Run("generates random port in ephemeral range avoiding excluded", func(t *testing.T) {
+		excluded := map[int]bool{55000: true, 55001: true}
+		for i := 0; i < 100; i++ {
+			port, err := RandomProxyPort(excluded)
+			if err != nil {
+				t.Fatalf("RandomProxyPort() error: %v", err)
 			}
-		}
-
-		// Non-reserved port should pass.
-		mc := MergedConfig{AllowHostPorts: []int{8080}}
-		if err := mc.ValidateHostPorts(); err != nil {
-			t.Errorf("unexpected error for port 8080: %v", err)
+			if port < 49152 || port > 65535 {
+				t.Errorf("port %d outside ephemeral range", port)
+			}
+			if excluded[port] {
+				t.Errorf("port %d is in excluded set", port)
+			}
 		}
 	})
 
