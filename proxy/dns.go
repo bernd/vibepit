@@ -17,6 +17,12 @@ type DNSServer struct {
 	cidr      *CIDRBlocker
 	log       *LogBuffer
 	upstream  string
+	proxyIP   net.IP
+}
+
+// SetProxyIP sets the IP address that host.vibepit will resolve to.
+func (s *DNSServer) SetProxyIP(ip net.IP) {
+	s.proxyIP = ip
 }
 
 func NewDNSServer(allowlist, dnsOnly *Allowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *DNSServer {
@@ -37,6 +43,30 @@ func (s *DNSServer) handler() mdns.Handler {
 		}
 
 		domain := strings.TrimSuffix(strings.ToLower(r.Question[0].Name), ".")
+
+		// Synthetic response for host.vibepit — resolves to the proxy IP
+		// without upstream forwarding or CIDR validation.
+		if domain == "host.vibepit" && s.proxyIP != nil && r.Question[0].Qtype == mdns.TypeA {
+			s.log.Add(LogEntry{
+				Time:   time.Now(),
+				Domain: domain,
+				Action: ActionAllow,
+				Source: SourceDNS,
+			})
+			m := new(mdns.Msg)
+			m.SetReply(r)
+			m.Answer = append(m.Answer, &mdns.A{
+				Hdr: mdns.RR_Header{
+					Name:   r.Question[0].Name,
+					Rrtype: mdns.TypeA,
+					Class:  mdns.ClassINET,
+					Ttl:    60,
+				},
+				A: s.proxyIP,
+			})
+			w.WriteMsg(m)
+			return
+		}
 
 		if !s.allowlist.AllowsDNS(domain) && !s.dnsOnly.AllowsDNS(domain) {
 			s.log.Add(LogEntry{
