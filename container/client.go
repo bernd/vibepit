@@ -374,6 +374,7 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 				cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
 				cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
 			},
+			ExtraHosts:    []string{"host-gateway:host-gateway"},
 			RestartPolicy: container.RestartPolicy{Name: "no"},
 			PortBindings: nat.PortMap{
 				containerPort: []nat.PortBinding{

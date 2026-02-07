@@ -157,6 +157,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	merged := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
 
+	if err := merged.ValidateHostPorts(); err != nil {
+		return err
+	}
+
 	uid, _ := strconv.Atoi(u.Uid)
 
 	if cmd.Bool(cleanFlag) {
@@ -166,15 +170,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	if err := client.EnsureVolume(ctx, volumeName, uid, u.Username); err != nil {
 		return fmt.Errorf("volume: %w", err)
 	}
-
-	proxyConfig, _ := json.Marshal(merged)
-	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Write(proxyConfig)
-	tmpFile.Close()
 
 	selfBinary, err := os.Executable()
 	if err != nil {
@@ -199,6 +194,19 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("network: %w", err)
 	}
 	proxyIP := netInfo.ProxyIP
+
+	merged.ProxyIP = proxyIP
+	merged.HostGateway = "host-gateway"
+
+	proxyConfig, _ := json.Marshal(merged)
+	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Write(proxyConfig)
+	tmpFile.Close()
+
 	defer func() {
 		fmt.Printf("+ Removing network: %s\n", networkName)
 		client.RemoveNetwork(ctx, netInfo.ID)

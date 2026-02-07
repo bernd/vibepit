@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 )
@@ -61,6 +62,17 @@ func (s *Server) Run(ctx context.Context) error {
 	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.AllowHTTP)
 	dnsServer := NewDNSServer(allowlist, dnsOnlyList, cidr, log, s.config.Upstream)
 	controlAPI := NewControlAPI(log, s.config, allowlist)
+
+	// Configure host.vibepit support.
+	if s.config.ProxyIP != "" {
+		proxyIP := net.ParseIP(s.config.ProxyIP)
+		if proxyIP != nil {
+			dnsServer.SetProxyIP(proxyIP)
+		}
+	}
+	if s.config.HostGateway != "" {
+		httpProxy.SetHostVibepit(s.config.HostGateway, s.config.AllowHostPorts)
+	}
 
 	errCh := make(chan error, 3)
 
