@@ -448,13 +448,15 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 
 	var sessions []ProxySession
 	for _, ctr := range containers {
-		controlPort := ctr.Labels[LabelControlPort]
-		if controlPort == "" {
-			for _, p := range ctr.Ports {
-				if p.PublicPort != 0 {
-					controlPort = fmt.Sprintf("%d", p.PublicPort)
-					break
-				}
+		// The control port label stores the container-internal port, but we
+		// need the host-published port. Find the published binding that
+		// corresponds to the labelled container port.
+		var controlPort string
+		labelPort := ctr.Labels[LabelControlPort]
+		for _, p := range ctr.Ports {
+			if p.PublicPort != 0 && (labelPort == "" || fmt.Sprintf("%d", p.PrivatePort) == labelPort) {
+				controlPort = fmt.Sprintf("%d", p.PublicPort)
+				break
 			}
 		}
 		sessions = append(sessions, ProxySession{
