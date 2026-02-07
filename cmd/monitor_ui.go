@@ -165,16 +165,16 @@ func (s *monitorScreen) View(w *tui.Window) string {
 	return strings.Join(logLines, "\n")
 }
 
-var trigrams = []string{"☱", "☲", "☴"}
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func (s *monitorScreen) FooterStatus(w *tui.Window) string {
 	isTailing := len(s.items) == 0 || s.cursor.AtEnd()
 	var indicator string
 	if isTailing {
-		glyph := trigrams[w.TickFrame()%len(trigrams)]
+		glyph := spinnerFrames[w.TickFrame()%len(spinnerFrames)]
 		indicator = lipgloss.NewStyle().Foreground(tui.ColorCyan).Render(glyph)
 	} else {
-		indicator = lipgloss.NewStyle().Foreground(tui.ColorField).Render("☐")
+		indicator = lipgloss.NewStyle().Foreground(tui.ColorField).Render("⠿")
 	}
 
 	if s.newCount > 0 {

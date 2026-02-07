@@ -168,5 +168,6 @@ func (w *Window) renderFooter() string {
 	rightWidth := ansi.StringWidth(right)
 	gap := max(w.width-leftWidth-rightWidth, 2)
 
-	return left + strings.Repeat(" ", gap) + right
+	line := left + strings.Repeat(" ", gap) + right
+	return ansi.Truncate(line, w.width, "")
 }
