@@ -27,7 +27,6 @@ TODO
   there's a non-shared volume for the project dir and use that.
 - Allow searching for domains in the network setup UI to let users check
   if something is included or in which preset something can be found.
-- Add a nicely-colored PS1 prompt to the sandbox shell. (use theme colors)
 - Account the traffic bytes for each contacted hostname in memory. Allows
   showing traffic information and accounting of LLM inference payload size.
 - How to access host services? Via proxy and custom DNS entries
@@ -40,5 +39,4 @@ TODO
 - Let the proxy return a better message that describes why the connect attempt
   was denied. Maybe that helps agents to tell users what to do.
   ("connection denied to to firewall policy - use vibepit add or monitor to allow...")
-- Use xdg library to work on macOS
 - Create end-to-end tests with testcontainers
