@@ -49,22 +49,14 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 	if filter != "" {
 		for _, s := range sessions {
 			if s.SessionID == filter || s.ProjectDir == filter {
-				return &SessionInfo{
-					ControlPort: s.ControlPort,
-					SessionID:   s.SessionID,
-					ProjectDir:  s.ProjectDir,
-				}, nil
+				return sessionInfoFromProxy(s), nil
 			}
 		}
 		return nil, fmt.Errorf("no session matching %q found", filter)
 	}
 
 	if len(sessions) == 1 {
-		return &SessionInfo{
-			ControlPort: sessions[0].ControlPort,
-			SessionID:   sessions[0].SessionID,
-			ProjectDir:  sessions[0].ProjectDir,
-		}, nil
+		return sessionInfoFromProxy(sessions[0]), nil
 	}
 
 	// Multiple sessions — interactive selection.
@@ -91,25 +83,26 @@ func discoverSessionOrAll(ctx context.Context, filter string) (*SessionInfo, []c
 	if filter != "" {
 		for _, s := range sessions {
 			if s.SessionID == filter || s.ProjectDir == filter {
-				return &SessionInfo{
-					ControlPort: s.ControlPort,
-					SessionID:   s.SessionID,
-					ProjectDir:  s.ProjectDir,
-				}, nil, nil
+				return sessionInfoFromProxy(s), nil, nil
 			}
 		}
 		return nil, nil, fmt.Errorf("no session matching %q found", filter)
 	}
 
 	if len(sessions) == 1 {
-		return &SessionInfo{
-			ControlPort: sessions[0].ControlPort,
-			SessionID:   sessions[0].SessionID,
-			ProjectDir:  sessions[0].ProjectDir,
-		}, nil, nil
+		return sessionInfoFromProxy(sessions[0]), nil, nil
 	}
 
 	return nil, sessions, nil
+}
+
+// sessionInfoFromProxy converts a container.ProxySession to a SessionInfo.
+func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
+	return &SessionInfo{
+		ControlPort: ps.ControlPort,
+		SessionID:   ps.SessionID,
+		ProjectDir:  ps.ProjectDir,
+	}
 }
 
 // WriteSessionCredentials persists the client TLS material for a session

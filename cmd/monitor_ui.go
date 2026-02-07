@@ -209,14 +209,7 @@ func (s *monitorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
 
 func renderLogLine(item logItem, highlighted bool) string {
 	e := item.entry
-
-	// Base style carries the background for highlighted lines.
-	base := lipgloss.NewStyle()
-	marker := "  "
-	if highlighted {
-		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
-	}
+	base, marker := tui.LineStyle(highlighted)
 
 	var symbol string
 	var sourceColor lipgloss.Color

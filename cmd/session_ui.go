@@ -57,12 +57,7 @@ func (s *sessionScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		switch msg.String() {
 		case "enter":
 			if s.Pos >= 0 && s.Pos < len(s.sessions) {
-				ps := s.sessions[s.Pos]
-				s.selected = &SessionInfo{
-					ControlPort: ps.ControlPort,
-					SessionID:   ps.SessionID,
-					ProjectDir:  ps.ProjectDir,
-				}
+				s.selected = sessionInfoFromProxy(s.sessions[s.Pos])
 				if s.onSelect != nil {
 					screen, cmd := s.onSelect(s.selected)
 					if screen != nil {
@@ -112,12 +107,7 @@ func (s *sessionScreen) View(w *tui.Window) string {
 }
 
 func renderSessionLine(ps ctr.ProxySession, highlighted bool, now time.Time) string {
-	base := lipgloss.NewStyle()
-	marker := "  "
-	if highlighted {
-		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
-	}
+	base, marker := tui.LineStyle(highlighted)
 
 	id := base.Foreground(tui.ColorField).Render(fmt.Sprintf("%-16s", ps.SessionID))
 	uptime := base.Foreground(tui.ColorOrange).Render(fmt.Sprintf("%-8s", formatUptime(ps.StartedAt, now)))

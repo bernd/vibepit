@@ -347,12 +347,7 @@ func (s *presetScreen) renderSectionLine(l visibleLine, highlighted bool) string
 		arrow = "▸"
 	}
 
-	base := lipgloss.NewStyle()
-	marker := "  "
-	if highlighted {
-		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
-	}
+	base, marker := tui.LineStyle(highlighted)
 
 	header := base.Foreground(tui.ColorField).Render(fmt.Sprintf("%s ── %s ──", arrow, item.section))
 	return marker + header
@@ -368,12 +363,7 @@ func (s *presetScreen) renderPresetLine(l visibleLine, highlighted bool) string 
 		arrow = "▾"
 	}
 
-	base := lipgloss.NewStyle()
-	marker := "  "
-	if highlighted {
-		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
-	}
+	base, marker := tui.LineStyle(highlighted)
 
 	arrowStyle := base.Foreground(tui.ColorField)
 	sp := base.Render(" ")
@@ -397,12 +387,7 @@ func (s *presetScreen) renderPresetLine(l visibleLine, highlighted bool) string 
 }
 
 func (s *presetScreen) renderSubGroupLine(l visibleLine, highlighted bool) string {
-	base := lipgloss.NewStyle()
-	marker := "  "
-	if highlighted {
-		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
-	}
+	base, marker := tui.LineStyle(highlighted)
 
 	indent := base.Render("        ")
 	text := base.Foreground(tui.ColorField).Render(l.text + ":")
@@ -410,12 +395,7 @@ func (s *presetScreen) renderSubGroupLine(l visibleLine, highlighted bool) strin
 }
 
 func (s *presetScreen) renderDomainLine(l visibleLine, highlighted bool) string {
-	base := lipgloss.NewStyle()
-	marker := "  "
-	if highlighted {
-		base = base.Background(tui.ColorHighlight)
-		marker = lipgloss.NewStyle().Foreground(tui.ColorCyan).Background(tui.ColorHighlight).Render("➔") + base.Render(" ")
-	}
+	base, marker := tui.LineStyle(highlighted)
 
 	indent := base.Render("          ")
 	text := base.Faint(true).Render(l.text)

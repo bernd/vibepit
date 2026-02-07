@@ -10,9 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-const (
-	tickInterval = 250 * time.Millisecond
-)
+const tickInterval = 250 * time.Millisecond
 
 // TickMsg is sent on every tick interval. Screens receive it after Window
 // increments the frame counter and expires flash messages.

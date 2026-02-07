@@ -68,44 +68,14 @@ func loadFile(path string, target any) error {
 // Merge combines global config, project config, CLI flags, and expanded presets
 // into a single flat config. Duplicates are removed while preserving order.
 func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
-	seen := make(map[string]bool)
-	var allow []string
-
-	addUnique := func(entries []string) {
-		for _, e := range entries {
-			if !seen[e] {
-				seen[e] = true
-				allow = append(allow, e)
-			}
-		}
-	}
-
-	addUnique(c.Global.Allow)
-	addUnique(c.Project.Allow)
-	addUnique(cliAllow)
+	allow := dedup(c.Global.Allow, c.Project.Allow, cliAllow)
 
 	// Expand presets from both project config and CLI flags.
-	allPresets := make([]string, 0, len(c.Project.Presets)+len(cliPresets))
-	allPresets = append(allPresets, c.Project.Presets...)
-	allPresets = append(allPresets, cliPresets...)
-
+	allPresets := append(c.Project.Presets, cliPresets...)
 	reg := proxy.NewPresetRegistry()
-	addUnique(reg.Expand(allPresets))
+	allow = dedup(allow, reg.Expand(allPresets))
 
-	var dnsOnly []string
-	dnsSeen := make(map[string]bool)
-	for _, e := range c.Global.DNSOnly {
-		if !dnsSeen[e] {
-			dnsSeen[e] = true
-			dnsOnly = append(dnsOnly, e)
-		}
-	}
-	for _, e := range c.Project.DNSOnly {
-		if !dnsSeen[e] {
-			dnsSeen[e] = true
-			dnsOnly = append(dnsOnly, e)
-		}
-	}
+	dnsOnly := dedup(c.Global.DNSOnly, c.Project.DNSOnly)
 
 	return MergedConfig{
 		Allow:     allow,
@@ -113,6 +83,21 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
 		BlockCIDR: c.Global.BlockCIDR,
 		AllowHTTP: c.Global.AllowHTTP || c.Project.AllowHTTP,
 	}
+}
+
+// dedup merges multiple string slices, removing duplicates while preserving order.
+func dedup(slices ...[]string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, s := range slices {
+		for _, e := range s {
+			if !seen[e] {
+				seen[e] = true
+				result = append(result, e)
+			}
+		}
+	}
+	return result
 }
 
 // FindProjectRoot returns the Git repository root for the given path, or the

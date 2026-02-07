@@ -110,8 +110,8 @@ func (al *Allowlist) Allows(host, port string) bool {
 	// to less specific tiers.
 
 	type candidate struct {
-		domainLen int
-		portOK    bool
+		specificity int
+		portOK      bool
 	}
 	var best *candidate
 
@@ -162,8 +162,8 @@ func (al *Allowlist) Allows(host, port string) bool {
 		// longer domain = more specific.
 		specificity := (5-tier)*10000 + len(r.Domain)
 
-		if best == nil || specificity > best.domainLen {
-			best = &candidate{domainLen: specificity, portOK: portOK}
+		if best == nil || specificity > best.specificity {
+			best = &candidate{specificity: specificity, portOK: portOK}
 		}
 	}
 

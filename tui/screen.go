@@ -1,6 +1,9 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
 
 // FooterKey describes a single keybinding hint shown in the footer.
 type FooterKey struct {
@@ -25,4 +28,17 @@ type Screen interface {
 	// FooterStatus returns an optional left-side indicator for the footer
 	// (e.g. tailing animation, progress). Return "" for no indicator.
 	FooterStatus(w *Window) string
+}
+
+// LineStyle returns a base lipgloss style and cursor marker for a list row.
+// When highlighted is true, the base style includes a highlight background
+// and the marker is a colored arrow; otherwise the marker is two spaces.
+func LineStyle(highlighted bool) (lipgloss.Style, string) {
+	base := lipgloss.NewStyle()
+	if !highlighted {
+		return base, "  "
+	}
+	base = base.Background(ColorHighlight)
+	marker := lipgloss.NewStyle().Foreground(ColorCyan).Background(ColorHighlight).Render("➔") + base.Render(" ")
+	return base, marker
 }

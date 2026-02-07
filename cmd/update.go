@@ -14,7 +14,6 @@ func UpdateCommand() *cli.Command {
 		Name:     "update",
 		Usage:    "Update binary and pull latest container image",
 		Category: "Utilities",
-		Flags:    []cli.Flag{},
 		Action: func(ctx context.Context, command *cli.Command) error {
 			u, err := user.Current()
 			if err != nil {
@@ -25,6 +24,7 @@ func UpdateCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
+			defer client.Close()
 
 			if err := client.PullImage(ctx, imageName(u), false); err != nil {
 				return fmt.Errorf("pull image: %w", err)

@@ -102,14 +102,12 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	if quiet {
 		// Drain the pull output to complete the operation.
 		_, err = io.Copy(io.Discard, reader)
-		if err != nil {
-			return fmt.Errorf("pull image %s: %w", ref, err)
-		}
 	} else {
 		isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
-		if err := jsonmessage.DisplayJSONMessagesStream(reader, os.Stdout, os.Stdout.Fd(), isTerminal, nil); err != nil {
-			return fmt.Errorf("pull image %s: %w", ref, err)
-		}
+		err = jsonmessage.DisplayJSONMessagesStream(reader, os.Stdout, os.Stdout.Fd(), isTerminal, nil)
+	}
+	if err != nil {
+		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	return nil
 }

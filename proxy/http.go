@@ -33,36 +33,16 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 			hostname, port := splitHostPort(host, "443")
 
 			if !p.allowlist.Allows(hostname, port) {
-				p.log.Add(LogEntry{
-					Time:   time.Now(),
-					Domain: hostname,
-					Port:   port,
-					Action: ActionBlock,
-					Source: SourceProxy,
-					Reason: "domain not in allowlist",
-				})
+				p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
 				return goproxy.RejectConnect, host
 			}
 
 			if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
-				p.log.Add(LogEntry{
-					Time:   time.Now(),
-					Domain: hostname,
-					Port:   port,
-					Action: ActionBlock,
-					Source: SourceProxy,
-					Reason: fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip),
-				})
+				p.logEntry(hostname, port, ActionBlock, fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip))
 				return goproxy.RejectConnect, host
 			}
 
-			p.log.Add(LogEntry{
-				Time:   time.Now(),
-				Domain: hostname,
-				Port:   port,
-				Action: ActionAllow,
-				Source: SourceProxy,
-			})
+			p.logEntry(hostname, port, ActionAllow, "")
 			return goproxy.OkConnect, host
 		}))
 
@@ -72,14 +52,7 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 			hostname, port := splitHostPort(req.Host, "80")
 
 			if !allowHTTP {
-				p.log.Add(LogEntry{
-					Time:   time.Now(),
-					Domain: hostname,
-					Port:   port,
-					Action: ActionBlock,
-					Source: SourceProxy,
-					Reason: "plain HTTP blocked, use HTTPS",
-				})
+				p.logEntry(hostname, port, ActionBlock, "plain HTTP blocked, use HTTPS")
 				return req, goproxy.NewResponse(req,
 					goproxy.ContentTypeText,
 					http.StatusForbidden,
@@ -88,14 +61,7 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 			}
 
 			if !p.allowlist.Allows(hostname, port) {
-				p.log.Add(LogEntry{
-					Time:   time.Now(),
-					Domain: hostname,
-					Port:   port,
-					Action: ActionBlock,
-					Source: SourceProxy,
-					Reason: "domain not in allowlist",
-				})
+				p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
 				return req, goproxy.NewResponse(req,
 					goproxy.ContentTypeText,
 					http.StatusForbidden,
@@ -104,14 +70,7 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 			}
 
 			if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
-				p.log.Add(LogEntry{
-					Time:   time.Now(),
-					Domain: hostname,
-					Port:   port,
-					Action: ActionBlock,
-					Source: SourceProxy,
-					Reason: fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip),
-				})
+				p.logEntry(hostname, port, ActionBlock, fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip))
 				return req, goproxy.NewResponse(req,
 					goproxy.ContentTypeText,
 					http.StatusForbidden,
@@ -119,13 +78,7 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 				)
 			}
 
-			p.log.Add(LogEntry{
-				Time:   time.Now(),
-				Domain: hostname,
-				Port:   port,
-				Action: ActionAllow,
-				Source: SourceProxy,
-			})
+			p.logEntry(hostname, port, ActionAllow, "")
 			return req, nil
 		})
 
@@ -134,6 +87,17 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 
 func (p *HTTPProxy) Handler() http.Handler {
 	return p.proxy
+}
+
+func (p *HTTPProxy) logEntry(hostname, port string, action Action, reason string) {
+	p.log.Add(LogEntry{
+		Time:   time.Now(),
+		Domain: hostname,
+		Port:   port,
+		Action: action,
+		Source: SourceProxy,
+		Reason: reason,
+	})
 }
 
 // resolveAndCheckCIDR resolves the hostname to IPs and checks whether any

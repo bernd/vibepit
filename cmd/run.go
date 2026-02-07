@@ -157,7 +157,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	merged := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
 
-	volumeName := volumeName
 	uid, _ := strconv.Atoi(u.Uid)
 
 	if cmd.Bool(cleanFlag) {
@@ -191,7 +190,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("proxy image: %w", err)
 	}
 
-	containerID := randomHex()
+	containerID := containerIDSuffix()
 	networkName := networkNamePrefix + containerID
 
 	fmt.Printf("+ Creating network: %s\n", networkName)
@@ -246,10 +245,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}()
 
 	term := os.Getenv("TERM")
-	if term == "" {
+	switch term {
+	case "":
 		term = "linux"
-	}
-	if term == "xterm-ghostty" {
+	case "xterm-ghostty": // Ghostty terminfo is not available in the container
 		term = "xterm-256color"
 	}
 
@@ -278,7 +277,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	return client.AttachSession(ctx, devContainerID)
 }
 
-func randomHex() string {
+// containerIDSuffix returns a hex string derived from the current process
+// identifiers, used to create unique container and network names.
+func containerIDSuffix() string {
 	return fmt.Sprintf("%x%x%x", os.Getpid(), os.Getuid(), os.Getppid())
 }
 

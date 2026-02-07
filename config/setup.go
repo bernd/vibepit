@@ -18,7 +18,7 @@ func RunFirstTimeSetup(projectDir, projectConfigPath string) ([]string, error) {
 		preChecked[d] = true
 	}
 
-	selected, err := runPresetSelector(preChecked, detected)
+	selected, err := runPresetSelectorTUI(preChecked, detected)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 		preChecked[p] = true
 	}
 
-	selected, err := runPresetSelector(preChecked, detected)
+	selected, err := runPresetSelectorTUI(preChecked, detected)
 	if err != nil {
 		return nil, err
 	}
@@ -49,67 +49,44 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 	return selected, writeReconfiguredProjectConfig(projectConfigPath, selected, cfg.Allow, cfg.DNSOnly)
 }
 
-// runPresetSelector builds and runs the TUI preset selector. preChecked
-// controls which options are initially selected; detected lists preset names
-// that were auto-detected from the project directory.
-func runPresetSelector(preChecked map[string]bool, detected []string) ([]string, error) {
-	return runPresetSelectorTUI(preChecked, detected)
-}
-
 func writeProjectConfig(path string, presets []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	var sb strings.Builder
-	sb.WriteString("# Vibepit network config for this project.\n")
-	sb.WriteString("# All internet access from the dev container is filtered through\n")
-	sb.WriteString("# a proxy that only allows domains listed here.\n")
-	sb.WriteString("#\n")
-	sb.WriteString("# Docs: https://github.com/bernd/vibepit\n\n")
-
-	sb.WriteString("# Presets bundle common domains for a language ecosystem.\n")
-	sb.WriteString("# Use 'vibepit --reconfigure' to change presets interactively.\n")
-	sb.WriteString("# Available: default, anthropic, vcs-github, vcs-other, containers,\n")
-	sb.WriteString("# cloud, pkg-node, pkg-python, pkg-ruby, pkg-rust, pkg-go, pkg-jvm,\n")
-	sb.WriteString("# pkg-others, linux-distros, devtools, monitoring, cdn, schema, mcp\n")
-	if len(presets) > 0 {
-		sb.WriteString("presets:\n")
-		for _, p := range presets {
-			fmt.Fprintf(&sb, "  - %s\n", p)
-		}
-	} else {
-		sb.WriteString("# presets:\n")
-		sb.WriteString("#   - default\n")
-		sb.WriteString("#   - pkg-go\n")
-	}
-
-	sb.WriteString("\n# Additional domains to allow for this project.\n")
-	sb.WriteString("# allow:\n")
-	sb.WriteString("#   - api.openai.com\n")
-	sb.WriteString("#   - api.anthropic.com\n")
-
-	sb.WriteString("\n# Domains that only need DNS resolution (no HTTP proxy).\n")
-	sb.WriteString("# dns-only:\n")
-	sb.WriteString("#   - internal.corp.example.com\n")
-
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return writeReconfiguredProjectConfig(path, presets, nil, nil)
 }
 
 // writeReconfiguredProjectConfig writes the config file with new presets while
-// preserving existing allow and dns-only entries.
+// preserving existing allow and dns-only entries. When allow and dnsOnly are
+// nil, commented-out placeholder sections are written instead.
 func writeReconfiguredProjectConfig(path string, presets []string, allow []string, dnsOnly []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 
 	var sb strings.Builder
+	writeConfigHeader(&sb)
+	writePresetsSection(&sb, presets)
+	writeYAMLListSection(&sb,
+		"# Additional domains to allow for this project.",
+		"allow", allow,
+		[]string{"api.openai.com", "api.anthropic.com"})
+	writeYAMLListSection(&sb,
+		"# Domains that only need DNS resolution (no HTTP proxy).",
+		"dns-only", dnsOnly,
+		[]string{"internal.corp.example.com"})
+
+	return os.WriteFile(path, []byte(sb.String()), 0o644)
+}
+
+// writeConfigHeader writes the shared file header comment block.
+func writeConfigHeader(sb *strings.Builder) {
 	sb.WriteString("# Vibepit network config for this project.\n")
 	sb.WriteString("# All internet access from the dev container is filtered through\n")
 	sb.WriteString("# a proxy that only allows domains listed here.\n")
 	sb.WriteString("#\n")
 	sb.WriteString("# Docs: https://github.com/bernd/vibepit\n\n")
+}
 
+// writePresetsSection writes the presets block with its help comments.
+func writePresetsSection(sb *strings.Builder, presets []string) {
 	sb.WriteString("# Presets bundle common domains for a language ecosystem.\n")
 	sb.WriteString("# Use 'vibepit --reconfigure' to change presets interactively.\n")
 	sb.WriteString("# Available: default, anthropic, vcs-github, vcs-other, containers,\n")
@@ -118,40 +95,31 @@ func writeReconfiguredProjectConfig(path string, presets []string, allow []strin
 	if len(presets) > 0 {
 		sb.WriteString("presets:\n")
 		for _, p := range presets {
-			fmt.Fprintf(&sb, "  - %s\n", p)
+			fmt.Fprintf(sb, "  - %s\n", p)
 		}
 	} else {
 		sb.WriteString("# presets:\n")
 		sb.WriteString("#   - default\n")
 		sb.WriteString("#   - pkg-go\n")
 	}
+}
 
-	if len(allow) > 0 {
-		sb.WriteString("\n# Additional domains to allow for this project.\n")
-		sb.WriteString("allow:\n")
-		for _, d := range allow {
-			fmt.Fprintf(&sb, "  - %s\n", d)
+// writeYAMLListSection writes a named YAML list section. If entries is non-empty,
+// it writes the active section; otherwise it writes a commented-out placeholder
+// using the example values.
+func writeYAMLListSection(sb *strings.Builder, comment, key string, entries []string, examples []string) {
+	fmt.Fprintf(sb, "\n%s\n", comment)
+	if len(entries) > 0 {
+		fmt.Fprintf(sb, "%s:\n", key)
+		for _, d := range entries {
+			fmt.Fprintf(sb, "  - %s\n", d)
 		}
 	} else {
-		sb.WriteString("\n# Additional domains to allow for this project.\n")
-		sb.WriteString("# allow:\n")
-		sb.WriteString("#   - api.openai.com\n")
-		sb.WriteString("#   - api.anthropic.com\n")
-	}
-
-	if len(dnsOnly) > 0 {
-		sb.WriteString("\n# Domains that only need DNS resolution (no HTTP proxy).\n")
-		sb.WriteString("dns-only:\n")
-		for _, d := range dnsOnly {
-			fmt.Fprintf(&sb, "  - %s\n", d)
+		fmt.Fprintf(sb, "# %s:\n", key)
+		for _, d := range examples {
+			fmt.Fprintf(sb, "#   - %s\n", d)
 		}
-	} else {
-		sb.WriteString("\n# Domains that only need DNS resolution (no HTTP proxy).\n")
-		sb.WriteString("# dns-only:\n")
-		sb.WriteString("#   - internal.corp.example.com\n")
 	}
-
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
 // containsLine checks if a string contains a line starting with the given prefix.
