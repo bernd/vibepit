@@ -35,23 +35,21 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 		func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 			hostname, port := splitHostPort(host, "443")
 
-			// Auto-allow host.vibepit for configured ports.
-			if hostname == "host.vibepit" && p.hostGateway != "" && p.isHostPortAllowed(port) {
+			// Rewrite host.vibepit to the host gateway address, auto-allowing
+			// configured ports and requiring an allowlist entry for others.
+			if hostname == "host.vibepit" && p.hostGateway != "" {
+				if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {
+					p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
+					return goproxy.RejectConnect, host
+				}
 				rewritten := net.JoinHostPort(p.hostGateway, port)
-				p.logEntry(hostname, port, ActionAllow, "host.vibepit auto-allowed")
+				p.logEntry(hostname, port, ActionAllow, "host.vibepit")
 				return goproxy.OkConnect, rewritten
 			}
 
 			if !p.allowlist.Allows(hostname, port) {
 				p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
 				return goproxy.RejectConnect, host
-			}
-
-			// Rewrite host.vibepit to the host gateway address.
-			if hostname == "host.vibepit" && p.hostGateway != "" {
-				rewritten := net.JoinHostPort(p.hostGateway, port)
-				p.logEntry(hostname, port, ActionAllow, "host.vibepit via allowlist")
-				return goproxy.OkConnect, rewritten
 			}
 
 			if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
@@ -68,11 +66,20 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			hostname, port := splitHostPort(req.Host, "80")
 
-			// Auto-allow host.vibepit for configured ports.
-			if hostname == "host.vibepit" && p.hostGateway != "" && p.isHostPortAllowed(port) {
+			// Rewrite host.vibepit to the host gateway address, auto-allowing
+			// configured ports and requiring an allowlist entry for others.
+			if hostname == "host.vibepit" && p.hostGateway != "" {
+				if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {
+					p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
+					return req, goproxy.NewResponse(req,
+						goproxy.ContentTypeText,
+						http.StatusForbidden,
+						fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname),
+					)
+				}
 				req.URL.Host = net.JoinHostPort(p.hostGateway, port)
 				req.Host = req.URL.Host
-				p.logEntry(hostname, port, ActionAllow, "host.vibepit auto-allowed")
+				p.logEntry(hostname, port, ActionAllow, "host.vibepit")
 				return req, nil
 			}
 
@@ -92,14 +99,6 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 					http.StatusForbidden,
 					fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname),
 				)
-			}
-
-			// Rewrite host.vibepit to the host gateway address.
-			if hostname == "host.vibepit" && p.hostGateway != "" {
-				req.URL.Host = net.JoinHostPort(p.hostGateway, port)
-				req.Host = req.URL.Host
-				p.logEntry(hostname, port, ActionAllow, "host.vibepit via allowlist")
-				return req, nil
 			}
 
 			if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {

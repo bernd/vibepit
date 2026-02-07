@@ -64,11 +64,8 @@ func (s *Server) Run(ctx context.Context) error {
 	controlAPI := NewControlAPI(log, s.config, allowlist)
 
 	// Configure host.vibepit support.
-	if s.config.ProxyIP != "" {
-		proxyIP := net.ParseIP(s.config.ProxyIP)
-		if proxyIP != nil {
-			dnsServer.SetProxyIP(proxyIP)
-		}
+	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {
+		dnsServer.SetProxyIP(proxyIP)
 	}
 	if s.config.HostGateway != "" {
 		httpProxy.SetHostVibepit(s.config.HostGateway, s.config.AllowHostPorts)
