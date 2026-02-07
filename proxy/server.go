@@ -19,11 +19,14 @@ const (
 
 // ProxyConfig is the JSON config file passed to the proxy container.
 type ProxyConfig struct {
-	Allow     []string `json:"allow"`
-	DNSOnly   []string `json:"dns-only"`
-	BlockCIDR []string `json:"block-cidr"`
-	Upstream  string   `json:"upstream"`
-	AllowHTTP bool     `json:"allow-http"`
+	Allow          []string `json:"allow"`
+	DNSOnly        []string `json:"dns-only"`
+	BlockCIDR      []string `json:"block-cidr"`
+	Upstream       string   `json:"upstream"`
+	AllowHTTP      bool     `json:"allow-http"`
+	AllowHostPorts []int    `json:"allow-host-ports"`
+	ProxyIP        string   `json:"proxy-ip"`
+	HostGateway    string   `json:"host-gateway"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
