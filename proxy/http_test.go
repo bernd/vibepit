@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,5 +121,86 @@ func TestHTTPProxy(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "blocked request not found in log")
+	})
+}
+
+func TestHTTPProxyHostVibepit(t *testing.T) {
+	// Backend server that returns "host-service".
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("host-service"))
+	}))
+	defer backend.Close()
+
+	backendURL, err := url.Parse(backend.URL)
+	require.NoError(t, err)
+
+	_, backendPortStr, err := net.SplitHostPort(backendURL.Host)
+	require.NoError(t, err)
+	backendPortInt, err := strconv.Atoi(backendPortStr)
+	require.NoError(t, err)
+
+	t.Run("auto-allows host.vibepit for configured port", func(t *testing.T) {
+		al := NewAllowlist(nil)
+		blocker := NewCIDRBlocker(nil)
+		log := NewLogBuffer(100)
+		p := NewHTTPProxy(al, blocker, log, true)
+		p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
+
+		srv := httptest.NewServer(p.Handler())
+		defer srv.Close()
+
+		proxyURL, _ := url.Parse(srv.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+		resp, err := client.Get("http://host.vibepit:" + backendPortStr + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, "host-service", string(body))
+	})
+
+	t.Run("blocks host.vibepit for unconfigured port", func(t *testing.T) {
+		al := NewAllowlist(nil)
+		blocker := NewCIDRBlocker(nil)
+		log := NewLogBuffer(100)
+		p := NewHTTPProxy(al, blocker, log, true)
+		p.SetHostVibepit(backendURL.Host, []int{9999})
+
+		srv := httptest.NewServer(p.Handler())
+		defer srv.Close()
+
+		proxyURL, _ := url.Parse(srv.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+		resp, err := client.Get("http://host.vibepit:" + backendPortStr + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	})
+
+	t.Run("host.vibepit allowed via allowlist bypasses CIDR", func(t *testing.T) {
+		al := NewAllowlist([]string{"host.vibepit:" + backendPortStr})
+		blocker := NewCIDRBlocker(nil)
+		log := NewLogBuffer(100)
+		p := NewHTTPProxy(al, blocker, log, true)
+		p.SetHostVibepit(backendURL.Host, nil)
+
+		srv := httptest.NewServer(p.Handler())
+		defer srv.Close()
+
+		proxyURL, _ := url.Parse(srv.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+		resp, err := client.Get("http://host.vibepit:" + backendPortStr + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		assert.Equal(t, "host-service", string(body))
 	})
 }
