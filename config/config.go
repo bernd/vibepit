@@ -12,6 +12,8 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
+const RuntimeDirName = "vibepit"
+
 type GlobalConfig struct {
 	Allow     []string `koanf:"allow"`
 	DNSOnly   []string `koanf:"dns-only"`

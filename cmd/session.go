@@ -8,16 +8,14 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/adrg/xdg"
+	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/proxy"
 )
 
 func sessionBaseDir() (string, error) {
-	runtime := os.Getenv("XDG_RUNTIME_DIR")
-	if runtime == "" {
-		return "", fmt.Errorf("XDG_RUNTIME_DIR is not set")
-	}
-	return filepath.Join(runtime, "vibepit"), nil
+	return filepath.Join(xdg.RuntimeDir, config.RuntimeDirName), nil
 }
 
 func sessionDir(sessionID string) (string, error) {
