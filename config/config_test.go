@@ -67,6 +67,49 @@ allow:
 		}
 	})
 
+	t.Run("merges allow-host-ports from project config", func(t *testing.T) {
+		dir := t.TempDir()
+		projectDir := filepath.Join(dir, "project", ".vibepit")
+		os.MkdirAll(projectDir, 0o755)
+
+		projectFile := filepath.Join(projectDir, "network.yaml")
+		os.WriteFile(projectFile, []byte(`
+allow-host-ports:
+  - 9200
+  - 5432
+`), 0o644)
+
+		cfg, err := Load("/nonexistent/global.yaml", projectFile)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+
+		merged := cfg.Merge(nil, nil)
+
+		if len(merged.AllowHostPorts) != 2 {
+			t.Fatalf("expected 2 host ports, got %d: %v", len(merged.AllowHostPorts), merged.AllowHostPorts)
+		}
+		if merged.AllowHostPorts[0] != 9200 || merged.AllowHostPorts[1] != 5432 {
+			t.Errorf("expected [9200, 5432], got %v", merged.AllowHostPorts)
+		}
+	})
+
+	t.Run("rejects reserved proxy ports", func(t *testing.T) {
+		reserved := []int{53, 2222, 3128, 3129}
+		for _, port := range reserved {
+			mc := MergedConfig{AllowHostPorts: []int{port}}
+			if err := mc.ValidateHostPorts(); err == nil {
+				t.Errorf("expected error for reserved port %d, got nil", port)
+			}
+		}
+
+		// Non-reserved port should pass.
+		mc := MergedConfig{AllowHostPorts: []int{8080}}
+		if err := mc.ValidateHostPorts(); err != nil {
+			t.Errorf("unexpected error for port 8080: %v", err)
+		}
+	})
+
 	t.Run("missing files are not errors", func(t *testing.T) {
 		cfg, err := Load("/nonexistent/global.yaml", "/nonexistent/project.yaml")
 		if err != nil {

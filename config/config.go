@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,10 +23,11 @@ type GlobalConfig struct {
 }
 
 type ProjectConfig struct {
-	Presets   []string `koanf:"presets"`
-	Allow     []string `koanf:"allow"`
-	DNSOnly   []string `koanf:"dns-only"`
-	AllowHTTP bool     `koanf:"allow-http"`
+	Presets        []string `koanf:"presets"`
+	Allow          []string `koanf:"allow"`
+	DNSOnly        []string `koanf:"dns-only"`
+	AllowHTTP      bool     `koanf:"allow-http"`
+	AllowHostPorts []int    `koanf:"allow-host-ports"`
 }
 
 type Config struct {
@@ -34,10 +36,33 @@ type Config struct {
 }
 
 type MergedConfig struct {
-	Allow     []string `json:"allow"`
-	DNSOnly   []string `json:"dns-only"`
-	BlockCIDR []string `json:"block-cidr"`
-	AllowHTTP bool     `json:"allow-http"`
+	Allow          []string `json:"allow"`
+	DNSOnly        []string `json:"dns-only"`
+	BlockCIDR      []string `json:"block-cidr"`
+	AllowHTTP      bool     `json:"allow-http"`
+	AllowHostPorts []int    `json:"allow-host-ports"`
+	ProxyIP        string   `json:"proxy-ip,omitempty"`
+	HostGateway    string   `json:"host-gateway,omitempty"`
+}
+
+// reservedProxyPorts are ports used internally by the proxy and cannot be
+// forwarded to the host.
+var reservedProxyPorts = map[int]bool{
+	53:   true, // DNS
+	2222: true, // SSH
+	3128: true, // HTTP proxy
+	3129: true, // HTTPS proxy
+}
+
+// ValidateHostPorts checks that none of the configured host ports conflict
+// with ports reserved by the proxy.
+func (m *MergedConfig) ValidateHostPorts() error {
+	for _, port := range m.AllowHostPorts {
+		if reservedProxyPorts[port] {
+			return fmt.Errorf("port %d is reserved by the proxy and cannot be used as a host port", port)
+		}
+	}
+	return nil
 }
 
 func Load(globalPath, projectPath string) (*Config, error) {
@@ -80,10 +105,11 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
 	dnsOnly := dedup(c.Global.DNSOnly, c.Project.DNSOnly)
 
 	return MergedConfig{
-		Allow:     allow,
-		DNSOnly:   dnsOnly,
-		BlockCIDR: c.Global.BlockCIDR,
-		AllowHTTP: c.Global.AllowHTTP || c.Project.AllowHTTP,
+		Allow:          allow,
+		DNSOnly:        dnsOnly,
+		BlockCIDR:      c.Global.BlockCIDR,
+		AllowHTTP:      c.Global.AllowHTTP || c.Project.AllowHTTP,
+		AllowHostPorts: c.Project.AllowHostPorts,
 	}
 }
 
