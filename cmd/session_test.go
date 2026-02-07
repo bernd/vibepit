@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,7 +14,9 @@ import (
 
 func TestWriteSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", tmpDir)
+	origRuntimeDir := xdg.RuntimeDir
+	xdg.RuntimeDir = tmpDir
+	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
 
 	sessionID := "test-session-abc"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
@@ -42,7 +45,9 @@ func TestWriteSessionCredentials(t *testing.T) {
 
 func TestReadSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", tmpDir)
+	origRuntimeDir := xdg.RuntimeDir
+	xdg.RuntimeDir = tmpDir
+	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
 
 	sessionID := "test-session-read"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
@@ -60,7 +65,9 @@ func TestReadSessionCredentials(t *testing.T) {
 
 func TestCleanupSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", tmpDir)
+	origRuntimeDir := xdg.RuntimeDir
+	xdg.RuntimeDir = tmpDir
+	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
 
 	sessionID := "test-session-cleanup"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
