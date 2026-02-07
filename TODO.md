@@ -40,3 +40,6 @@ TODO
   was denied. Maybe that helps agents to tell users what to do.
   ("connection denied to to firewall policy - use vibepit add or monitor to allow...")
 - Create end-to-end tests with testcontainers
+- Use Claude Code telemetry to monitor usage: https://code.claude.com/docs/en/monitoring-usage
+  - The proxy can be the OTLP receiver
+  - Can we replicate ccusage with it? If not, how can we do that?
