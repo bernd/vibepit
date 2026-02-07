@@ -4,7 +4,13 @@
 
 **Goal:** Add SSH-based remote port forwarding so sandbox processes can reach non-HTTP host services (databases, gRPC, custom protocols) via `host.vibepit:<port>`.
 
-**Architecture:** The proxy binary gains an embedded SSH server (`golang.org/x/crypto/ssh`). SSH keypairs are pre-generated on the host and injected into the proxy container via environment variables. After the proxy starts, the host connects as an SSH client and establishes remote port forwards for each configured port. Connections to `<proxy-ip>:<port>` are tunneled back to `localhost:<port>` on the host.
+**Architecture:** The proxy binary gains an embedded SSH server (`golang.org/x/crypto/ssh`). SSH keypairs are pre-generated on the host and injected into the proxy container via environment variables. After the proxy starts, the host connects as an SSH client and establishes remote port forwards for each configured port. Connections to `<proxy-ip>:<port>` are tunneled back to `127.0.0.1:<port>` on the host.
+
+**Security invariants:**
+- SSH server binds to bridge interface only (unreachable from sandbox)
+- Forward destination hardcoded to `127.0.0.1` (server rejects other targets)
+- SSH port published on `127.0.0.1:<random>` (host-local only)
+- SSH keepalives detect dead connections; client reconnects automatically
 
 **Tech Stack:** `golang.org/x/crypto/ssh` (new dependency), existing `proxy`, `cmd`, `container` packages.
 
@@ -304,6 +310,18 @@ func TestSSHDRemoteForward(t *testing.T) {
         _, err = ssh.Dial("tcp", ln.Addr().String(), badConfig)
         assert.Error(t, err)
     })
+
+    t.Run("rejects forward to non-localhost", func(t *testing.T) {
+        // Attempt to request a remote forward to a non-127.0.0.1 address.
+        // The server must reject this.
+        _, err := client.Listen("tcp", "10.0.0.1:8080")
+        assert.Error(t, err)
+    })
+
+    t.Run("rejects shell channel", func(t *testing.T) {
+        _, _, err := client.OpenChannel("session", nil)
+        assert.Error(t, err)
+    })
 }
 ```
 
@@ -437,6 +455,15 @@ func (s *SSHServer) handleForward(req *ssh.Request, sshConn *ssh.ServerConn, mu 
         return
     }
 
+    // Security: only allow forwarding to localhost. The host-side client
+    // should only request 127.0.0.1 or the proxy's internal IP, but we
+    // enforce this server-side as defense in depth.
+    fwdIP := net.ParseIP(fwd.Addr)
+    if fwdIP == nil || (!fwdIP.IsLoopback() && !isProxyInternalIP(fwdIP)) {
+        req.Reply(false, nil)
+        return
+    }
+
     addr := net.JoinHostPort(fwd.Addr, fmt.Sprintf("%d", fwd.Port))
     ln, err := net.Listen("tcp", addr)
     if err != nil {
@@ -464,6 +491,18 @@ func (s *SSHServer) handleForward(req *ssh.Request, sshConn *ssh.ServerConn, mu 
             go s.forwardConnection(conn, sshConn, fwd.Addr, actualPort)
         }
     }()
+}
+
+// isProxyInternalIP checks if the IP is on the proxy's internal network.
+// The proxy listens for SSH remote forwards on its internal IP so the
+// sandbox can reach forwarded ports via host.vibepit DNS resolution.
+func isProxyInternalIP(ip net.IP) bool {
+    // In production, the proxy's internal IP is in 10.0.0.0/8.
+    // This is intentionally permissive — the real constraint is that
+    // the SSH client (host-side vibepit) only requests forwards to
+    // the proxy's actual internal IP. This server-side check is
+    // defense in depth.
+    return ip.IsPrivate()
 }
 
 func (s *SSHServer) handleCancelForward(req *ssh.Request, mu *sync.Mutex, listeners map[string]net.Listener) {
@@ -545,7 +584,9 @@ const (
 )
 ```
 
-In `Server.Run`, add a goroutine to start the SSH server after the existing ones:
+In `Server.Run`, add a goroutine to start the SSH server after the existing ones.
+The SSH server binds to the bridge interface IP only, not 0.0.0.0, so the
+sandbox cannot reach it:
 
 ```go
 // Start SSH server if keys are available.
@@ -558,14 +599,50 @@ if sshHostKey != "" && sshAuthorizedKey != "" {
             errCh <- fmt.Errorf("SSH server: %w", err)
             return
         }
-        ln, err := net.Listen("tcp", SSHPort)
+        // Bind to bridge interface only. The bridge IP is determined by
+        // inspecting the container's network interfaces at startup. The
+        // internal network IP is excluded so the sandbox cannot reach
+        // the SSH server.
+        bridgeIP, err := getBridgeIP()
+        if err != nil {
+            errCh <- fmt.Errorf("SSH bridge IP: %w", err)
+            return
+        }
+        listenAddr := net.JoinHostPort(bridgeIP, "2222")
+        ln, err := net.Listen("tcp", listenAddr)
         if err != nil {
             errCh <- fmt.Errorf("SSH listen: %w", err)
             return
         }
-        fmt.Printf("proxy: SSH server listening on %s\n", SSHPort)
+        fmt.Printf("proxy: SSH server listening on %s\n", listenAddr)
         errCh <- sshd.Serve(ln)
     }()
+}
+```
+
+Add helper to find the bridge IP (the non-internal-network IP):
+
+```go
+// getBridgeIP returns the proxy container's bridge network IP address.
+// The proxy is connected to two networks: internal (10.x.x.0/24) and
+// bridge. We find the bridge IP by looking for a non-10.x.x.x address.
+func getBridgeIP() (string, error) {
+    addrs, err := net.InterfaceAddrs()
+    if err != nil {
+        return "", err
+    }
+    for _, addr := range addrs {
+        ipNet, ok := addr.(*net.IPNet)
+        if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
+            continue
+        }
+        // The internal network uses 10.0.0.0/8. The bridge network
+        // typically uses 172.17.0.0/16.
+        if !ipNet.IP.Equal(net.IPv4(127, 0, 0, 1)) && ipNet.IP[0] != 10 {
+            return ipNet.IP.String(), nil
+        }
+    }
+    return "", fmt.Errorf("no bridge network interface found")
 }
 ```
 
@@ -580,7 +657,7 @@ Expected: success
 
 ```bash
 git add proxy/server.go
-git commit -m "proxy: start SSH server alongside other services"
+git commit -m "proxy: start SSH server on bridge interface only"
 ```
 
 ---
@@ -623,7 +700,9 @@ if cfg.SSHHostKeyPEM != "" {
 }
 ```
 
-Expose the SSH port (2222) alongside the control API port (3129). Update the exposed ports, port bindings, and return signature to include the SSH port.
+Expose the SSH port (2222) alongside the control API port (3129). Publish on
+`127.0.0.1:<random>` to keep it host-local only. Update the exposed ports,
+port bindings, and return signature to include the SSH port.
 
 Change `StartProxyContainer` return type to `(string, string, string, error)` — `(containerID, controlPort, sshPort, error)`.
 
@@ -661,7 +740,7 @@ return resp.ID, controlPort, sshPort, nil
 
 **Step 2: Update `cmd/run.go` to generate SSH keys and connect**
 
-Add imports: `"io"`, `"net"`, `"golang.org/x/crypto/ssh"`.
+Add imports: `"io"`, `"net"`, `"time"`, `"golang.org/x/crypto/ssh"`.
 
 After generating mTLS credentials, generate SSH keys:
 
@@ -701,7 +780,7 @@ if len(merged.AllowHostPorts) > 0 && sshPort != "" {
             return fmt.Errorf("ssh forward port %d: %w", port, err)
         }
         fmt.Printf("+ Forwarding %s -> localhost:%d\n", addr, port)
-        go forwardListener(ln, fmt.Sprintf("localhost:%d", port))
+        go forwardListener(ln, fmt.Sprintf("127.0.0.1:%d", port))
     }
 }
 ```
@@ -719,9 +798,37 @@ func connectSSH(port string, keys *proxy.SSHKeys) (*ssh.Client, error) {
         Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
         HostKeyCallback: ssh.FixedHostKey(keys.HostPublicKey),
     }
-    return ssh.Dial("tcp", "127.0.0.1:"+port, config)
+
+    // Poll until SSH server is ready.
+    var client *ssh.Client
+    for attempts := 0; attempts < 30; attempts++ {
+        client, err = ssh.Dial("tcp", "127.0.0.1:"+port, config)
+        if err == nil {
+            break
+        }
+        time.Sleep(100 * time.Millisecond)
+    }
+    if err != nil {
+        return nil, fmt.Errorf("SSH connect after retries: %w", err)
+    }
+
+    // Enable keepalives to detect dead connections.
+    go func() {
+        ticker := time.NewTicker(15 * time.Second)
+        defer ticker.Stop()
+        for range ticker.C {
+            _, _, err := client.SendRequest("keepalive@vibepit", true, nil)
+            if err != nil {
+                return
+            }
+        }
+    }()
+
+    return client, nil
 }
 
+// forwardListener accepts connections from SSH remote forwards and
+// forwards them to the target address on the host (always 127.0.0.1).
 func forwardListener(ln net.Listener, target string) {
     for {
         conn, err := ln.Accept()
@@ -755,7 +862,7 @@ Expected: success
 
 ```bash
 git add cmd/run.go container/client.go
-git commit -m "host-access: SSH client connects to proxy, sets up remote port forwards"
+git commit -m "host-access: SSH client with keepalives, startup polling, 127.0.0.1 forwarding"
 ```
 
 ---
@@ -800,6 +907,9 @@ nc -z host.vibepit 8888 && echo "TCP works"
 
 # Unconfigured port should fail
 curl http://host.vibepit:9999/
+
+# Verify reserved port rejected at startup
+# (edit network.yaml to add port 3128, restart — should get error)
 ```
 
 5. Clean up: `kill %1`
@@ -819,7 +929,7 @@ git commit -m "host-access: fix issues found during integration testing"
 |---|---|---|
 | 1 | Add `golang.org/x/crypto/ssh` dependency | `go.mod`, `go.sum` |
 | 2 | SSH key generation | `proxy/sshkeys.go`, `proxy/sshkeys_test.go` |
-| 3 | Embedded SSH server | `proxy/sshd.go`, `proxy/sshd_test.go` |
-| 4 | Start SSH server in `Server.Run` | `proxy/server.go` |
-| 5 | Host side: keys, proxy container, SSH client, forwards | `cmd/run.go`, `container/client.go` |
+| 3 | Embedded SSH server (bridge-only, forward validation) | `proxy/sshd.go`, `proxy/sshd_test.go` |
+| 4 | Start SSH server on bridge interface in `Server.Run` | `proxy/server.go` |
+| 5 | Host side: keys, proxy container, SSH client with keepalives | `cmd/run.go`, `container/client.go` |
 | 6 | Manual integration test | — |

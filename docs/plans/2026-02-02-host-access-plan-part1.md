@@ -4,13 +4,13 @@
 
 **Goal:** Add `host.vibepit` DNS resolution and HTTP proxy support so sandbox processes can reach host services via the proxy. This part does not include SSH tunneling — HTTP-only access.
 
-**Architecture:** The DNS server returns the proxy IP for `host.vibepit` unconditionally. The HTTP proxy auto-allows `host.vibepit` requests for ports listed in `allow-host-ports` config, and rewrites the target to the actual host gateway IP. Unconfigured ports fall through to the normal allowlist.
+**Architecture:** The DNS server returns the proxy IP for `host.vibepit` unconditionally. The HTTP proxy auto-allows `host.vibepit` requests for ports listed in `allow-host-ports` config, and rewrites the target to the actual host gateway IP. Unconfigured ports fall through to the normal allowlist. CIDR blocking is bypassed for allowed `host.vibepit` connections only.
 
 **Tech Stack:** Existing `proxy`, `config`, `container`, `cmd` packages. No new dependencies.
 
 ---
 
-### Task 1: Add `AllowHostPorts` to config
+### Task 1: Add `AllowHostPorts` to config with validation
 
 **Files:**
 - Modify: `config/config.go:15-39`
@@ -45,6 +45,30 @@ allow-host-ports:
     }
     if merged.AllowHostPorts[0] != 9200 || merged.AllowHostPorts[1] != 5432 {
         t.Errorf("unexpected ports: %v", merged.AllowHostPorts)
+    }
+})
+
+t.Run("rejects reserved proxy ports", func(t *testing.T) {
+    dir := t.TempDir()
+    projectDir := filepath.Join(dir, "project", ".vibepit")
+    os.MkdirAll(projectDir, 0o755)
+
+    for _, port := range []int{53, 2222, 3128, 3129} {
+        projectFile := filepath.Join(projectDir, "network.yaml")
+        os.WriteFile(projectFile, []byte(fmt.Sprintf(`
+allow-host-ports:
+  - %d
+`, port)), 0o644)
+
+        cfg, err := Load("/nonexistent/global.yaml", projectFile)
+        if err != nil {
+            t.Fatalf("Load() error for port %d: %v", port, err)
+        }
+
+        err = cfg.ValidateHostPorts()
+        if err == nil {
+            t.Errorf("expected error for reserved port %d", port)
+        }
     }
 })
 ```
@@ -96,6 +120,27 @@ return MergedConfig{
 }
 ```
 
+Add port conflict validation:
+
+```go
+// Reserved ports used by proxy services.
+var reservedProxyPorts = map[int]string{
+    53:   "DNS server",
+    2222: "SSH server",
+    3128: "HTTP proxy",
+    3129: "Control API",
+}
+
+func (c *Config) ValidateHostPorts() error {
+    for _, port := range c.Project.AllowHostPorts {
+        if service, ok := reservedProxyPorts[port]; ok {
+            return fmt.Errorf("allow-host-ports: port %d is reserved for %s", port, service)
+        }
+    }
+    return nil
+}
+```
+
 **Step 4: Run test to verify it passes**
 
 Run: `go test ./config/ -v`
@@ -105,7 +150,7 @@ Expected: all PASS
 
 ```bash
 git add config/config.go config/config_test.go
-git commit -m "config: add allow-host-ports, proxy-ip, and host-gateway fields"
+git commit -m "config: add allow-host-ports with reserved port validation"
 ```
 
 ---
@@ -198,6 +243,28 @@ func TestDNSHostVibepit(t *testing.T) {
         }
     })
 
+    t.Run("host.vibepit bypasses CIDR blocking", func(t *testing.T) {
+        // The proxy IP (10.42.0.2) is in the default blocked CIDR range
+        // (10.0.0.0/8). The DNS server should return it anyway because
+        // host.vibepit is a synthetic response, not a forwarded one.
+        if !blocker.IsBlocked(proxyIP) {
+            t.Skip("proxy IP is not in blocked range (test premise invalid)")
+        }
+        m := new(dns.Msg)
+        m.SetQuestion("host.vibepit.", dns.TypeA)
+
+        r, _, err := c.Exchange(m, addr)
+        if err != nil {
+            t.Fatalf("DNS exchange error: %v", err)
+        }
+        if r.Rcode != dns.RcodeSuccess {
+            t.Fatalf("expected SUCCESS, got rcode %d", r.Rcode)
+        }
+        if len(r.Answer) != 1 {
+            t.Fatalf("expected 1 answer, got %d", len(r.Answer))
+        }
+    })
+
     t.Run("host.vibepit is logged", func(t *testing.T) {
         entries := log.Entries()
         for _, e := range entries {
@@ -236,12 +303,14 @@ func (s *DNSServer) SetProxyIP(ip net.IP) {
 }
 ```
 
-In the `handler()` function, add a synthetic response before the allowlist check (after extracting the domain):
+In the `handler()` function, add a synthetic response before the allowlist check (after extracting the domain). This returns before reaching upstream forwarding or CIDR validation:
 
 ```go
 domain := strings.TrimSuffix(strings.ToLower(r.Question[0].Name), ".")
 
 // Synthetic response for host.vibepit — always resolves to proxy IP.
+// Returns immediately, bypassing both allowlist and CIDR checks since
+// this is not a forwarded response from an upstream resolver.
 if domain == "host.vibepit" && s.proxyIP != nil && r.Question[0].Qtype == mdns.TypeA {
     s.log.Add(LogEntry{
         Time:   time.Now(),
@@ -279,12 +348,12 @@ Expected: all PASS
 
 ```bash
 git add proxy/dns.go proxy/dns_test.go
-git commit -m "dns: resolve host.vibepit to proxy IP"
+git commit -m "dns: resolve host.vibepit to proxy IP (bypasses CIDR)"
 ```
 
 ---
 
-### Task 4: HTTP proxy — auto-allow and rewrite `host.vibepit`
+### Task 4: HTTP proxy — auto-allow and rewrite `host.vibepit` with CIDR bypass
 
 **Files:**
 - Modify: `proxy/http.go:15-28,30-67,69-131`
@@ -309,7 +378,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 
     t.Run("auto-allows host.vibepit for configured port", func(t *testing.T) {
         al := NewAllowlist(nil)
-        blocker := &CIDRBlocker{} // empty so localhost isn't blocked
+        blocker := NewCIDRBlocker(nil) // full default CIDR blocker
         log := NewLogBuffer(100)
         p := NewHTTPProxy(al, blocker, log, true)
         p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
@@ -331,7 +400,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 
     t.Run("blocks host.vibepit for unconfigured port", func(t *testing.T) {
         al := NewAllowlist(nil)
-        blocker := &CIDRBlocker{}
+        blocker := NewCIDRBlocker(nil)
         log := NewLogBuffer(100)
         p := NewHTTPProxy(al, blocker, log, true)
         p.SetHostVibepit(backendURL.Host, []int{9999}) // different port
@@ -349,12 +418,14 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
         assert.Equal(t, http.StatusForbidden, resp.StatusCode)
     })
 
-    t.Run("host.vibepit subject to allowlist when no host ports configured", func(t *testing.T) {
+    t.Run("host.vibepit allowed via allowlist bypasses CIDR", func(t *testing.T) {
+        // When host.vibepit is explicitly allowed via `vibepit allow`,
+        // the proxy must bypass CIDR blocking for the host gateway IP.
         al := NewAllowlist([]string{"host.vibepit:" + backendPort})
-        blocker := &CIDRBlocker{}
+        blocker := NewCIDRBlocker(nil) // full default blocker
         log := NewLogBuffer(100)
         p := NewHTTPProxy(al, blocker, log, true)
-        p.SetHostVibepit(backendURL.Host, nil)
+        p.SetHostVibepit(backendURL.Host, nil) // no allow-host-ports
 
         srv := httptest.NewServer(p.Handler())
         defer srv.Close()
@@ -367,6 +438,8 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
         defer resp.Body.Close()
 
         assert.Equal(t, http.StatusOK, resp.StatusCode)
+        body, _ := io.ReadAll(resp.Body)
+        assert.Equal(t, "host-service", string(body))
     })
 }
 ```
@@ -416,6 +489,7 @@ In the CONNECT handler, add before the existing allowlist check:
 hostname, port := splitHostPort(host, "443")
 
 // host.vibepit: auto-allow if port is in allow-host-ports.
+// Bypasses both allowlist and CIDR blocking for the host gateway.
 if hostname == "host.vibepit" && p.hostGateway != "" {
     if p.isHostPortAllowed(port) {
         p.log.Add(LogEntry{
@@ -432,10 +506,12 @@ if hostname == "host.vibepit" && p.hostGateway != "" {
 }
 ```
 
-And at the existing `return goproxy.OkConnect, host` line, add rewrite logic:
+At the existing `return goproxy.OkConnect, host` line, add rewrite logic.
+For `host.vibepit` connections allowed by the allowlist, rewrite and skip CIDR:
 
 ```go
-// Rewrite host.vibepit to actual host gateway.
+// Rewrite host.vibepit to actual host gateway (skip CIDR check —
+// the host gateway is a private IP but explicitly allowed).
 if hostname == "host.vibepit" && p.hostGateway != "" {
     return goproxy.OkConnect, net.JoinHostPort(p.hostGateway, port)
 }
@@ -448,6 +524,7 @@ In the HTTP (DoFunc) handler, add before the `!allowHTTP` check:
 hostname, port := splitHostPort(req.Host, "80")
 
 // host.vibepit: auto-allow if port is in allow-host-ports.
+// Bypasses allowlist, CIDR, and HTTP checks for the host gateway.
 if hostname == "host.vibepit" && p.hostGateway != "" {
     if p.isHostPortAllowed(port) {
         p.log.Add(LogEntry{
@@ -466,15 +543,22 @@ if hostname == "host.vibepit" && p.hostGateway != "" {
 }
 ```
 
-And at the existing `return req, nil` (allow) line at the end, add rewrite:
+At the existing `return req, nil` (allow) line at the end, add rewrite.
+For `host.vibepit` allowed via allowlist, rewrite and skip CIDR:
 
 ```go
-// Rewrite host.vibepit to actual host gateway.
+// Rewrite host.vibepit to actual host gateway (skip CIDR check).
 if hostname == "host.vibepit" && p.hostGateway != "" {
     req.URL.Host = net.JoinHostPort(p.hostGateway, port)
 }
 return req, nil
 ```
+
+**Key design note:** The CIDR bypass happens implicitly because the
+`host.vibepit` rewrite returns *before* reaching the CIDR check code path.
+The host gateway address (a private IP) is substituted as the outbound target
+only after the allow decision is made, so it never hits the CIDR blocker. No
+changes to `cidr.go` are needed for Part 1.
 
 **Step 4: Run test to verify it passes**
 
@@ -490,7 +574,7 @@ Expected: all PASS
 
 ```bash
 git add proxy/http.go proxy/http_test.go
-git commit -m "proxy: auto-allow host.vibepit for configured ports, rewrite to host gateway"
+git commit -m "proxy: auto-allow host.vibepit with CIDR bypass for host gateway"
 ```
 
 ---
@@ -567,7 +651,17 @@ tmpFile.Write(proxyConfig)
 tmpFile.Close()
 ```
 
-**Step 3: Add `host-gateway` extra host to proxy container**
+**Step 3: Call `ValidateHostPorts` in `cmd/run.go`**
+
+After loading and merging config, before network creation:
+
+```go
+if err := cfg.ValidateHostPorts(); err != nil {
+    return err
+}
+```
+
+**Step 4: Add `host-gateway` extra host to proxy container**
 
 In `container/client.go`, in `StartProxyContainer`, add `ExtraHosts` to the `HostConfig`:
 
@@ -589,16 +683,16 @@ In `container/client.go`, in `StartProxyContainer`, add `ExtraHosts` to the `Hos
 
 Docker resolves the special value `host-gateway` to the host's IP address.
 
-**Step 4: Verify build compiles**
+**Step 5: Verify build compiles**
 
 Run: `go build ./...`
 Expected: success
 
-**Step 5: Commit**
+**Step 6: Commit**
 
 ```bash
 git add proxy/server.go cmd/run.go container/client.go
-git commit -m "host-access: wire up DNS proxyIP, HTTP host gateway, and host-gateway extra host"
+git commit -m "host-access: wire up DNS proxyIP, HTTP host gateway, and port validation"
 ```
 
 ---
@@ -607,10 +701,10 @@ git commit -m "host-access: wire up DNS proxyIP, HTTP host gateway, and host-gat
 
 | # | Description | Files |
 |---|---|---|
-| 1 | Add `AllowHostPorts` to config | `config/config.go`, `config/config_test.go` |
+| 1 | Add `AllowHostPorts` to config with validation | `config/config.go`, `config/config_test.go` |
 | 2 | Add fields to `ProxyConfig` | `proxy/server.go` |
-| 3 | DNS: resolve `host.vibepit` to proxy IP | `proxy/dns.go`, `proxy/dns_test.go` |
-| 4 | HTTP proxy: auto-allow + rewrite | `proxy/http.go`, `proxy/http_test.go` |
+| 3 | DNS: resolve `host.vibepit` to proxy IP (CIDR bypass) | `proxy/dns.go`, `proxy/dns_test.go` |
+| 4 | HTTP proxy: auto-allow + rewrite + CIDR bypass | `proxy/http.go`, `proxy/http_test.go` |
 | 5 | Wire up in `Server.Run` and `cmd/run.go` | `proxy/server.go`, `cmd/run.go`, `container/client.go` |
 
 After this plan is complete, Part 2 (SSH server, key generation, remote port forwarding) can be implemented to add non-HTTP TCP support.
