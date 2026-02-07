@@ -43,3 +43,5 @@ TODO
 - Use Claude Code telemetry to monitor usage: https://code.claude.com/docs/en/monitoring-usage
   - The proxy can be the OTLP receiver
   - Can we replicate ccusage with it? If not, how can we do that?
+- Use `CLAUDE_CODE_SHELL_PREFIX` to audit commands?
+  - See: https://code.claude.com/docs/en/settings#environment-variables
