@@ -170,6 +170,37 @@ func (al *Allowlist) Allows(host, port string) bool {
 	return best != nil && best.portOK
 }
 
+// AllowsPort is like Allows but rejects portless rules. A portless entry
+// like "host.vibepit" will NOT grant access — only a port-specific entry
+// like "host.vibepit:8002" will match. This prevents an accidentally
+// broad allowlist entry from bypassing port restrictions.
+func (al *Allowlist) AllowsPort(host, port string) bool {
+	if host == "" || port == "" {
+		return false
+	}
+	host = strings.ToLower(host)
+
+	rules := *al.rules.Load()
+	for _, r := range rules {
+		if r.Port == "" {
+			continue // skip portless rules
+		}
+		if r.Port != port {
+			continue
+		}
+		if r.Wildcard {
+			if isSubdomainOf(host, r.Domain) {
+				return true
+			}
+		} else {
+			if host == r.Domain {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // AllowsDNS checks whether a domain is permitted for DNS resolution.
 // Port constraints are ignored because DNS operates before a port is known.
 func (al *Allowlist) AllowsDNS(host string) bool {

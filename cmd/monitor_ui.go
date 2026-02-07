@@ -82,7 +82,11 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
 				item := s.items[s.cursor.Pos]
 				if item.entry.Action == proxy.ActionBlock && item.status == statusNone {
-					return s, s.allowCmd(s.cursor.Pos, item.entry.Domain, msg.String() == "A")
+					domain := item.entry.Domain
+					if item.entry.Port != "" {
+						domain += ":" + item.entry.Port
+					}
+					return s, s.allowCmd(s.cursor.Pos, domain, msg.String() == "A")
 				}
 				w.SetFlash("already allowed")
 			}

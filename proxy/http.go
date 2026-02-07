@@ -37,8 +37,10 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 
 			// Rewrite host.vibepit to the host gateway address, auto-allowing
 			// configured ports and requiring an allowlist entry for others.
+			// AllowsPort (not Allows) is used so that a portless "host.vibepit"
+			// entry cannot bypass port restrictions.
 			if hostname == "host.vibepit" && p.hostGateway != "" {
-				if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {
+				if !p.isHostPortAllowed(port) && !p.allowlist.AllowsPort(hostname, port) {
 					p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
 					return goproxy.RejectConnect, host
 				}
@@ -68,8 +70,10 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 
 			// Rewrite host.vibepit to the host gateway address, auto-allowing
 			// configured ports and requiring an allowlist entry for others.
+			// AllowsPort (not Allows) is used so that a portless "host.vibepit"
+			// entry cannot bypass port restrictions.
 			if hostname == "host.vibepit" && p.hostGateway != "" {
-				if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {
+				if !p.isHostPortAllowed(port) && !p.allowlist.AllowsPort(hostname, port) {
 					p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
 					return req, goproxy.NewResponse(req,
 						goproxy.ContentTypeText,

@@ -203,4 +203,26 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, "host-service", string(body))
 	})
+
+	t.Run("portless host.vibepit allowlist entry does not bypass port check", func(t *testing.T) {
+		// A portless "host.vibepit" entry in the allowlist should NOT
+		// grant access to all ports — only port-specific entries count.
+		al := NewAllowlist([]string{"host.vibepit"})
+		blocker := NewCIDRBlocker(nil)
+		log := NewLogBuffer(100)
+		p := NewHTTPProxy(al, blocker, log, true)
+		p.SetHostVibepit(backendURL.Host, []int{9999})
+
+		srv := httptest.NewServer(p.Handler())
+		defer srv.Close()
+
+		proxyURL, _ := url.Parse(srv.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+		resp, err := client.Get("http://host.vibepit:" + backendPortStr + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	})
 }

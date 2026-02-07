@@ -70,6 +70,38 @@ func TestAllowlistAdd(t *testing.T) {
 	assert.True(t, al.Allows("github.com", "443"), "original entries should still work")
 }
 
+func TestAllowsPort(t *testing.T) {
+	al := NewAllowlist([]string{
+		"host.vibepit",
+		"host.vibepit:8000",
+		"*.vibepit:9000",
+	})
+
+	tests := []struct {
+		name string
+		host string
+		port string
+		want bool
+	}{
+		{"port-specific match", "host.vibepit", "8000", true},
+		{"port mismatch", "host.vibepit", "8002", false},
+		{"portless rule ignored", "host.vibepit", "9999", false},
+		{"wildcard port match", "sub.vibepit", "9000", true},
+		{"wildcard port mismatch", "sub.vibepit", "80", false},
+		{"empty host", "", "8000", false},
+		{"empty port", "host.vibepit", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := al.AllowsPort(tt.host, tt.port)
+			if got != tt.want {
+				t.Errorf("AllowsPort(%q, %q) = %v, want %v", tt.host, tt.port, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAllowlistDNS(t *testing.T) {
 	al := NewAllowlist([]string{
 		"github.com:443",
