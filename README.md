@@ -21,6 +21,11 @@ controls which domains your agent can reach.
 - Persistent home volume across sessions
 - Works with Docker and Podman
 
+## Requirements
+
+- Linux or macOS
+- [Docker](https://docs.docker.com/get-docker/) or [Podman](https://podman.io/)
+
 ## Installation
 
 ```sh
