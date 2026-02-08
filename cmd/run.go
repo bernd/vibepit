@@ -177,9 +177,11 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	selfBinary, _ = filepath.EvalSymlinks(selfBinary)
 
 	if runtime.GOOS == "darwin" {
+		// We can't mount the self-binary into the Linux sandbox container on macOS, so we extract the embedded
+		// Linux binary and use that.
 		proxyBinary, err := embeddedproxy.CachedProxyBinary()
 		if err != nil {
-			return fmt.Errorf("macOS Docker support: %w", err)
+			return fmt.Errorf("macOS support: %w", err)
 		}
 		selfBinary = proxyBinary
 	}

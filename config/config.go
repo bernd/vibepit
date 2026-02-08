@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
@@ -18,6 +19,7 @@ import (
 const (
 	RuntimeDirName = "vibepit"
 	CacheDirName   = "vibepit"
+	ConfigDirName  = "vibepit"
 )
 
 type GlobalConfig struct {
@@ -144,10 +146,14 @@ func FindProjectRoot(path string) (string, error) {
 }
 
 func DefaultGlobalPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "vibepit", "config.yaml")
+	configHome := xdg.ConfigHome
+	if configHome == "" {
+		home, _ := os.UserHomeDir()
+		configHome = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(configHome, ConfigDirName, "config.yaml")
 }
 
 func DefaultProjectPath(projectRoot string) string {
-	return filepath.Join(projectRoot, ".vibepit", "network.yaml")
+	return filepath.Join(projectRoot, "."+ConfigDirName, "network.yaml")
 }
