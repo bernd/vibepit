@@ -21,7 +21,7 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - windows
+      #- windows
       - darwin
     goarch:
       - amd64
@@ -51,15 +51,7 @@ archives:
         formats: [zip]
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  disable: true
 
 release:
-  footer: >-
-
-    ---
-
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+  draft: true
