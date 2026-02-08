@@ -22,7 +22,7 @@ func TestControlClient_Logs(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock, Source: proxy.SourceDNS})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil))
 	client := testControlClient(t, api)
 
 	t.Run("returns all entries", func(t *testing.T) {
@@ -36,7 +36,7 @@ func TestControlClient_Logs(t *testing.T) {
 	})
 
 	t.Run("returns empty slice when no logs", func(t *testing.T) {
-		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewAllowlist(nil))
+		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil))
 		c := testControlClient(t, emptyAPI)
 
 		entries, err := c.Logs()
@@ -51,7 +51,7 @@ func TestControlClient_LogsAfter(t *testing.T) {
 		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	}
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil))
 	client := testControlClient(t, api)
 
 	t.Run("returns last 25 entries for initial request", func(t *testing.T) {
@@ -84,7 +84,7 @@ func TestControlClient_Stats(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionBlock})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil))
 	client := testControlClient(t, api)
 
 	stats, err := client.Stats()
@@ -95,32 +95,30 @@ func TestControlClient_Stats(t *testing.T) {
 
 func TestControlClient_Config(t *testing.T) {
 	merged := config.MergedConfig{
-		Allow:     []string{"a.com", "b.com"},
-		DNSOnly:   []string{"c.com"},
+		AllowHTTP: []string{"a.com:443", "b.com:443"},
+		AllowDNS:  []string{"c.com"},
 		BlockCIDR: []string{"10.0.0.0/8"},
-		AllowHTTP: true,
 	}
 
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewAllowlist(nil))
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewHTTPAllowlist(nil))
 	client := testControlClient(t, api)
 
 	cfg, err := client.Config()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"a.com", "b.com"}, cfg.Allow)
-	assert.Equal(t, []string{"c.com"}, cfg.DNSOnly)
+	assert.Equal(t, []string{"a.com:443", "b.com:443"}, cfg.AllowHTTP)
+	assert.Equal(t, []string{"c.com"}, cfg.AllowDNS)
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.BlockCIDR)
-	assert.True(t, cfg.AllowHTTP)
 }
 
 func TestControlClient_Allow(t *testing.T) {
-	allowlist := proxy.NewAllowlist([]string{"existing.com"})
+	allowlist := proxy.NewHTTPAllowlist([]string{"existing.com:443"})
 	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist)
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
-		added, err := client.Allow([]string{"new.com", "other.com:8080"})
+		added, err := client.Allow([]string{"new.com:443", "other.com:8080"})
 		require.NoError(t, err)
-		assert.Equal(t, []string{"new.com", "other.com:8080"}, added)
+		assert.Equal(t, []string{"new.com:443", "other.com:8080"}, added)
 	})
 
 	t.Run("allowlist is updated on the server", func(t *testing.T) {
@@ -131,7 +129,7 @@ func TestControlClient_Allow(t *testing.T) {
 
 func TestControlClient_ServerError(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
-	allowlist := proxy.NewAllowlist(nil)
+	allowlist := proxy.NewHTTPAllowlist(nil)
 	api := proxy.NewControlAPI(log, nil, allowlist)
 	client := testControlClient(t, api)
 

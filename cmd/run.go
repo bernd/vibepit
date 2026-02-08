@@ -51,7 +51,7 @@ func RunCommand() *cli.Command {
 			&cli.StringSliceFlag{
 				Name:    allowFlag,
 				Aliases: []string{"a"},
-				Usage:   "Additional domains to allow",
+				Usage:   "Additional domain:port to allow (e.g. api.example.com:443)",
 			},
 			&cli.StringSliceFlag{
 				Name:    presetFlag,

@@ -18,17 +18,15 @@ import (
 const RuntimeDirName = "vibepit"
 
 type GlobalConfig struct {
-	Allow     []string `koanf:"allow"`
-	DNSOnly   []string `koanf:"dns-only"`
+	AllowHTTP []string `koanf:"allow-http"`
+	AllowDNS  []string `koanf:"allow-dns"`
 	BlockCIDR []string `koanf:"block-cidr"`
-	AllowHTTP bool     `koanf:"allow-http"`
 }
 
 type ProjectConfig struct {
 	Presets        []string `koanf:"presets"`
-	Allow          []string `koanf:"allow"`
-	DNSOnly        []string `koanf:"dns-only"`
-	AllowHTTP      bool     `koanf:"allow-http"`
+	AllowHTTP      []string `koanf:"allow-http"`
+	AllowDNS       []string `koanf:"allow-dns"`
 	AllowHostPorts []int    `koanf:"allow-host-ports"`
 }
 
@@ -38,10 +36,9 @@ type Config struct {
 }
 
 type MergedConfig struct {
-	Allow          []string `json:"allow"`
-	DNSOnly        []string `json:"dns-only"`
+	AllowHTTP      []string `json:"allow-http"`
+	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
-	AllowHTTP      bool     `json:"allow-http"`
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip,omitempty"`
 	HostGateway    string   `json:"host-gateway,omitempty"`
@@ -97,20 +94,18 @@ func loadFile(path string, target any) error {
 // Merge combines global config, project config, CLI flags, and expanded presets
 // into a single flat config. Duplicates are removed while preserving order.
 func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
-	allow := dedup(c.Global.Allow, c.Project.Allow, cliAllow)
+	allowHTTP := dedup(c.Global.AllowHTTP, c.Project.AllowHTTP, cliAllow)
 
 	// Expand presets from both project config and CLI flags.
-	allPresets := append(c.Project.Presets, cliPresets...)
 	reg := proxy.NewPresetRegistry()
-	allow = dedup(allow, reg.Expand(allPresets))
+	allowHTTP = dedup(allowHTTP, reg.Expand(append(c.Project.Presets, cliPresets...)))
 
-	dnsOnly := dedup(c.Global.DNSOnly, c.Project.DNSOnly)
+	allowDNS := dedup(c.Global.AllowDNS, c.Project.AllowDNS)
 
 	return MergedConfig{
-		Allow:          allow,
-		DNSOnly:        dnsOnly,
+		AllowHTTP:      allowHTTP,
+		AllowDNS:       allowDNS,
 		BlockCIDR:      c.Global.BlockCIDR,
-		AllowHTTP:      c.Global.AllowHTTP || c.Project.AllowHTTP,
 		AllowHostPorts: c.Project.AllowHostPorts,
 	}
 }

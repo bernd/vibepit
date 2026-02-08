@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadAndMerge(t *testing.T) {
@@ -16,9 +19,9 @@ func TestLoadAndMerge(t *testing.T) {
 
 		globalFile := filepath.Join(globalDir, "config.yaml")
 		os.WriteFile(globalFile, []byte(`
-allow:
-  - github.com
-dns-only:
+allow-http:
+  - github.com:443
+allow-dns:
   - internal.example.com
 block-cidr:
   - 203.0.113.0/24
@@ -28,43 +31,28 @@ block-cidr:
 		os.WriteFile(projectFile, []byte(`
 presets:
   - pkg-go
-allow:
-  - api.anthropic.com
+allow-http:
+  - api.anthropic.com:443
 `), 0o644)
 
 		cfg, err := Load(globalFile, projectFile)
-		if err != nil {
-			t.Fatalf("Load() error: %v", err)
-		}
+		require.NoError(t, err)
 
 		merged := cfg.Merge(nil, nil)
 
-		wants := []string{"github.com", "api.anthropic.com", "proxy.golang.org:443", "sum.golang.org:443"}
-		for _, w := range wants {
-			if !contains(merged.Allow, w) {
-				t.Errorf("merged.Allow missing %q, got %v", w, merged.Allow)
-			}
+		for _, want := range []string{"github.com:443", "api.anthropic.com:443", "proxy.golang.org:443", "sum.golang.org:443"} {
+			assert.Contains(t, merged.AllowHTTP, want)
 		}
-
-		if !contains(merged.DNSOnly, "internal.example.com") {
-			t.Errorf("merged.DNSOnly missing internal.example.com")
-		}
-
-		if !contains(merged.BlockCIDR, "203.0.113.0/24") {
-			t.Errorf("merged.BlockCIDR missing 203.0.113.0/24")
-		}
+		assert.Contains(t, merged.AllowDNS, "internal.example.com")
+		assert.Contains(t, merged.BlockCIDR, "203.0.113.0/24")
 	})
 
 	t.Run("CLI overrides add to merged config", func(t *testing.T) {
 		cfg := &Config{}
-		merged := cfg.Merge([]string{"extra.com"}, []string{"pkg-node"})
+		merged := cfg.Merge([]string{"extra.com:443"}, []string{"pkg-node"})
 
-		if !contains(merged.Allow, "extra.com") {
-			t.Errorf("CLI --allow not in merged result")
-		}
-		if !contains(merged.Allow, "registry.npmjs.org:443") {
-			t.Errorf("CLI --preset pkg-node not expanded, got %v", merged.Allow)
-		}
+		assert.Contains(t, merged.AllowHTTP, "extra.com:443")
+		assert.Contains(t, merged.AllowHTTP, "registry.npmjs.org:443")
 	})
 
 	t.Run("merges allow-host-ports from project config", func(t *testing.T) {
@@ -80,128 +68,76 @@ allow-host-ports:
 `), 0o644)
 
 		cfg, err := Load("/nonexistent/global.yaml", projectFile)
-		if err != nil {
-			t.Fatalf("Load() error: %v", err)
-		}
+		require.NoError(t, err)
 
 		merged := cfg.Merge(nil, nil)
-
-		if len(merged.AllowHostPorts) != 2 {
-			t.Fatalf("expected 2 host ports, got %d: %v", len(merged.AllowHostPorts), merged.AllowHostPorts)
-		}
-		if merged.AllowHostPorts[0] != 9200 || merged.AllowHostPorts[1] != 5432 {
-			t.Errorf("expected [9200, 5432], got %v", merged.AllowHostPorts)
-		}
+		assert.Equal(t, []int{9200, 5432}, merged.AllowHostPorts)
 	})
 
 	t.Run("generates random port in ephemeral range avoiding excluded", func(t *testing.T) {
 		excluded := map[int]bool{55000: true, 55001: true}
 		for i := 0; i < 100; i++ {
 			port, err := RandomProxyPort(excluded)
-			if err != nil {
-				t.Fatalf("RandomProxyPort() error: %v", err)
-			}
-			if port < 49152 || port > 65535 {
-				t.Errorf("port %d outside ephemeral range", port)
-			}
-			if excluded[port] {
-				t.Errorf("port %d is in excluded set", port)
-			}
+			require.NoError(t, err)
+			assert.GreaterOrEqual(t, port, 49152)
+			assert.LessOrEqual(t, port, 65535)
+			assert.False(t, excluded[port], "port %d is in excluded set", port)
 		}
 	})
 
 	t.Run("missing files are not errors", func(t *testing.T) {
 		cfg, err := Load("/nonexistent/global.yaml", "/nonexistent/project.yaml")
-		if err != nil {
-			t.Fatalf("Load() should not error on missing files: %v", err)
-		}
+		require.NoError(t, err)
 		merged := cfg.Merge(nil, nil)
-		if len(merged.Allow) != 0 {
-			t.Errorf("expected empty allow list, got %v", merged.Allow)
-		}
+		assert.Empty(t, merged.AllowHTTP)
 	})
 }
 
-func TestAppendAllow(t *testing.T) {
-	t.Run("adds to existing allow section", func(t *testing.T) {
+func TestAppendAllowHTTP(t *testing.T) {
+	t.Run("adds to existing allow-http section", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "network.yaml")
-		os.WriteFile(path, []byte("presets:\n  - node\n\nallow:\n  - github.com\n"), 0o644)
+		os.WriteFile(path, []byte("presets:\n  - node\n\nallow-http:\n  - github.com:443\n"), 0o644)
 
-		err := AppendAllow(path, []string{"bun.sh:443", "esm.sh"})
-		if err != nil {
-			t.Fatalf("AppendAllow() error: %v", err)
-		}
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443", "esm.sh:*"}))
 
 		cfg := &ProjectConfig{}
-		if err := loadFile(path, cfg); err != nil {
-			t.Fatalf("loadFile() error: %v", err)
-		}
+		require.NoError(t, loadFile(path, cfg))
 
-		if !contains(cfg.Allow, "github.com") {
-			t.Error("original entry github.com missing")
-		}
-		if !contains(cfg.Allow, "bun.sh:443") {
-			t.Error("new entry bun.sh:443 missing")
-		}
-		if !contains(cfg.Allow, "esm.sh") {
-			t.Error("new entry esm.sh missing")
-		}
+		assert.Contains(t, cfg.AllowHTTP, "github.com:443")
+		assert.Contains(t, cfg.AllowHTTP, "bun.sh:443")
+		assert.Contains(t, cfg.AllowHTTP, "esm.sh:*")
 	})
 
-	t.Run("creates allow section from commented template", func(t *testing.T) {
+	t.Run("creates allow-http section from commented template", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "network.yaml")
-		os.WriteFile(path, []byte("presets:\n  - node\n\n# allow:\n#   - api.openai.com\n"), 0o644)
+		os.WriteFile(path, []byte("presets:\n  - node\n\n# allow-http:\n#   - api.openai.com:443\n"), 0o644)
 
-		err := AppendAllow(path, []string{"bun.sh"})
-		if err != nil {
-			t.Fatalf("AppendAllow() error: %v", err)
-		}
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
 
 		cfg := &ProjectConfig{}
-		if err := loadFile(path, cfg); err != nil {
-			t.Fatalf("loadFile() error: %v", err)
-		}
-
-		if !contains(cfg.Allow, "bun.sh") {
-			t.Errorf("expected bun.sh in allow list, got %v", cfg.Allow)
-		}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Contains(t, cfg.AllowHTTP, "bun.sh:443")
 	})
 
 	t.Run("deduplicates existing entries", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "network.yaml")
-		os.WriteFile(path, []byte("allow:\n  - github.com\n"), 0o644)
+		os.WriteFile(path, []byte("allow-http:\n  - github.com:443\n"), 0o644)
 
-		err := AppendAllow(path, []string{"github.com", "bun.sh"})
-		if err != nil {
-			t.Fatalf("AppendAllow() error: %v", err)
-		}
+		require.NoError(t, AppendAllowHTTP(path, []string{"github.com:443", "bun.sh:443"}))
 
 		cfg := &ProjectConfig{}
-		loadFile(path, cfg)
+		require.NoError(t, loadFile(path, cfg))
 
 		count := 0
-		for _, d := range cfg.Allow {
-			if d == "github.com" {
+		for _, d := range cfg.AllowHTTP {
+			if d == "github.com:443" {
 				count++
 			}
 		}
-		if count != 1 {
-			t.Errorf("github.com appears %d times, want 1", count)
-		}
-		if !contains(cfg.Allow, "bun.sh") {
-			t.Error("bun.sh missing")
-		}
+		assert.Equal(t, 1, count, "github.com:443 should appear exactly once")
+		assert.Contains(t, cfg.AllowHTTP, "bun.sh:443")
 	})
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

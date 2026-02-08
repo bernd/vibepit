@@ -14,7 +14,7 @@ import (
 // HTTPProxy is a filtering HTTP/HTTPS proxy that uses an allowlist and
 // CIDR blocker to decide whether to forward or reject each request.
 type HTTPProxy struct {
-	allowlist      *Allowlist
+	allowlist      *HTTPAllowlist
 	cidr           *CIDRBlocker
 	log            *LogBuffer
 	proxy          *goproxy.ProxyHttpServer
@@ -22,7 +22,42 @@ type HTTPProxy struct {
 	allowHostPorts map[int]bool
 }
 
-func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allowHTTP bool) *HTTPProxy {
+// filterResult captures the outcome of a proxy filter check.
+type filterResult struct {
+	action  Action
+	reason  string
+	rewrite string // non-empty when host.vibepit should be rewritten to gateway
+}
+
+// checkRequest decides whether to allow or block a request. Both the CONNECT
+// and plain HTTP handlers call this so the filtering logic stays in one place.
+func (p *HTTPProxy) checkRequest(hostname, port string) filterResult {
+	if hostname == "host.vibepit" && p.hostGateway != "" {
+		if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {
+			p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
+			return filterResult{action: ActionBlock, reason: "domain not in allowlist"}
+		}
+		rewritten := net.JoinHostPort(p.hostGateway, port)
+		p.logEntry(hostname, port, ActionAllow, "host.vibepit")
+		return filterResult{action: ActionAllow, rewrite: rewritten}
+	}
+
+	if !p.allowlist.Allows(hostname, port) {
+		p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
+		return filterResult{action: ActionBlock, reason: "domain not in allowlist"}
+	}
+
+	if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
+		reason := fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip)
+		p.logEntry(hostname, port, ActionBlock, reason)
+		return filterResult{action: ActionBlock, reason: reason}
+	}
+
+	p.logEntry(hostname, port, ActionAllow, "")
+	return filterResult{action: ActionAllow}
+}
+
+func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer) *HTTPProxy {
 	p := &HTTPProxy{
 		allowlist: allowlist,
 		cidr:      cidr,
@@ -30,91 +65,38 @@ func NewHTTPProxy(allowlist *Allowlist, cidr *CIDRBlocker, log *LogBuffer, allow
 		proxy:     goproxy.NewProxyHttpServer(),
 	}
 
-	// Handle CONNECT requests (HTTPS tunneling).
 	p.proxy.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(
 		func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 			hostname, port := splitHostPort(host, "443")
-
-			// Rewrite host.vibepit to the host gateway address, auto-allowing
-			// configured ports and requiring an allowlist entry for others.
-			// AllowsPort (not Allows) is used so that a portless "host.vibepit"
-			// entry cannot bypass port restrictions.
-			if hostname == "host.vibepit" && p.hostGateway != "" {
-				if !p.isHostPortAllowed(port) && !p.allowlist.AllowsPort(hostname, port) {
-					p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
-					return goproxy.RejectConnect, host
-				}
-				rewritten := net.JoinHostPort(p.hostGateway, port)
-				p.logEntry(hostname, port, ActionAllow, "host.vibepit")
-				return goproxy.OkConnect, rewritten
-			}
-
-			if !p.allowlist.Allows(hostname, port) {
-				p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
+			result := p.checkRequest(hostname, port)
+			if result.action == ActionBlock {
 				return goproxy.RejectConnect, host
 			}
-
-			if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
-				p.logEntry(hostname, port, ActionBlock, fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip))
-				return goproxy.RejectConnect, host
+			if result.rewrite != "" {
+				return goproxy.OkConnect, result.rewrite
 			}
-
-			p.logEntry(hostname, port, ActionAllow, "")
 			return goproxy.OkConnect, host
 		}))
 
-	// Handle plain HTTP requests.
 	p.proxy.OnRequest().DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			hostname, port := splitHostPort(req.Host, "80")
-
-			// Rewrite host.vibepit to the host gateway address, auto-allowing
-			// configured ports and requiring an allowlist entry for others.
-			// AllowsPort (not Allows) is used so that a portless "host.vibepit"
-			// entry cannot bypass port restrictions.
-			if hostname == "host.vibepit" && p.hostGateway != "" {
-				if !p.isHostPortAllowed(port) && !p.allowlist.AllowsPort(hostname, port) {
-					p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
-					return req, goproxy.NewResponse(req,
-						goproxy.ContentTypeText,
-						http.StatusForbidden,
-						fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname),
-					)
+			result := p.checkRequest(hostname, port)
+			if result.action == ActionBlock {
+				msg := fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname)
+				if strings.Contains(result.reason, "CIDR") {
+					msg = fmt.Sprintf("domain %q resolves to a blocked IP\n", hostname)
 				}
-				req.URL.Host = net.JoinHostPort(p.hostGateway, port)
-				req.Host = req.URL.Host
-				p.logEntry(hostname, port, ActionAllow, "host.vibepit")
-				return req, nil
-			}
-
-			if !allowHTTP {
-				p.logEntry(hostname, port, ActionBlock, "plain HTTP blocked, use HTTPS")
 				return req, goproxy.NewResponse(req,
 					goproxy.ContentTypeText,
 					http.StatusForbidden,
-					"plain HTTP blocked, use HTTPS\n",
+					msg,
 				)
 			}
-
-			if !p.allowlist.Allows(hostname, port) {
-				p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
-				return req, goproxy.NewResponse(req,
-					goproxy.ContentTypeText,
-					http.StatusForbidden,
-					fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname),
-				)
+			if result.rewrite != "" {
+				req.URL.Host = result.rewrite
+				req.Host = result.rewrite
 			}
-
-			if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
-				p.logEntry(hostname, port, ActionBlock, fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip))
-				return req, goproxy.NewResponse(req,
-					goproxy.ContentTypeText,
-					http.StatusForbidden,
-					fmt.Sprintf("domain %q resolves to blocked IP %s\n", hostname, ip),
-				)
-			}
-
-			p.logEntry(hostname, port, ActionAllow, "")
 			return req, nil
 		})
 

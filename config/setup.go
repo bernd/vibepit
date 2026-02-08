@@ -27,7 +27,7 @@ func RunFirstTimeSetup(projectDir, projectConfigPath string) ([]string, error) {
 }
 
 // RunReconfigure re-runs the interactive preset selector, preserving existing
-// allow and dns-only entries from the project config.
+// allow-http and allow-dns entries from the project config.
 func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 	var cfg ProjectConfig
 	if err := loadFile(projectConfigPath, &cfg); err != nil {
@@ -46,7 +46,7 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 		return nil, err
 	}
 
-	return selected, writeReconfiguredProjectConfig(projectConfigPath, selected, cfg.Allow, cfg.DNSOnly)
+	return selected, writeReconfiguredProjectConfig(projectConfigPath, selected, cfg.AllowHTTP, cfg.AllowDNS)
 }
 
 func writeProjectConfig(path string, presets []string) error {
@@ -54,9 +54,9 @@ func writeProjectConfig(path string, presets []string) error {
 }
 
 // writeReconfiguredProjectConfig writes the config file with new presets while
-// preserving existing allow and dns-only entries. When allow and dnsOnly are
-// nil, commented-out placeholder sections are written instead.
-func writeReconfiguredProjectConfig(path string, presets []string, allow []string, dnsOnly []string) error {
+// preserving existing allow-http and allow-dns entries. When allowHTTP and allowDNS
+// are nil, commented-out placeholder sections are written instead.
+func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []string, allowDNS []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -65,12 +65,12 @@ func writeReconfiguredProjectConfig(path string, presets []string, allow []strin
 	writeConfigHeader(&sb)
 	writePresetsSection(&sb, presets)
 	writeYAMLListSection(&sb,
-		"# Additional domains to allow for this project.",
-		"allow", allow,
-		[]string{"api.openai.com", "api.anthropic.com"})
+		"# Additional domains to allow HTTP access for this project.",
+		"allow-http", allowHTTP,
+		[]string{"api.openai.com:443", "api.anthropic.com:443"})
 	writeYAMLListSection(&sb,
 		"# Domains that only need DNS resolution (no HTTP proxy).",
-		"dns-only", dnsOnly,
+		"allow-dns", allowDNS,
 		[]string{"internal.corp.example.com"})
 
 	return os.WriteFile(path, []byte(sb.String()), 0o644)
@@ -128,24 +128,24 @@ func containsLine(content, prefix string) bool {
 	return strings.HasPrefix(content, prefix) || strings.Contains(content, "\n"+prefix)
 }
 
-// AppendAllow adds domains to the allow list of an existing project config.
+// AppendAllowHTTP adds entries to the allow-http list of an existing project config.
 // It loads the current config, deduplicates, and writes back.
-func AppendAllow(projectConfigPath string, domains []string) error {
+func AppendAllowHTTP(projectConfigPath string, entries []string) error {
 	var cfg ProjectConfig
 	if err := loadFile(projectConfigPath, &cfg); err != nil {
 		return fmt.Errorf("load project config: %w", err)
 	}
 
-	existing := make(map[string]bool, len(cfg.Allow))
-	for _, d := range cfg.Allow {
+	existing := make(map[string]bool, len(cfg.AllowHTTP))
+	for _, d := range cfg.AllowHTTP {
 		existing[d] = true
 	}
 
 	var added []string
-	for _, d := range domains {
+	for _, d := range entries {
 		if !existing[d] {
 			existing[d] = true
-			cfg.Allow = append(cfg.Allow, d)
+			cfg.AllowHTTP = append(cfg.AllowHTTP, d)
 			added = append(added, d)
 		}
 	}
@@ -155,7 +155,7 @@ func AppendAllow(projectConfigPath string, domains []string) error {
 	}
 
 	// Re-read the raw file and append the new entries to preserve
-	// comments and formatting. If the file has no "allow:" section yet,
+	// comments and formatting. If the file has no "allow-http:" section yet,
 	// add one.
 	data, err := os.ReadFile(projectConfigPath)
 	if err != nil {
@@ -163,13 +163,13 @@ func AppendAllow(projectConfigPath string, domains []string) error {
 	}
 
 	content := string(data)
-	hasAllow := containsLine(content, "allow:")
-	hasCommentedAllow := containsLine(content, "# allow:")
+	hasAllow := containsLine(content, "allow-http:")
+	hasCommentedAllow := containsLine(content, "# allow-http:")
 
 	var sb strings.Builder
 
 	if hasAllow {
-		// File already has an allow section — append new entries at end.
+		// File already has an allow-http section — append new entries at end.
 		sb.WriteString(content)
 		if !strings.HasSuffix(content, "\n") {
 			sb.WriteString("\n")
@@ -178,12 +178,12 @@ func AppendAllow(projectConfigPath string, domains []string) error {
 			fmt.Fprintf(&sb, "  - %s\n", d)
 		}
 	} else if hasCommentedAllow {
-		// Replace the commented-out allow section with a real one.
+		// Replace the commented-out allow-http section with a real one.
 		lines := strings.Split(content, "\n")
 		inCommentedAllow := false
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
-			if trimmed == "# allow:" {
+			if trimmed == "# allow-http:" {
 				inCommentedAllow = true
 				continue
 			}
@@ -194,19 +194,19 @@ func AppendAllow(projectConfigPath string, domains []string) error {
 			sb.WriteString(line)
 			sb.WriteString("\n")
 		}
-		// Add the allow section with all entries.
-		sb.WriteString("allow:\n")
-		for _, d := range cfg.Allow {
+		// Add the allow-http section with all entries.
+		sb.WriteString("allow-http:\n")
+		for _, d := range cfg.AllowHTTP {
 			fmt.Fprintf(&sb, "  - %s\n", d)
 		}
 	} else {
-		// No allow section at all — append one.
+		// No allow-http section at all — append one.
 		sb.WriteString(content)
 		if !strings.HasSuffix(content, "\n") {
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\nallow:\n")
-		for _, d := range cfg.Allow {
+		sb.WriteString("\nallow-http:\n")
+		for _, d := range cfg.AllowHTTP {
 			fmt.Fprintf(&sb, "  - %s\n", d)
 		}
 	}

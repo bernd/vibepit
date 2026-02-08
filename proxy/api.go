@@ -11,10 +11,10 @@ type ControlAPI struct {
 	mux       *http.ServeMux
 	log       *LogBuffer
 	config    any
-	allowlist *Allowlist
+	allowlist *HTTPAllowlist
 }
 
-func NewControlAPI(log *LogBuffer, config any, allowlist *Allowlist) *ControlAPI {
+func NewControlAPI(log *LogBuffer, config any, allowlist *HTTPAllowlist) *ControlAPI {
 	api := &ControlAPI{
 		mux:       http.NewServeMux(),
 		log:       log,

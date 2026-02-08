@@ -15,10 +15,10 @@ import (
 
 func TestHTTPProxy(t *testing.T) {
 	t.Run("blocks plain HTTP by default", func(t *testing.T) {
-		al := NewAllowlist([]string{"httpbin.org"})
+		al := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, false)
+		p := NewHTTPProxy(al, blocker, log)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -32,12 +32,12 @@ func TestHTTPProxy(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 		body, _ := io.ReadAll(resp.Body)
-		assert.Contains(t, string(body), "plain HTTP blocked")
+		assert.Contains(t, string(body), "not in the allowlist")
 
 		entries := log.Entries()
 		var found bool
 		for _, e := range entries {
-			if e.Domain == "httpbin.org" && e.Action == ActionBlock && e.Reason == "plain HTTP blocked, use HTTPS" {
+			if e.Domain == "httpbin.org" && e.Action == ActionBlock && e.Reason == "domain not in allowlist" {
 				found = true
 				break
 			}
@@ -45,7 +45,7 @@ func TestHTTPProxy(t *testing.T) {
 		assert.True(t, found, "expected log entry for blocked plain HTTP")
 	})
 
-	t.Run("allows plain HTTP when allowHTTP is true", func(t *testing.T) {
+	t.Run("allows plain HTTP when domain:port matches allowlist", func(t *testing.T) {
 		// Use a backend that responds to verify the request goes through.
 		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -56,11 +56,11 @@ func TestHTTPProxy(t *testing.T) {
 		backendURL, _ := url.Parse(backend.URL)
 		host := backendURL.Host
 
-		al := NewAllowlist([]string{host})
+		al := NewHTTPAllowlist([]string{host})
 		// Empty blocker so localhost backend isn't blocked by default private CIDRs.
 		blocker := &CIDRBlocker{}
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, true)
+		p := NewHTTPProxy(al, blocker, log)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -75,11 +75,11 @@ func TestHTTPProxy(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
-	t.Run("blocks disallowed domain even with allowHTTP", func(t *testing.T) {
-		al := NewAllowlist([]string{"allowed.example.com"})
+	t.Run("blocks disallowed domain for plain HTTP", func(t *testing.T) {
+		al := NewHTTPAllowlist([]string{"allowed.example.com:443"})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, true)
+		p := NewHTTPProxy(al, blocker, log)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -97,10 +97,10 @@ func TestHTTPProxy(t *testing.T) {
 	})
 
 	t.Run("logs blocked request", func(t *testing.T) {
-		al := NewAllowlist([]string{"httpbin.org"})
+		al := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, false)
+		p := NewHTTPProxy(al, blocker, log)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -141,10 +141,10 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("auto-allows host.vibepit for configured port", func(t *testing.T) {
-		al := NewAllowlist(nil)
+		al := NewHTTPAllowlist(nil)
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, true)
+		p := NewHTTPProxy(al, blocker, log)
 		p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
 
 		srv := httptest.NewServer(p.Handler())
@@ -163,10 +163,10 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 	})
 
 	t.Run("blocks host.vibepit for unconfigured port", func(t *testing.T) {
-		al := NewAllowlist(nil)
+		al := NewHTTPAllowlist(nil)
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, true)
+		p := NewHTTPProxy(al, blocker, log)
 		p.SetHostVibepit(backendURL.Host, []int{9999})
 
 		srv := httptest.NewServer(p.Handler())
@@ -183,10 +183,10 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 	})
 
 	t.Run("host.vibepit allowed via allowlist bypasses CIDR", func(t *testing.T) {
-		al := NewAllowlist([]string{"host.vibepit:" + backendPortStr})
+		al := NewHTTPAllowlist([]string{"host.vibepit:" + backendPortStr})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, true)
+		p := NewHTTPProxy(al, blocker, log)
 		p.SetHostVibepit(backendURL.Host, nil)
 
 		srv := httptest.NewServer(p.Handler())
@@ -202,27 +202,5 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, "host-service", string(body))
-	})
-
-	t.Run("portless host.vibepit allowlist entry does not bypass port check", func(t *testing.T) {
-		// A portless "host.vibepit" entry in the allowlist should NOT
-		// grant access to all ports — only port-specific entries count.
-		al := NewAllowlist([]string{"host.vibepit"})
-		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, true)
-		p.SetHostVibepit(backendURL.Host, []int{9999})
-
-		srv := httptest.NewServer(p.Handler())
-		defer srv.Close()
-
-		proxyURL, _ := url.Parse(srv.URL)
-		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
-
-		resp, err := client.Get("http://host.vibepit:" + backendPortStr + "/")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 	})
 }

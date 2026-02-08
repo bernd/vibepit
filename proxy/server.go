@@ -18,11 +18,10 @@ const (
 
 // ProxyConfig is the JSON config file passed to the proxy container.
 type ProxyConfig struct {
-	Allow          []string `json:"allow"`
-	DNSOnly        []string `json:"dns-only"`
+	AllowHTTP      []string `json:"allow-http"`
+	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
 	Upstream       string   `json:"upstream"`
-	AllowHTTP      bool     `json:"allow-http"`
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip"`
 	HostGateway    string   `json:"host-gateway"`
@@ -54,13 +53,13 @@ func NewServer(configPath string) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	allowlist := NewAllowlist(s.config.Allow)
-	dnsOnlyList := NewAllowlist(s.config.DNSOnly)
+	allowlist := NewHTTPAllowlist(s.config.AllowHTTP)
+	dnsAllowlist := NewDNSAllowlist(s.config.AllowDNS)
 	cidr := NewCIDRBlocker(s.config.BlockCIDR)
 	log := NewLogBuffer(LogBufferCapacity)
 
-	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.AllowHTTP)
-	dnsServer := NewDNSServer(allowlist, dnsOnlyList, cidr, log, s.config.Upstream)
+	httpProxy := NewHTTPProxy(allowlist, cidr, log)
+	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.Upstream)
 	controlAPI := NewControlAPI(log, s.config, allowlist)
 
 	// Configure host.vibepit support.

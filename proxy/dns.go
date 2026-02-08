@@ -10,10 +10,9 @@ import (
 )
 
 // DNSServer is a filtering DNS server that checks queries against an allowlist
-// and a dns-only list, and verifies resolved IPs against a CIDR blocklist.
+// and verifies resolved IPs against a CIDR blocklist.
 type DNSServer struct {
-	allowlist *Allowlist
-	dnsOnly   *Allowlist
+	allowlist *DNSAllowlist
 	cidr      *CIDRBlocker
 	log       *LogBuffer
 	upstream  string
@@ -25,10 +24,9 @@ func (s *DNSServer) SetProxyIP(ip net.IP) {
 	s.proxyIP = ip
 }
 
-func NewDNSServer(allowlist, dnsOnly *Allowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *DNSServer {
+func NewDNSServer(allowlist *DNSAllowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *DNSServer {
 	return &DNSServer{
 		allowlist: allowlist,
-		dnsOnly:   dnsOnly,
 		cidr:      cidr,
 		log:       log,
 		upstream:  upstream,
@@ -72,7 +70,7 @@ func (s *DNSServer) handler() mdns.Handler {
 			return
 		}
 
-		if !s.allowlist.AllowsDNS(domain) && !s.dnsOnly.AllowsDNS(domain) {
+		if !s.allowlist.Allows(domain) {
 			s.log.Add(LogEntry{
 				Time:   time.Now(),
 				Domain: domain,

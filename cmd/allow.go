@@ -12,7 +12,7 @@ func AllowCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "allow",
 		Usage:     "Add domains to the proxy allowlist",
-		ArgsUsage: "<domain[:port]>...",
+		ArgsUsage: "<domain:port-pattern>...",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "no-save",
@@ -50,7 +50,7 @@ func AllowCommand() *cli.Command {
 			}
 
 			projectPath := config.DefaultProjectPath(session.ProjectDir)
-			if err := config.AppendAllow(projectPath, entries); err != nil {
+			if err := config.AppendAllowHTTP(projectPath, entries); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
 			fmt.Printf("+ saved to %s\n", projectPath)

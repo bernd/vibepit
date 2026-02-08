@@ -66,7 +66,7 @@ func (s *monitorScreen) allowCmd(index int, domain string, save bool) tea.Cmd {
 		if save {
 			status = statusSaved
 			projectPath := config.DefaultProjectPath(s.session.ProjectDir)
-			if err := config.AppendAllow(projectPath, []string{domain}); err != nil {
+			if err := config.AppendAllowHTTP(projectPath, []string{domain}); err != nil {
 				return allowResultMsg{index: index, err: err}
 			}
 		}

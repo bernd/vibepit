@@ -5,47 +5,40 @@ import (
 	"sync/atomic"
 )
 
-// Rule represents a single parsed allowlist entry. Port-specific rules
-// restrict matching to a single port; portless rules match any port.
-// Wildcard rules (*.domain) match subdomains only, not the apex domain.
-// Non-wildcard rules match both the exact domain and all its subdomains.
-type Rule struct {
-	Pattern  string
+// HTTPRule represents a parsed allow-http entry with a domain pattern and port glob.
+type HTTPRule struct {
+	Domain   string
 	Port     string
 	Wildcard bool
-	Domain   string
 }
 
-// Allowlist holds parsed rules and provides matching against host:port pairs.
-// It is safe for concurrent use; rules can be added at runtime via Add.
-type Allowlist struct {
-	rules atomic.Pointer[[]Rule]
+// HTTPAllowlist holds parsed HTTP allow rules. Safe for concurrent use.
+type HTTPAllowlist struct {
+	rules atomic.Pointer[[]HTTPRule]
 }
 
-// NewAllowlist parses a list of allowlist entries into an Allowlist.
-// Each entry may be a bare domain ("github.com"), a wildcard ("*.example.com"),
-// or include a port suffix ("api.stripe.com:443", "*.cdn.example.com:443").
-func NewAllowlist(entries []string) *Allowlist {
-	rules := make([]Rule, 0, len(entries))
+// NewHTTPAllowlist parses allow-http entries into an HTTPAllowlist.
+// Each entry must be "domain:port-pattern" (e.g. "github.com:443", "*.example.com:80*").
+func NewHTTPAllowlist(entries []string) *HTTPAllowlist {
+	rules := make([]HTTPRule, 0, len(entries))
 	for _, entry := range entries {
-		r := parseRule(entry)
-		rules = append(rules, r)
+		rules = append(rules, parseHTTPRule(entry))
 	}
-	al := &Allowlist{}
+	al := &HTTPAllowlist{}
 	al.rules.Store(&rules)
 	return al
 }
 
-// Add parses new entries and appends them to the allowlist atomically.
-func (al *Allowlist) Add(entries []string) {
-	newRules := make([]Rule, 0, len(entries))
+// Add parses new entries and appends them atomically.
+func (al *HTTPAllowlist) Add(entries []string) {
+	newRules := make([]HTTPRule, 0, len(entries))
 	for _, entry := range entries {
-		newRules = append(newRules, parseRule(entry))
+		newRules = append(newRules, parseHTTPRule(entry))
 	}
 
 	for {
 		current := al.rules.Load()
-		merged := make([]Rule, len(*current), len(*current)+len(newRules))
+		merged := make([]HTTPRule, len(*current), len(*current)+len(newRules))
 		copy(merged, *current)
 		merged = append(merged, newRules...)
 		if al.rules.CompareAndSwap(current, &merged) {
@@ -54,173 +47,113 @@ func (al *Allowlist) Add(entries []string) {
 	}
 }
 
-func parseRule(entry string) Rule {
-	var r Rule
-	// Split off a trailing numeric port if present.
+func parseHTTPRule(entry string) HTTPRule {
+	var r HTTPRule
 	if idx := strings.LastIndex(entry, ":"); idx > 0 {
-		possiblePort := entry[idx+1:]
-		if isNumeric(possiblePort) {
-			r.Port = possiblePort
-			entry = entry[:idx]
-		}
+		r.Port = entry[idx+1:]
+		entry = entry[:idx]
 	}
 	if strings.HasPrefix(entry, "*.") {
 		r.Wildcard = true
-		r.Domain = entry[2:]
+		r.Domain = strings.ToLower(entry[2:])
 	} else {
-		r.Domain = entry
+		r.Domain = strings.ToLower(entry)
 	}
-	r.Pattern = entry
 	return r
 }
 
-func isNumeric(s string) bool {
-	if s == "" {
+// Allows checks whether a host:port pair is permitted. Purely additive —
+// if any rule matches both domain and port glob, returns true.
+func (al *HTTPAllowlist) Allows(host, port string) bool {
+	if host == "" {
 		return false
 	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
+	host = strings.ToLower(host)
+
+	rules := *al.rules.Load()
+	for _, r := range rules {
+		if portGlobMatch(r.Port, port) && domainMatches(host, r.Domain, r.Wildcard) {
+			return true
+		}
+	}
+	return false
+}
+
+// DNSRule represents a parsed allow-dns entry with a domain pattern.
+type DNSRule struct {
+	Domain   string
+	Wildcard bool
+}
+
+// DNSAllowlist holds parsed DNS allow rules. Safe for concurrent use.
+type DNSAllowlist struct {
+	rules atomic.Pointer[[]DNSRule]
+}
+
+// NewDNSAllowlist parses allow-dns entries (bare domains, no ports).
+func NewDNSAllowlist(entries []string) *DNSAllowlist {
+	rules := make([]DNSRule, 0, len(entries))
+	for _, entry := range entries {
+		rules = append(rules, parseDNSRule(entry))
+	}
+	al := &DNSAllowlist{}
+	al.rules.Store(&rules)
+	return al
+}
+
+func parseDNSRule(entry string) DNSRule {
+	var r DNSRule
+	if strings.HasPrefix(entry, "*.") {
+		r.Wildcard = true
+		r.Domain = strings.ToLower(entry[2:])
+	} else {
+		r.Domain = strings.ToLower(entry)
+	}
+	return r
+}
+
+// Allows checks whether a domain is permitted for DNS resolution.
+func (al *DNSAllowlist) Allows(host string) bool {
+	if host == "" {
+		return false
+	}
+	host = strings.ToLower(host)
+	rules := *al.rules.Load()
+	for _, r := range rules {
+		if domainMatches(host, r.Domain, r.Wildcard) {
+			return true
+		}
+	}
+	return false
+}
+
+// portGlobMatch reports whether port matches the glob pattern.
+// The only special character is '*', which matches any sequence of characters.
+func portGlobMatch(pattern, port string) bool {
+	for len(pattern) > 0 {
+		if pattern[0] == '*' {
+			pattern = pattern[1:]
+			for i := 0; i <= len(port); i++ {
+				if portGlobMatch(pattern, port[i:]) {
+					return true
+				}
+			}
 			return false
 		}
+		if len(port) == 0 || pattern[0] != port[0] {
+			return false
+		}
+		pattern = pattern[1:]
+		port = port[1:]
 	}
-	return true
+	return len(port) == 0
 }
 
-// Allows checks whether a host:port combination is permitted by the allowlist.
-// Rules are evaluated in specificity order so that port-specific exact matches
-// take precedence over broader wildcard or portless rules. When a host matches
-// a rule's domain pattern, that rule "claims" the host -- if the port doesn't
-// match, broader rules won't be consulted.
-func (al *Allowlist) Allows(host, port string) bool {
-	if host == "" {
-		return false
+func domainMatches(host, domain string, wildcard bool) bool {
+	if wildcard {
+		return isSubdomainOf(host, domain)
 	}
-	host = strings.ToLower(host)
-
-	// Find the best (most specific) matching rule for this host.
-	// Specificity tiers (highest first):
-	//   1. Exact hostname with port
-	//   2. Exact hostname, any port (also matches subdomains)
-	//   3. Wildcard with port (subdomains only)
-	//   4. Wildcard, any port (subdomains only)
-	//
-	// Within each tier we pick the rule whose domain is longest (most
-	// specific). Once a domain pattern matches the host, we check the port
-	// constraint. A port mismatch is a rejection -- we don't fall through
-	// to less specific tiers.
-
-	type candidate struct {
-		specificity int
-		portOK      bool
-	}
-	var best *candidate
-
-	rules := *al.rules.Load()
-	for _, r := range rules {
-		var tier int
-		var matches bool
-		var portOK bool
-
-		switch {
-		case !r.Wildcard && r.Port != "":
-			tier = 1
-			matches = host == r.Domain
-			portOK = port == r.Port
-		case !r.Wildcard && r.Port == "":
-			tier = 2
-			matches = host == r.Domain || strings.HasSuffix(host, "."+r.Domain)
-			portOK = true
-		case r.Wildcard && r.Port != "":
-			tier = 3
-			// A wildcard rule claims its subdomains AND its apex (to
-			// shadow broader rules), but only allows actual subdomains.
-			if isSubdomainOf(host, r.Domain) {
-				matches = true
-				portOK = port == r.Port
-			} else if host == r.Domain {
-				// Apex is claimed but always rejected (wildcard = subdomains only).
-				matches = true
-				portOK = false
-			}
-		default: // wildcard, no port
-			tier = 4
-			if isSubdomainOf(host, r.Domain) {
-				matches = true
-				portOK = true
-			} else if host == r.Domain {
-				// Apex claimed but rejected.
-				matches = true
-				portOK = false
-			}
-		}
-
-		if !matches {
-			continue
-		}
-
-		// Higher specificity = lower tier number. Among same-tier rules,
-		// longer domain = more specific.
-		specificity := (5-tier)*10000 + len(r.Domain)
-
-		if best == nil || specificity > best.specificity {
-			best = &candidate{specificity: specificity, portOK: portOK}
-		}
-	}
-
-	return best != nil && best.portOK
-}
-
-// AllowsPort is like Allows but rejects portless rules. A portless entry
-// like "host.vibepit" will NOT grant access — only a port-specific entry
-// like "host.vibepit:8002" will match. This prevents an accidentally
-// broad allowlist entry from bypassing port restrictions.
-func (al *Allowlist) AllowsPort(host, port string) bool {
-	if host == "" || port == "" {
-		return false
-	}
-	host = strings.ToLower(host)
-
-	rules := *al.rules.Load()
-	for _, r := range rules {
-		if r.Port == "" {
-			continue // skip portless rules
-		}
-		if r.Port != port {
-			continue
-		}
-		if r.Wildcard {
-			if isSubdomainOf(host, r.Domain) {
-				return true
-			}
-		} else {
-			if host == r.Domain {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// AllowsDNS checks whether a domain is permitted for DNS resolution.
-// Port constraints are ignored because DNS operates before a port is known.
-func (al *Allowlist) AllowsDNS(host string) bool {
-	if host == "" {
-		return false
-	}
-	host = strings.ToLower(host)
-	rules := *al.rules.Load()
-	for _, r := range rules {
-		if r.Wildcard {
-			if isSubdomainOf(host, r.Domain) {
-				return true
-			}
-		} else {
-			if host == r.Domain || strings.HasSuffix(host, "."+r.Domain) {
-				return true
-			}
-		}
-	}
-	return false
+	return host == domain || isSubdomainOf(host, domain)
 }
 
 func isSubdomainOf(host, domain string) bool {
