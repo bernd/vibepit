@@ -37,9 +37,11 @@ func TestProxyServerIntegration(t *testing.T) {
 	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
 
 	cfg := proxy.ProxyConfig{
-		AllowHTTP: []string{"httpbin.org:443", "example.com:443"},
-		AllowDNS:  []string{"dns-only.example.com"},
-		Upstream:  "8.8.8.8:53",
+		AllowHTTP:      []string{"httpbin.org:443", "example.com:443"},
+		AllowDNS:       []string{"dns-only.example.com"},
+		Upstream:       "8.8.8.8:53",
+		ProxyPort:      3128,
+		ControlAPIPort: 3129,
 	}
 	data, _ := json.Marshal(cfg)
 	tmpFile, _ := os.CreateTemp("", "proxy-test-*.json")
