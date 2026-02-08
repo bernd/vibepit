@@ -29,7 +29,6 @@ const (
 
 const (
 	allowFlag       = "allow"
-	cleanFlag       = "clean"
 	localFlag       = "local"
 	presetFlag      = "preset"
 	reconfigureFlag = "reconfigure"
@@ -40,11 +39,6 @@ func RunCommand() *cli.Command {
 		Name:  "run",
 		Usage: "Start the sandbox",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:    cleanFlag,
-				Aliases: []string{"C"},
-				Usage:   "Start with a clean vibepit volume (removes /home/code!)",
-			},
 			&cli.BoolFlag{
 				Name:    localFlag,
 				Aliases: []string{"L"},
@@ -161,10 +155,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	uid, _ := strconv.Atoi(u.Uid)
 
-	if cmd.Bool(cleanFlag) {
-		fmt.Printf("+ Removing volume: %s\n", volumeName)
-		client.RemoveVolume(ctx, volumeName)
-	}
 	if err := client.EnsureVolume(ctx, volumeName, uid, u.Username); err != nil {
 		return fmt.Errorf("volume: %w", err)
 	}
