@@ -29,6 +29,9 @@ func UpdateCommand() *cli.Command {
 			if err := client.PullImage(ctx, imageName(u), false); err != nil {
 				return fmt.Errorf("pull image: %w", err)
 			}
+			if err := client.PullImage(ctx, ctr.ProxyImage, false); err != nil {
+				return fmt.Errorf("pull image: %w", err)
+			}
 			return nil
 		},
 	}
