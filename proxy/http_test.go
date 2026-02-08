@@ -18,7 +18,7 @@ func TestHTTPProxy(t *testing.T) {
 		al := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -60,7 +60,7 @@ func TestHTTPProxy(t *testing.T) {
 		// Empty blocker so localhost backend isn't blocked by default private CIDRs.
 		blocker := &CIDRBlocker{}
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -79,7 +79,7 @@ func TestHTTPProxy(t *testing.T) {
 		al := NewHTTPAllowlist([]string{"allowed.example.com:443"})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -100,7 +100,7 @@ func TestHTTPProxy(t *testing.T) {
 		al := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -144,7 +144,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		al := NewHTTPAllowlist(nil)
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
 
 		srv := httptest.NewServer(p.Handler())
@@ -166,7 +166,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		al := NewHTTPAllowlist(nil)
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{9999})
 
 		srv := httptest.NewServer(p.Handler())
@@ -186,7 +186,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		al := NewHTTPAllowlist([]string{"host.vibepit:" + backendPortStr})
 		blocker := NewCIDRBlocker(nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, nil)
 
 		srv := httptest.NewServer(p.Handler())

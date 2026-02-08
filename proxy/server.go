@@ -58,7 +58,7 @@ func (s *Server) Run(ctx context.Context) error {
 	cidr := NewCIDRBlocker(s.config.BlockCIDR)
 	log := NewLogBuffer(LogBufferCapacity)
 
-	httpProxy := NewHTTPProxy(allowlist, cidr, log)
+	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.Upstream)
 	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.Upstream)
 	controlAPI := NewControlAPI(log, s.config, allowlist)
 

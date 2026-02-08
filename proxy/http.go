@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ type HTTPProxy struct {
 	cidr           *CIDRBlocker
 	log            *LogBuffer
 	proxy          *goproxy.ProxyHttpServer
+	resolver       *net.Resolver
 	hostGateway    string
 	allowHostPorts map[int]bool
 }
@@ -57,12 +59,33 @@ func (p *HTTPProxy) checkRequest(hostname, port string) filterResult {
 	return filterResult{action: ActionAllow}
 }
 
-func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer) *HTTPProxy {
+func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *HTTPProxy {
+	// Build a resolver that talks directly to the upstream DNS server
+	// instead of using /etc/resolv.conf, which may point at the internal
+	// network gateway that cannot resolve external names.
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{}
+			return d.DialContext(ctx, "udp", upstream)
+		},
+	}
+	dialer := &net.Dialer{Resolver: resolver}
+
+	proxy := goproxy.NewProxyHttpServer()
+	proxy.Tr = &http.Transport{
+		DialContext: dialer.DialContext,
+	}
+	proxy.ConnectDial = func(network, addr string) (net.Conn, error) {
+		return dialer.Dial(network, addr)
+	}
+
 	p := &HTTPProxy{
 		allowlist: allowlist,
 		cidr:      cidr,
 		log:       log,
-		proxy:     goproxy.NewProxyHttpServer(),
+		proxy:     proxy,
+		resolver:  resolver,
 	}
 
 	p.proxy.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(
@@ -130,13 +153,13 @@ func (p *HTTPProxy) resolveAndCheckCIDR(hostname string) (bool, net.IP) {
 		return false, nil
 	}
 
-	ips, err := net.LookupIP(hostname)
+	addrs, err := p.resolver.LookupIPAddr(context.Background(), hostname)
 	if err != nil {
 		return false, nil
 	}
-	for _, ip := range ips {
-		if p.cidr.IsBlocked(ip) {
-			return true, ip
+	for _, addr := range addrs {
+		if p.cidr.IsBlocked(addr.IP) {
+			return true, addr.IP
 		}
 	}
 	return false, nil
