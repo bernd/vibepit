@@ -44,7 +44,7 @@ jobs:
           goreleaser build --clean $FLAGS
           tree dist/
         env:
-          FLAGS: "{{ startsWith(github.ref, 'refs/tags/') || '--snapshot' }}"
+          FLAGS: "${{ startsWith(github.ref, 'refs/tags/') || '--snapshot' }}"
 
       # TODO: Add attestation
       - name: "Release"
