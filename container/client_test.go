@@ -29,6 +29,7 @@ func TestDevContainerConfigEnvBuild(t *testing.T) {
 		Image:      "vibepit:latest",
 		ProjectDir: "/home/user/project",
 		WorkDir:    "/home/user/project",
+		RuntimeDir: "/run/user/1000/vibepit/abc123",
 		VolumeName: "vibepit-vol",
 		NetworkID:  "net123",
 		ProxyIP:    "172.28.0.2",

@@ -292,6 +292,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		Image:      image,
 		ProjectDir: projectRoot,
 		WorkDir:    projectRoot,
+		RuntimeDir: sessionDir,
 		VolumeName: volumeName,
 		NetworkID:  netInfo.ID,
 		ProxyIP:    proxyIP,

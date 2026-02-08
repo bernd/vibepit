@@ -4,8 +4,6 @@ TODO
 - We can't mount the vibepit binary into the proxy container on macOS.
   - Need another custom container image?
   - Embed the Linux binary into the macOS binary?
-- Is it a problem that the network configuration in `.vibepit/network.yaml`
-  is visible to the agents?
 - Allow global preset configuration again.
 - Start website and documentation
   - Check if there are tech-writer skills for Claude Code

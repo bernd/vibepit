@@ -8,9 +8,11 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/bernd/vibepit/config"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -475,6 +477,7 @@ type DevContainerConfig struct {
 	Image      string
 	ProjectDir string
 	WorkDir    string
+	RuntimeDir string
 	VolumeName string
 	NetworkID  string
 	ProxyIP    string
@@ -509,6 +512,15 @@ func (c *Client) StartDevContainer(ctx context.Context, cfg DevContainerConfig) 
 	binds := []string{
 		cfg.VolumeName + ":" + HomeMountPath,
 		cfg.ProjectDir + ":" + cfg.ProjectDir,
+	}
+	// Hide the project's .vibepit directory in the sandbox.
+	{
+		vibepitConfigDir := filepath.Join(cfg.ProjectDir, config.ProjectConfigDirName)
+		fakeConfigDir := filepath.Join(cfg.RuntimeDir, filepath.Base(vibepitConfigDir))
+		if err := os.MkdirAll(vibepitConfigDir, 0700); err != nil {
+			return "", fmt.Errorf("create fake config dir: %w", err)
+		}
+		binds = append(binds, fakeConfigDir+":"+vibepitConfigDir+":ro")
 	}
 	if _, err := os.Stat("/etc/localtime"); err == nil {
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")

@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	RuntimeDirName = "vibepit"
-	CacheDirName   = "vibepit"
-	ConfigDirName  = "vibepit"
+	RuntimeDirName       = "vibepit"
+	CacheDirName         = "vibepit"
+	ConfigDirName        = "vibepit"
+	ProjectConfigDirName = ".vibepit"
 )
 
 type GlobalConfig struct {
@@ -155,5 +156,5 @@ func DefaultGlobalPath() string {
 }
 
 func DefaultProjectPath(projectRoot string) string {
-	return filepath.Join(projectRoot, "."+ConfigDirName, "network.yaml")
+	return filepath.Join(projectRoot, ProjectConfigDirName, "network.yaml")
 }
