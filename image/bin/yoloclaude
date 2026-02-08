@@ -2,4 +2,4 @@
 
 claude="$(realpath "$(dirname "$0")")/claude"
 
-exec "$claude" ---allow-dangerously-skip-permissions "$@"
+exec "$claude" --allow-dangerously-skip-permissions "$@"
