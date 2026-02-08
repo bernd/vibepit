@@ -1,7 +1,7 @@
 # Vibepit
 
 <p align="center">
-  <img src="assets/logo-bg.png" alt="Vibepit logo" width="300">
+  <img src="assets/logo.png" alt="Vibepit logo" width="300">
 </p>
 
 Run AI coding agents in isolated containers with network filtering.
