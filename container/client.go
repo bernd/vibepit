@@ -382,6 +382,12 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 				cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
 				cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
 			},
+			// The proxy container is created on the internal vibepit-net,
+			// then connected to bridge after start. Docker generates
+			// /etc/resolv.conf at creation time from the primary network,
+			// so without explicit DNS the system resolver points at the
+			// internal network gateway which can't resolve external names.
+			DNS:           []string{"9.9.9.9"},
 			ExtraHosts:    []string{"host-gateway:host-gateway"},
 			RestartPolicy: container.RestartPolicy{Name: "no"},
 			PortBindings: nat.PortMap{
