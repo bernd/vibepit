@@ -46,6 +46,12 @@ jobs:
         env:
           FLAGS: "${{ startsWith(github.ref, 'refs/tags/') || '--snapshot' }}"
 
+      - name: "Tests"
+        run: "make test"
+
+      - name: "Integration Tests"
+        run: "make test-integration"
+
       # TODO: Add attestation
       - name: "Release"
         if: "startsWith(github.ref, 'refs/tags/')"
