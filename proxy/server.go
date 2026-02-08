@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DefaultUpstreamDNS = "8.8.8.8:53"
+	DefaultUpstreamDNS = "9.9.9.9:53"
 	DNSPort            = ":53"
 	LogBufferCapacity  = 10000
 )
