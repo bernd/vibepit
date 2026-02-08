@@ -121,6 +121,7 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (str
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
 		Filters: filters.NewArgs(
 			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
+			filters.Arg("label", LabelRole+"="+RoleDev),
 		),
 	})
 	if err != nil {
