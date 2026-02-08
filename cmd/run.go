@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	embeddedproxy "github.com/bernd/vibepit/embed/proxy"
+	"github.com/rs/xid"
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
@@ -194,8 +193,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("proxy image: %w", err)
 	}
 
-	containerID := containerIDSuffix()
-	networkName := networkNamePrefix + containerID
+	// Generate a unique session ID.
+	sessionID := xid.New().String()
+
+	networkName := networkNamePrefix + sessionID
 
 	fmt.Printf("+ Creating network: %s\n", networkName)
 	netInfo, err := client.CreateNetwork(ctx, networkName)
@@ -245,9 +246,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("mtls: %w", err)
 	}
 
-	// Generate a unique session ID.
-	sessionID := randomSessionID()
-
 	// Write client credentials so subcommands can find them.
 	sessionDir, err := WriteSessionCredentials(sessionID, creds)
 	if err != nil {
@@ -263,7 +261,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		NetworkID:      netInfo.ID,
 		ProxyIP:        proxyIP,
 		ControlAPIPort: controlAPIPort,
-		Name:           "vibepit-proxy-" + containerID,
+		Name:           "vibepit-proxy-" + sessionID,
 		SessionID:      sessionID,
 		TLSKeyPEM:      string(creds.ServerKeyPEM()),
 		TLSCertPEM:     string(creds.ServerCertPEM()),
@@ -297,7 +295,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		NetworkID:  netInfo.ID,
 		ProxyIP:    proxyIP,
 		ProxyPort:  proxyPort,
-		Name:       "vibepit-" + containerID,
+		Name:       "vibepit-sandbox-" + sessionID,
 		Term:       term,
 		ColorTerm:  os.Getenv("COLORTERM"),
 		UID:        uid,
@@ -312,17 +310,4 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}()
 
 	return client.AttachSession(ctx, devContainerID)
-}
-
-// containerIDSuffix returns a hex string derived from the current process
-// identifiers, used to create unique container and network names.
-func containerIDSuffix() string {
-	return fmt.Sprintf("%x%x%x", os.Getpid(), os.Getuid(), os.Getppid())
-}
-
-// randomSessionID returns a short random hex string for session identification.
-func randomSessionID() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }

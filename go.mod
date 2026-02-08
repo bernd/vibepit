@@ -15,6 +15,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.2
 	github.com/miekg/dns v1.1.72
 	github.com/muesli/termenv v0.16.0
+	github.com/rs/xid v1.6.0
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.6.2
 	golang.org/x/term v0.39.0
