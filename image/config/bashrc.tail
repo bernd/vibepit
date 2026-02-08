@@ -1,13 +1,4 @@
 
-###############################################################################
-# Vibepit theme prompt
-# Colors: cyan=#00d4ff purple=#8b5cf6 orange=#f97316 field=#0099cc
-_cyan='\[\033[38;2;0;212;255m\]'
-_purple='\[\033[38;2;139;92;246m\]'
-_orange='\[\033[38;2;249;115;22m\]'
-_field='\[\033[38;2;0;153;204m\]'
-_reset='\[\033[0m\]'
-PS1="${_cyan}\u${_field}@${_purple}\h${_field}:${_orange}\w ${_cyan}❯${_reset} "
-unset _cyan _purple _orange _field _reset
-###############################################################################
+# Load Vibepit shell customizations
+. /etc/vibepit/bashrc
 

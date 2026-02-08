@@ -81,6 +81,9 @@ RUN install -d -m 0755 "/usr/local/bin" \
 COPY bin /usr/local/bin
 COPY config/profile /etc/profile.d/999-vibepit.sh
 
+RUN install -d -o root -g root -m 0755 /etc/vibepit
+COPY config/bashrc /etc/vibepit/bashrc
+
 COPY config/bashrc.tail /tmp/bashrc.tail
 RUN cat /tmp/bashrc.tail >> /home/$CODE_USER/.bashrc && rm -f /tmp/bashrc.tail
 
