@@ -14,7 +14,7 @@ before:
     - go generate ./...
     # Build a linux/arm64 binary for embedding into darwin builds (macOS Docker support).
     - mkdir -p embed/proxy
-    - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o embed/proxy/vibepit .
+    - sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o embed/proxy/vibepit .'
 
 builds:
   - env:
