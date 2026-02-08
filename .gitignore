@@ -1,6 +1,5 @@
 /.idea/
 /.vibepit/
 /.worktrees/
-# Added by goreleaser init:
 dist/
 embed/proxy/vibepit

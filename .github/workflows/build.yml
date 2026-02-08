@@ -5,6 +5,7 @@ on:
 
   push:
     branches: ["main"]
+    tags: ["v*"]
 
   workflow_dispatch:
 
@@ -22,29 +23,13 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: "actions/checkout@v6"
+        with:
+          fetch-depth: 0
 
       - name: "Setup Golang"
         uses: "actions/setup-go@v6"
         with:
           go-version: "1.25"
-
-      - name: "Setup goreleaser"
-        uses: "goreleaser/goreleaser-action@v6"
-        with:
-          version: "~v2"
-          install-only: true
-
-      - name: "Check setup"
-        run: |
-          goreleaser check
-          goreleaser healthcheck
-
-      - name: "Build"
-        run: |
-          goreleaser build --clean $FLAGS
-          tree dist/
-        env:
-          FLAGS: "${{ startsWith(github.ref, 'refs/tags/') || '--snapshot' }}"
 
       - name: "Tests"
         run: "make test"
@@ -52,8 +37,12 @@ jobs:
       - name: "Integration Tests"
         run: "make test-integration"
 
+      - name: "Build"
+        run: "make release-build"
+
       # TODO: Add attestation
       - name: "Release"
         if: "startsWith(github.ref, 'refs/tags/')"
-        run: "goreleaser release --clean"
-
+        run: "make release-archive release-publish"
+        env:
+          GH_TOKEN: "${{ github.token }}"
