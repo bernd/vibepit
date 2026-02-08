@@ -35,10 +35,14 @@ func NewDNSServer(allowlist, dnsOnly *Allowlist, cidr *CIDRBlocker, log *LogBuff
 	}
 }
 
+func (s *DNSServer) handleFailed(w mdns.ResponseWriter, r *mdns.Msg) {
+	_ = w.WriteMsg(new(mdns.Msg).SetRcode(r, mdns.RcodeServerFailure))
+}
+
 func (s *DNSServer) handler() mdns.Handler {
 	return mdns.HandlerFunc(func(w mdns.ResponseWriter, r *mdns.Msg) {
 		if len(r.Question) == 0 {
-			mdns.HandleFailed(w, r)
+			s.handleFailed(w, r)
 			return
 		}
 
@@ -86,7 +90,7 @@ func (s *DNSServer) handler() mdns.Handler {
 		c := new(mdns.Client)
 		resp, _, err := c.Exchange(r, s.upstream)
 		if err != nil {
-			mdns.HandleFailed(w, r)
+			s.handleFailed(w, r)
 			return
 		}
 
