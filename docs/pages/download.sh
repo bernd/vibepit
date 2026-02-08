@@ -4,10 +4,16 @@ set -euo pipefail
 # ── Vibepit downloader ──────────────────────────────────────────────
 # Downloads the latest vibepit binary from GitHub releases into the
 # current directory.
-# Usage: curl -fsSL https://raw.githubusercontent.com/bernd/vibepit/main/download.sh | bash
+# Usage:
+#   curl -fsSL https://vibepit.dev/download.sh -o download.sh
+#   less download.sh   # inspect first
+#   bash download.sh
 
 REPO="bernd/vibepit"
 INTERACTIVE=true
+
+TMPDIR_DL=$(mktemp -d) || { echo "Failed to create temporary directory." >&2; exit 1; }
+trap '[ -n "$TMPDIR_DL" ] && rm -rf "$TMPDIR_DL"' EXIT
 
 # ── Parse flags ─────────────────────────────────────────────────────
 
@@ -22,14 +28,13 @@ done
 setup_colors() {
     if command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
         CYAN='\033[38;2;0;212;255m'     # #00d4ff
-        PURPLE='\033[38;2;139;92;246m'  # #8b5cf6
         ORANGE='\033[38;2;249;115;22m'  # #f97316
         FIELD='\033[38;2;0;153;204m'    # #0099cc
         BOLD='\033[1m'
         ITALIC='\033[3m'
         RESET='\033[0m'
     else
-        CYAN='' PURPLE='' ORANGE='' FIELD='' BOLD='' ITALIC='' RESET=''
+        CYAN='' ORANGE='' FIELD='' BOLD='' ITALIC='' RESET=''
     fi
 }
 setup_colors
@@ -38,6 +43,26 @@ setup_colors
 
 info()  { printf "${CYAN}%s${RESET}\n" "$*"; }
 error() { printf "${ORANGE}%s${RESET}\n" "$*" >&2; exit 1; }
+
+# ── HTTP fetch helper ─────────────────────────────────────────────
+
+fetch() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$@"
+    elif command -v wget >/dev/null 2>&1; then
+        # Translate curl-style "-o FILE URL" into wget-style "-O FILE URL".
+        local args=()
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -o) args+=("-O" "$2"); shift 2 ;;
+                *)  args+=("$1"); shift ;;
+            esac
+        done
+        wget -q "${args[@]}"
+    else
+        error "Either curl or wget is required."
+    fi
+}
 
 # ── Header ──────────────────────────────────────────────────────────
 
@@ -73,19 +98,23 @@ detect_platform() {
 
 # ── Fetch latest release tag ────────────────────────────────────────
 
+extract_tag() {
+    grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
 fetch_latest_version() {
-    local url="https://api.github.com/repos/${REPO}/releases/latest"
+    local api="https://api.github.com/repos/${REPO}/releases"
     local response
 
-    if command -v curl >/dev/null 2>&1; then
-        response=$(curl -fsSL "$url") || error "Failed to fetch latest release info from GitHub."
-    elif command -v wget >/dev/null 2>&1; then
-        response=$(wget -qO- "$url") || error "Failed to fetch latest release info from GitHub."
-    else
-        error "Either curl or wget is required."
+    response=$(fetch "${api}/latest" 2>/dev/null) || response=""
+    VERSION=$(printf '%s' "$response" | extract_tag) || true
+
+    # Fall back to the newest release (including pre-releases) if no latest exists.
+    if [ -z "$VERSION" ]; then
+        response=$(fetch "$api") || error "Failed to fetch release info from GitHub."
+        VERSION=$(printf '%s' "$response" | extract_tag)
     fi
 
-    VERSION=$(printf '%s' "$response" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
     [ -n "$VERSION" ] || error "Could not determine latest version."
 
     # Strip leading 'v' for the archive filename
@@ -98,25 +127,34 @@ download() {
     local dest="$1"
     local url="$2"
     local archive="$3"
-    local tmpdir
-
-    tmpdir=$(mktemp -d) || error "Failed to create temporary directory."
-    trap 'rm -rf "$tmpdir"' EXIT
+    local archive_dir="$4"
+    local checksums_url
+    checksums_url="$(dirname "$url")/checksums.txt"
 
     info "Downloading ${archive}..."
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -o "${tmpdir}/${archive}" "$url" || error "Download failed: ${url}"
+    fetch -o "${TMPDIR_DL}/${archive}" "$url"             || error "Download failed: ${url}"
+    fetch -o "${TMPDIR_DL}/checksums.txt" "$checksums_url" || error "Download failed: ${checksums_url}"
+
+    info "Verifying checksum..."
+    local expected actual
+    expected=$(grep "${archive}" "${TMPDIR_DL}/checksums.txt" | awk '{print $1}')
+    [ -n "$expected" ] || error "Archive not found in checksums.txt."
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "${TMPDIR_DL}/${archive}" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "${TMPDIR_DL}/${archive}" | awk '{print $1}')
     else
-        wget -qO "${tmpdir}/${archive}" "$url" || error "Download failed: ${url}"
+        error "sha256sum or shasum is required for checksum verification."
     fi
 
-    info "Extracting..."
-    tar -xzf "${tmpdir}/${archive}" -C "$tmpdir" || error "Extraction failed."
+    [ "$expected" = "$actual" ] || error "Checksum mismatch: expected ${expected}, got ${actual}"
 
-    # goreleaser wraps in a directory
-    local binary
-    binary=$(find "$tmpdir" -name vibepit -type f | head -1)
-    [ -n "$binary" ] || error "Could not find vibepit binary in archive."
+    info "Extracting..."
+    tar -xzf "${TMPDIR_DL}/${archive}" -C "$TMPDIR_DL" || error "Extraction failed."
+
+    local binary="${TMPDIR_DL}/${archive_dir}/vibepit"
+    [ -f "$binary" ] || error "Expected binary not found at ${archive_dir}/vibepit in archive."
 
     cp "$binary" "${dest}/vibepit" || error "Failed to write binary to ${dest}"
     chmod +x "${dest}/vibepit"
@@ -137,33 +175,35 @@ main() {
     local dest
     dest=$(pwd)
 
-    local archive="vibepit-${VERSION_NUM}-${PLATFORM_OS}-${PLATFORM_ARCH}.tar.gz"
+    local archive_dir="vibepit-${VERSION_NUM}-${PLATFORM_OS}-${PLATFORM_ARCH}"
+    local archive="${archive_dir}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${VERSION}/${archive}"
 
-    echo "  ${BOLD}URL${RESET}  ${url}"
-    echo "  ${BOLD}To${RESET}   ${dest}/vibepit"
+    printf "  %bURL%b  %s\n" "$BOLD" "$RESET" "$url"
+    printf "  %bTo%b   %s/vibepit\n" "$BOLD" "$RESET" "$dest"
     echo
 
     if $INTERACTIVE; then
-        printf "Proceed? [Y/n] "
-        read -r reply
-        case "$reply" in
-            ""|[Yy]|[Yy]es) ;;
-            *)
-                info "Download cancelled."
-                exit 0
-                ;;
-        esac
+        local reply
+        if [ -f "${dest}/vibepit" ]; then
+            printf "%bvibepit already exists in %s. Overwrite? [y/N]%b " "$ORANGE" "$dest" "$RESET"
+            read -r reply
+            case "$reply" in [Yy]|[Yy]es) ;; *) info "Download cancelled."; exit 0 ;; esac
+        else
+            printf "Proceed? [Y/n] "
+            read -r reply
+            case "$reply" in ""|[Yy]|[Yy]es) ;; *) info "Download cancelled."; exit 0 ;; esac
+        fi
         echo
     fi
 
-    download "$dest" "$url" "$archive"
+    download "$dest" "$url" "$archive" "$archive_dir"
 
     echo
-    info "Downloaded vibepit ${VERSION} to ${dest}/vibepit"
+    printf "%bDownloaded vibepit %s to %s/%bvibepit%b\n" "$CYAN" "$VERSION" "$dest" "$ORANGE" "$RESET"
     info "Move it to a directory in your PATH to use it, for example:"
     echo
-    printf "  ${BOLD}sudo mv %s/vibepit /usr/local/bin/${RESET}\n" "$dest"
+    printf "  %bsudo mv %s/vibepit /usr/local/bin/%b\n" "$BOLD" "$dest" "$RESET"
     echo
 }
 
