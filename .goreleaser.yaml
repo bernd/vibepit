@@ -10,10 +10,11 @@ version: 2
 
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
-    # you may remove this if you don't need go generate
     - go generate ./...
+    # Build a linux/arm64 binary for embedding into darwin builds (macOS Docker support).
+    - mkdir -p embed/proxy
+    - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o embed/proxy/vibepit .
 
 builds:
   - env:

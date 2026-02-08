@@ -15,7 +15,10 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-const RuntimeDirName = "vibepit"
+const (
+	RuntimeDirName = "vibepit"
+	CacheDirName   = "vibepit"
+)
 
 type GlobalConfig struct {
 	AllowHTTP []string `koanf:"allow-http"`

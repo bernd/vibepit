@@ -9,8 +9,11 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
+
+	embeddedproxy "github.com/bernd/vibepit/embed/proxy"
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
@@ -172,6 +175,14 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("cannot find own binary: %w", err)
 	}
 	selfBinary, _ = filepath.EvalSymlinks(selfBinary)
+
+	if runtime.GOOS == "darwin" {
+		proxyBinary, err := embeddedproxy.CachedProxyBinary()
+		if err != nil {
+			return fmt.Errorf("macOS Docker support: %w", err)
+		}
+		selfBinary = proxyBinary
+	}
 
 	// Pull images that are not available locally.
 	if err := client.EnsureImage(ctx, image, false); err != nil {
