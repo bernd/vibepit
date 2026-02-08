@@ -1,9 +1,6 @@
 TODO
 ====
 
-- We can't mount the vibepit binary into the proxy container on macOS.
-  - Need another custom container image?
-  - Embed the Linux binary into the macOS binary?
 - Allow global preset configuration again.
 - Start website and documentation
   - Check if there are tech-writer skills for Claude Code
