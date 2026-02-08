@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vibepit — I pity the vibes</title>
+<style>
+  :root {
+    --cyan: #00d4ff;
+    --purple: #8b5cf6;
+    --orange: #f97316;
+    --dark: #0d1117;
+    --darker: #010409;
+    --text: #e6edf3;
+    --muted: #8b949e;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--darker);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .hero {
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .hero img {
+    width: 280px;
+    margin-bottom: 2rem;
+  }
+
+  .description {
+    font-size: 1.1rem;
+    color: var(--muted);
+    max-width: 480px;
+    line-height: 1.6;
+    margin-bottom: 2rem;
+  }
+
+  .cta {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    border: 1px solid var(--cyan);
+    color: var(--cyan);
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  .cta:hover {
+    background: var(--cyan);
+    color: var(--darker);
+  }
+</style>
+</head>
+<body>
+<div class="hero">
+  <img src="logo.png" alt="Vibepit">
+  <p class="description">
+    Run AI coding agents in isolated containers with network filtering.
+  </p>
+  <a href="https://github.com/bernd/vibepit" class="cta">View on GitHub</a>
+</div>
+</body>
+</html>
