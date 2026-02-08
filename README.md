@@ -29,7 +29,7 @@ controls which domains your agent can reach.
 ## Installation
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bernd/vibepit/main/download.sh | bash
+curl -fsSL https://vibepit.dev/download.sh | bash
 ```
 
 This downloads the latest release for your platform. Move the binary to somewhere in your `PATH`:
