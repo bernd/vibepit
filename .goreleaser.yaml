@@ -8,6 +8,8 @@
 
 version: 2
 
+project_name: vibepit
+
 before:
   hooks:
     - go mod tidy
