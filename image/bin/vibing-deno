@@ -1,6 +1,0 @@
-#!/bin/bash
-
-set -eo pipefail
-
-echo "+ Installing Deno"
-curl -fsSL https://deno.land/install.sh | bash
