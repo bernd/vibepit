@@ -3,6 +3,8 @@ name: Deploy Pages
 on:
   push:
     branches: ["main"]
+    paths:
+      - "docs/pages/**"
 
   workflow_dispatch:
 
