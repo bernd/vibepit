@@ -153,7 +153,7 @@ func domainMatches(host, domain string, wildcard bool) bool {
 	if wildcard {
 		return isSubdomainOf(host, domain)
 	}
-	return host == domain || isSubdomainOf(host, domain)
+	return host == domain
 }
 
 func isSubdomainOf(host, domain string) bool {

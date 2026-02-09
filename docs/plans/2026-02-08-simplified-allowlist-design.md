@@ -38,8 +38,8 @@ allow-dns:
 Controls what the filtering HTTP proxy will forward. Each entry is
 `domain:port-pattern` — the port is mandatory.
 
-**Domain matching** (unchanged from current behavior):
-- Exact domain (`github.com`) matches the domain itself and all subdomains.
+**Domain matching**:
+- Exact domain (`github.com`) matches only the apex domain.
 - Wildcard domain (`*.example.com`) matches subdomains only, not the apex.
 
 **Port matching** uses string glob patterns where `*` matches any sequence of
@@ -62,8 +62,8 @@ access is granted. No specificity tiers, no shadowing, no deny rules.
 Controls what the filtering DNS server will resolve. Each entry is a bare
 domain — no ports (DNS operates before a port is known).
 
-Domain matching is the same as `allow-http` (exact matches domain + subdomains,
-`*.` matches subdomains only).
+Domain matching is the same as `allow-http` (exact matches apex only, `*.`
+matches subdomains only).
 
 ### Independence
 

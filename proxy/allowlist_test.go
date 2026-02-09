@@ -81,8 +81,8 @@ func TestHTTPAllowlist(t *testing.T) {
 		// Exact domain with exact port
 		{"exact match", "github.com", "443", true},
 		{"exact port mismatch", "github.com", "80", false},
-		{"subdomain match", "api.github.com", "443", true},
-		{"deep subdomain", "raw.api.github.com", "443", true},
+		{"subdomain does not match exact", "api.github.com", "443", false},
+		{"deep subdomain does not match exact", "raw.api.github.com", "443", false},
 		{"unrelated domain", "gitlab.com", "443", false},
 
 		// Wildcard domain with full port wildcard
@@ -94,7 +94,7 @@ func TestHTTPAllowlist(t *testing.T) {
 		// Exact domain with port-specific
 		{"port match", "api.stripe.com", "443", true},
 		{"port mismatch", "api.stripe.com", "80", false},
-		{"subdomain of exact", "foo.api.stripe.com", "443", true},
+		{"subdomain of exact does not match", "foo.api.stripe.com", "443", false},
 
 		// Wildcard domain with exact port — these also match *.example.com:*
 		// so we test the *.cdn.example.com:443 rule with an isolated wildcard below
@@ -126,6 +126,13 @@ func TestHTTPAllowlist(t *testing.T) {
 		assert.False(t, isolated.Allows("img.cdn.other.com", "80"))
 		assert.False(t, isolated.Allows("cdn.other.com", "443"), "wildcard should not match apex")
 	})
+
+	t.Run("combined exact and wildcard rules", func(t *testing.T) {
+		combined := NewHTTPAllowlist([]string{"example.com:443", "*.example.com:443"})
+		assert.True(t, combined.Allows("example.com", "443"))
+		assert.True(t, combined.Allows("api.example.com", "443"))
+		assert.False(t, combined.Allows("api.example.com", "80"))
+	})
 }
 
 func TestHTTPAllowlistAdd(t *testing.T) {
@@ -156,7 +163,7 @@ func TestDNSAllowlist(t *testing.T) {
 		want bool
 	}{
 		{"exact match", "github.com", true},
-		{"subdomain of exact", "api.github.com", true},
+		{"subdomain of exact does not match", "api.github.com", false},
 		{"wildcard subdomain", "foo.example.com", true},
 		{"wildcard apex rejected", "example.com", false},
 		{"portless rule", "api.openai.com", true},
@@ -169,4 +176,10 @@ func TestDNSAllowlist(t *testing.T) {
 			assert.Equal(t, tt.want, al.Allows(tt.host))
 		})
 	}
+
+	t.Run("combined exact and wildcard rules", func(t *testing.T) {
+		combined := NewDNSAllowlist([]string{"example.com", "*.example.com"})
+		assert.True(t, combined.Allows("example.com"))
+		assert.True(t, combined.Allows("api.example.com"))
+	})
 }
