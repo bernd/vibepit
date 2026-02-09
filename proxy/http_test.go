@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -121,6 +123,23 @@ func TestHTTPProxy(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "blocked request not found in log")
+	})
+
+	t.Run("blocks when resolver errors with no addresses", func(t *testing.T) {
+		al := NewHTTPAllowlist([]string{"example.com:443"})
+		blocker := NewCIDRBlocker(nil)
+		log := NewLogBuffer(100)
+		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p.resolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("resolver down")
+			},
+		}
+
+		result := p.checkRequest("example.com", "443")
+		assert.Equal(t, ActionBlock, result.action)
+		assert.Equal(t, "DNS resolution failed during CIDR check", result.reason)
 	})
 }
 

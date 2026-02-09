@@ -51,6 +51,9 @@ func (p *HTTPProxy) checkRequest(hostname, port string) filterResult {
 
 	if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
 		reason := fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip)
+		if ip == nil {
+			reason = "DNS resolution failed during CIDR check"
+		}
 		p.logEntry(hostname, port, ActionBlock, reason)
 		return filterResult{action: ActionBlock, reason: reason}
 	}
@@ -107,8 +110,10 @@ func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, u
 			result := p.checkRequest(hostname, port)
 			if result.action == ActionBlock {
 				msg := fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname)
-				if strings.Contains(result.reason, "CIDR") {
+				if strings.Contains(result.reason, "blocked CIDR") {
 					msg = fmt.Sprintf("domain %q resolves to a blocked IP\n", hostname)
+				} else if strings.Contains(result.reason, "resolution failed") {
+					msg = fmt.Sprintf("domain %q could not be resolved safely\n", hostname)
 				}
 				return req, goproxy.NewResponse(req,
 					goproxy.ContentTypeText,
@@ -154,8 +159,12 @@ func (p *HTTPProxy) resolveAndCheckCIDR(hostname string) (bool, net.IP) {
 	}
 
 	addrs, err := p.resolver.LookupIPAddr(context.Background(), hostname)
-	if err != nil {
-		return false, nil
+	// Fail closed only when lookup returned no usable answers.
+	if err != nil && len(addrs) == 0 {
+		// Security: do not allow traffic when CIDR validation cannot be completed.
+		// Failing open here would let requests bypass private-IP blocking during
+		// DNS outages or resolver errors.
+		return true, nil
 	}
 	for _, addr := range addrs {
 		if p.cidr.IsBlocked(addr.IP) {
