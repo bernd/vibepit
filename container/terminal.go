@@ -37,6 +37,17 @@ import (
 	"golang.org/x/term"
 )
 
+func watchResizeSignals(sigCh <-chan os.Signal, done <-chan struct{}, onResize func()) {
+	for {
+		select {
+		case <-done:
+			return
+		case <-sigCh:
+			onResize()
+		}
+	}
+}
+
 // ExitError is returned when a container or exec process exits with a
 // non-zero status code.
 type ExitError struct {
@@ -82,12 +93,16 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 	sigCh := make(chan os.Signal, 1)
 	notifyResize(sigCh)
 	defer signal.Stop(sigCh)
+	// signal.Stop unregisters delivery but does not close sigCh.
+	// done gives the resize watcher an explicit shutdown path.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		for range sigCh {
+		watchResizeSignals(sigCh, done, func() {
 			if w, h, err := term.GetSize(fd); err == nil {
 				resizeFn(uint(h), uint(w))
 			}
-		}
+		})
 	}()
 
 	outputDone := make(chan error, 1)
