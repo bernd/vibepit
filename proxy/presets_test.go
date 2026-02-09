@@ -27,8 +27,13 @@ func TestPresetRegistry(t *testing.T) {
 	t.Run("default meta-preset includes anthropic and vcs-github", func(t *testing.T) {
 		p, ok := reg.Get("default")
 		require.True(t, ok)
-		assert.Contains(t, p.Includes, "anthropic")
-		assert.Contains(t, p.Includes, "vcs-github")
+		assert.Exactly(t, []string{
+			"anthropic",
+			"cdn-github",
+			"homebrew",
+			"openai",
+			"vcs-github",
+		}, p.Includes)
 		assert.Empty(t, p.Domains, "default should have no domains of its own")
 	})
 

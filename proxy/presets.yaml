@@ -10,6 +10,7 @@
     - "anthropic"
     - "cdn-github"
     - "homebrew"
+    - "openai"
     - "vcs-github"
 
 # --- Infrastructure ---
