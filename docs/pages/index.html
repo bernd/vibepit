@@ -35,6 +35,7 @@
 
   .hero img {
     width: 560px;
+    max-width: 100%;
     margin-bottom: 2rem;
   }
 
@@ -102,6 +103,29 @@
   .install button svg {
     width: 16px;
     height: 16px;
+  }
+
+  @media (max-width: 640px) {
+    .hero img {
+      width: 100%;
+      max-width: 560px;
+    }
+
+    .install {
+      max-width: 100%;
+      font-size: 0.8rem;
+    }
+
+    .install code {
+      overflow-x: auto;
+      white-space: nowrap;
+      display: block;
+      max-width: calc(100vw - 6rem);
+    }
+
+    .description {
+      font-size: 1rem;
+    }
   }
 </style>
 </head>
