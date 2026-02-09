@@ -187,11 +187,11 @@ main() {
         local reply
         if [ -f "${dest}/vibepit" ]; then
             printf "%bvibepit already exists in %s. Overwrite? [y/N]%b " "$ORANGE" "$dest" "$RESET"
-            read -r reply
+            read -r reply </dev/tty
             case "$reply" in [Yy]|[Yy]es) ;; *) info "Download cancelled."; exit 0 ;; esac
         else
             printf "Proceed? [Y/n] "
-            read -r reply
+            read -r reply </dev/tty
             case "$reply" in ""|[Yy]|[Yy]es) ;; *) info "Download cancelled."; exit 0 ;; esac
         fi
         echo
