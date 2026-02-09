@@ -31,6 +31,7 @@
   description: "OpenAI services"
   domains:
     - "chatgpt.com:443"
+    - "ab.chatgpt.com:443"
     - "auth.openai.com:443"
 
 - name: "vcs-github"
