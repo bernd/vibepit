@@ -1,8 +1,9 @@
 #!/bin/bash
 
 if ! command -v bun >/dev/null; then
-	echo "Bun not installed. Run: vibing-bun"
-	exit 1
+	/usr/local/bin/brew install oven-sh/bun/bun
 fi
 
-exec bun x ccusage@latest "$@"
+# https://ccusage.com/guide/
+
+exec bunx ccusage@latest "$@"

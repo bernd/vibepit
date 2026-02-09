@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if ! command -v bunx >/dev/null; then
+	/usr/local/bin/brew install oven-sh/bun/bun
+fi
+
+# https://ccusage.com/guide/codex/
+
+exec bunx @ccusage/codex@latest "$@"
