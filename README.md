@@ -6,6 +6,9 @@ Run AI coding agents in isolated containers with network filtering.
 Vibepit launches a sandboxed dev environment with a filtering proxy that
 controls which domains your agent can reach.
 
+> [!CAUTION]
+> Vibepit is still in alpha and under heavy development. Expect breaking changes.
+
 > [!WARNING]
 > Container isolation is not as strong as VM isolation. Kernel vulnerabilities,
 > misconfigurations, or container runtime bugs can weaken the sandbox. Vibepit
@@ -67,6 +70,12 @@ vibepit monitor
 ## Contributing
 
 Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues) but are not accepting pull requests at this time.
+
+## AI Disclosure
+
+This project is planned and built with significant help from AI coding agents, including Claude Code.
+AI-generated code is reviewed, tested, and refactored by humans, but given the nature
+of AI-assisted development, bugs and issues are expected.
 
 ## License
 
