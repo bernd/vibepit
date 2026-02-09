@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"strings"
 	"sync/atomic"
 )
@@ -158,4 +159,51 @@ func domainMatches(host, domain string, wildcard bool) bool {
 
 func isSubdomainOf(host, domain string) bool {
 	return strings.HasSuffix(host, "."+domain)
+}
+
+// ValidateHTTPEntries validates all entries and returns the first error.
+func ValidateHTTPEntries(entries []string) error {
+	for _, entry := range entries {
+		if err := ValidateHTTPEntry(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateHTTPEntry validates a single allow-http entry.
+// Entry format is "domain:port-pattern" where port pattern allows digits and '*'.
+func ValidateHTTPEntry(entry string) error {
+	if entry == "" {
+		return fmt.Errorf("invalid allow entry: empty string")
+	}
+
+	idx := strings.LastIndex(entry, ":")
+	if idx <= 0 || idx == len(entry)-1 {
+		return fmt.Errorf("invalid allow entry %q: expected domain:port-pattern", entry)
+	}
+
+	domain := entry[:idx]
+	port := entry[idx+1:]
+
+	if strings.HasPrefix(domain, "*.") && len(domain) == 2 {
+		return fmt.Errorf("invalid allow entry %q: wildcard domain must include a suffix", entry)
+	}
+	if strings.Contains(domain, ":") {
+		return fmt.Errorf("invalid allow entry %q: domain must not contain ':'", entry)
+	}
+	if strings.Contains(domain, " ") || strings.Contains(port, " ") {
+		return fmt.Errorf("invalid allow entry %q: spaces are not allowed", entry)
+	}
+
+	for _, ch := range port {
+		if ch == '*' {
+			continue
+		}
+		if ch < '0' || ch > '9' {
+			return fmt.Errorf("invalid allow entry %q: port pattern must contain only digits or '*'", entry)
+		}
+	}
+
+	return nil
 }

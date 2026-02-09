@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 )
@@ -58,6 +59,10 @@ func (a *ControlAPI) handleAllow(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Entries) == 0 {
 		http.Error(w, `{"error":"entries required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := ValidateHTTPEntries(req.Entries); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 	a.allowlist.Add(req.Entries)

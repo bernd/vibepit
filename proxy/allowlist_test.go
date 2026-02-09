@@ -183,3 +183,34 @@ func TestDNSAllowlist(t *testing.T) {
 		assert.True(t, combined.Allows("api.example.com"))
 	})
 }
+
+func TestValidateHTTPEntry(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+		want  bool
+	}{
+		{"exact domain exact port", "github.com:443", true},
+		{"wildcard domain wildcard port", "*.example.com:*", true},
+		{"wildcard domain glob port", "*.example.com:80*", true},
+		{"missing port", "github.com", false},
+		{"empty domain", ":443", false},
+		{"empty port", "github.com:", false},
+		{"empty wildcard suffix", "*.:443", false},
+		{"domain contains colon", "a:b:443", false},
+		{"space in domain", "git hub.com:443", false},
+		{"space in port", "github.com:44 3", false},
+		{"non-digit port pattern", "github.com:44a", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateHTTPEntry(tt.entry)
+			if tt.want {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}

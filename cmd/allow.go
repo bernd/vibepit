@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/bernd/vibepit/config"
+	"github.com/bernd/vibepit/proxy"
 	"github.com/urfave/cli/v3"
 )
 
@@ -24,6 +25,9 @@ func AllowCommand() *cli.Command {
 			entries := cmd.Args().Slice()
 			if len(entries) == 0 {
 				return cli.ShowSubcommandHelp(cmd)
+			}
+			if err := proxy.ValidateHTTPEntries(entries); err != nil {
+				return err
 			}
 
 			session, err := discoverSession(ctx, cmd.String("session"))

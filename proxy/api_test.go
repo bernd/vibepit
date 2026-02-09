@@ -94,4 +94,14 @@ func TestControlAPI(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+
+	t.Run("POST /allow with malformed entry returns 400", func(t *testing.T) {
+		body := `{"entries": ["github.com"]}`
+		req := httptest.NewRequest("POST", "/allow", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.False(t, allowlist.Allows("github.com", "443"))
+	})
 }

@@ -125,6 +125,13 @@ func TestControlClient_Allow(t *testing.T) {
 		assert.True(t, allowlist.Allows("new.com", "443"))
 		assert.True(t, allowlist.Allows("other.com", "8080"))
 	})
+
+	t.Run("malformed entries return error and are not added", func(t *testing.T) {
+		_, err := client.Allow([]string{"github.com"})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "400")
+		assert.False(t, allowlist.Allows("github.com", "443"))
+	})
 }
 
 func TestControlClient_ServerError(t *testing.T) {
