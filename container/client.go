@@ -386,7 +386,7 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			RestartPolicy: container.RestartPolicy{Name: "no"},
 			PortBindings: nat.PortMap{
 				containerPort: []nat.PortBinding{
-					{HostIP: "127.0.0.1", HostPort: "0"},
+					{HostIP: "127.0.0.1", HostPort: portStr},
 				},
 			},
 		},
@@ -412,18 +412,7 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		return "", "", fmt.Errorf("connect proxy to bridge: %w", err)
 	}
 
-	// Inspect the container to discover the OS-assigned host port.
-	info, err := c.docker.ContainerInspect(ctx, resp.ID)
-	if err != nil {
-		return "", "", fmt.Errorf("inspect proxy container: %w", err)
-	}
-	bindings := info.NetworkSettings.Ports[containerPort]
-	if len(bindings) == 0 {
-		return "", "", fmt.Errorf("no port binding found for control API")
-	}
-	controlPort := bindings[0].HostPort
-
-	return resp.ID, controlPort, nil
+	return resp.ID, portStr, nil
 }
 
 // ProxySession describes a running proxy for session discovery.
