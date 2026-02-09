@@ -12,7 +12,7 @@ func TestPresetRegistry(t *testing.T) {
 
 	t.Run("all expected presets exist", func(t *testing.T) {
 		expected := []string{
-			"default", "anthropic", "vcs-github", "vcs-other",
+			"default", "anthropic", "openai", "vcs-github", "vcs-other",
 			"containers", "cloud", "pkg-node", "pkg-python",
 			"pkg-ruby", "pkg-rust", "pkg-go", "pkg-jvm",
 			"pkg-others", "linux-distros", "devtools", "monitoring",
@@ -84,7 +84,7 @@ func TestPresetRegistry(t *testing.T) {
 
 	t.Run("non-pkg presets have no matchers", func(t *testing.T) {
 		noMatchers := []string{
-			"default", "anthropic", "vcs-github", "vcs-other",
+			"default", "anthropic", "openai", "vcs-github", "vcs-other",
 			"containers", "cloud", "linux-distros", "devtools",
 			"monitoring", "cdn", "schema", "mcp",
 		}

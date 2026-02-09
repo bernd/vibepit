@@ -25,6 +25,13 @@
     - "claude.ai:443"
     - "platform.claude.com:443"
 
+- name: "openai"
+  group: "Infrastructure"
+  description: "OpenAI services"
+  domains:
+    - "chatgpt.com:443"
+    - "auth.openai.com:443"
+
 - name: "vcs-github"
   group: "Infrastructure"
   description: "GitHub"
@@ -40,6 +47,7 @@
     - "avatars.githubusercontent.com:443"
     - "camo.githubusercontent.com:443"
     - "gist.github.com:443"
+    - "release-assets.githubusercontent.com:443"
 
 - name: "vcs-other"
   group: "Infrastructure"
