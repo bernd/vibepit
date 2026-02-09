@@ -14,6 +14,7 @@ RUN apt-get update \
     curl \
     cpio \
     file \
+    fzf \
     git \
     htop \
     info \
@@ -38,6 +39,7 @@ RUN apt-get update \
     shellcheck \
     sqlite3 \
     strace \
+    tmux \
     tree \
     unzip \
     vim \
