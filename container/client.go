@@ -378,6 +378,9 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			},
 		},
 		&container.HostConfig{
+			// Use bridge as the primary network so HostIP/HostPort publishing is
+			// actually activated by the runtime.
+			NetworkMode: "bridge",
 			Binds: []string{
 				cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
 				cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
@@ -390,26 +393,24 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 				},
 			},
 		},
-		&network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				cfg.NetworkID: {
-					IPAMConfig: &network.EndpointIPAMConfig{
-						IPv4Address: cfg.ProxyIP,
-					},
-				},
-			},
-		},
+		nil,
 		nil,
 		cfg.Name,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("create proxy container: %w", err)
 	}
+	// Attach to the isolated vibepit network with the fixed proxy IP so
+	// sandbox containers can use it as DNS/HTTP proxy endpoint.
+	if err := c.docker.NetworkConnect(ctx, cfg.NetworkID, resp.ID, &network.EndpointSettings{
+		IPAMConfig: &network.EndpointIPAMConfig{
+			IPv4Address: cfg.ProxyIP,
+		},
+	}); err != nil {
+		return "", "", fmt.Errorf("connect proxy to session network: %w", err)
+	}
 	if err := c.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return "", "", fmt.Errorf("start proxy container: %w", err)
-	}
-	if err := c.docker.NetworkConnect(ctx, "bridge", resp.ID, nil); err != nil {
-		return "", "", fmt.Errorf("connect proxy to bridge: %w", err)
 	}
 
 	return resp.ID, portStr, nil
@@ -443,14 +444,8 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 		// The control port label stores the container-internal port, but we
 		// need the host-published port. Find the published binding that
 		// corresponds to the labelled container port.
-		var controlPort string
 		labelPort := ctr.Labels[LabelControlPort]
-		for _, p := range ctr.Ports {
-			if p.PublicPort != 0 && (labelPort == "" || fmt.Sprintf("%d", p.PrivatePort) == labelPort) {
-				controlPort = fmt.Sprintf("%d", p.PublicPort)
-				break
-			}
-		}
+		controlPort := c.resolveControlPort(ctx, ctr, labelPort)
 		sessions = append(sessions, ProxySession{
 			ContainerID: ctr.ID,
 			SessionID:   ctr.Labels[LabelSessionID],
@@ -460,6 +455,56 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 		})
 	}
 	return sessions, nil
+}
+
+// resolveControlPort determines the host-published control port for a proxy
+// container. It tries three sources in order: the ports reported by
+// ContainerList, a full ContainerInspect, and finally the label value itself
+// (which equals HostPort in our setup).
+func (c *Client) resolveControlPort(ctx context.Context, ctr container.Summary, labelPort string) string {
+	for _, p := range ctr.Ports {
+		if p.PublicPort != 0 && (labelPort == "" || strconv.Itoa(int(p.PrivatePort)) == labelPort) {
+			return strconv.Itoa(int(p.PublicPort))
+		}
+	}
+
+	// Some runtimes omit published ports in ContainerList. Fall back to a
+	// full inspect, then to the label itself (HostPort == labelPort in our
+	// setup).
+	if port := c.controlPortFromInspect(ctx, ctr.ID, labelPort); port != "" {
+		return port
+	}
+	return labelPort
+}
+
+func (c *Client) controlPortFromInspect(ctx context.Context, containerID, labelPort string) string {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil || info.NetworkSettings == nil {
+		return ""
+	}
+
+	// Try the specific labelled port first, then any published port.
+	if labelPort != "" {
+		if port := firstHostPort(info.NetworkSettings.Ports[nat.Port(labelPort+"/tcp")]); port != "" {
+			return port
+		}
+	}
+	for _, bindings := range info.NetworkSettings.Ports {
+		if port := firstHostPort(bindings); port != "" {
+			return port
+		}
+	}
+	return ""
+}
+
+// firstHostPort returns the first non-empty HostPort from bindings, or "".
+func firstHostPort(bindings []nat.PortBinding) string {
+	for _, b := range bindings {
+		if b.HostPort != "" {
+			return b.HostPort
+		}
+	}
+	return ""
 }
 
 // DevContainerConfig holds the parameters for the sandboxed dev container.

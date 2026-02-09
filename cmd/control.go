@@ -18,6 +18,9 @@ type ControlClient struct {
 }
 
 func NewControlClient(session *SessionInfo) (*ControlClient, error) {
+	if session.ControlPort == "" {
+		return nil, fmt.Errorf("missing control API port for session %q", session.SessionID)
+	}
 	tlsCfg, err := LoadSessionTLSConfig(session.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load TLS credentials: %w", err)
