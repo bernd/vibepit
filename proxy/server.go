@@ -12,7 +12,7 @@ import (
 
 const (
 	DefaultUpstreamDNS = "9.9.9.9:53"
-	DNSPort            = ":53"
+	DefaultDNSPort     = 53
 	LogBufferCapacity  = 10000
 )
 
@@ -27,6 +27,7 @@ type ProxyConfig struct {
 	HostGateway    string   `json:"host-gateway"`
 	ProxyPort      int      `json:"proxy-port"`
 	ControlAPIPort int      `json:"control-api-port"`
+	DNSPort        int      `json:"dns-port"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
@@ -72,6 +73,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	proxyAddr := fmt.Sprintf(":%d", s.config.ProxyPort)
 	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
+	dnsAddr := fmt.Sprintf(":%d", s.dnsPort())
 
 	errCh := make(chan error, 3)
 
@@ -81,8 +83,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	go func() {
-		fmt.Printf("proxy: DNS server listening on %s\n", DNSPort)
-		errCh <- dnsServer.ListenAndServe(DNSPort)
+		fmt.Printf("proxy: DNS server listening on %s\n", dnsAddr)
+		errCh <- dnsServer.ListenAndServe(dnsAddr)
 	}()
 
 	go func() {
@@ -106,4 +108,11 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (s *Server) dnsPort() int {
+	if s.config.DNSPort > 0 {
+		return s.config.DNSPort
+	}
+	return DefaultDNSPort
 }

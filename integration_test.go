@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,6 +36,29 @@ func controlAPIPostJSON(t *testing.T, client *http.Client, url string, body stri
 	return resp
 }
 
+func mustGetFreePort(t *testing.T) int {
+	t.Helper()
+
+	for i := 0; i < 10; i++ {
+		tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("allocate free TCP port: %v", err)
+		}
+		port := tcpLn.Addr().(*net.TCPAddr).Port
+		_ = tcpLn.Close()
+
+		udpLn, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		_ = udpLn.Close()
+		return port
+	}
+
+	t.Fatalf("allocate free port for both tcp+udp: exhausted retries")
+	return 0
+}
+
 // TestProxyServerIntegration starts the proxy server and validates filtering.
 // Run with: go test -tags=integration -v -run TestProxyServerIntegration
 func TestProxyServerIntegration(t *testing.T) {
@@ -48,12 +73,17 @@ func TestProxyServerIntegration(t *testing.T) {
 	t.Setenv(proxy.EnvProxyTLSCert, string(creds.ServerCertPEM()))
 	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
 
+	proxyPort := mustGetFreePort(t)
+	controlPort := mustGetFreePort(t)
+	dnsPort := mustGetFreePort(t)
+
 	cfg := proxy.ProxyConfig{
 		AllowHTTP:      []string{"httpbin.org:443", "example.com:443"},
 		AllowDNS:       []string{"dns-only.example.com"},
 		Upstream:       "8.8.8.8:53",
-		ProxyPort:      3128,
-		ControlAPIPort: 3129,
+		ProxyPort:      proxyPort,
+		ControlAPIPort: controlPort,
+		DNSPort:        dnsPort,
 	}
 	data, _ := json.Marshal(cfg)
 	tmpFile, _ := os.CreateTemp("", "proxy-test-*.json")
@@ -81,7 +111,7 @@ func TestProxyServerIntegration(t *testing.T) {
 		Transport: &http.Transport{TLSClientConfig: clientTLS},
 	}
 
-	resp, err := tlsClient.Get("https://127.0.0.1:3129/config")
+	resp, err := tlsClient.Get(fmt.Sprintf("https://127.0.0.1:%d/config", controlPort))
 	if err != nil {
 		t.Fatalf("control API request: %v", err)
 	}
@@ -91,28 +121,28 @@ func TestProxyServerIntegration(t *testing.T) {
 		t.Errorf("control API status = %d, want 200", resp.StatusCode)
 	}
 
-	allowHTTPResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-http", `{"entries":["evil.com:80"]}`)
+	allowHTTPResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-http", controlPort), `{"entries":["added-http.example:80"]}`)
 	defer allowHTTPResp.Body.Close()
 	if allowHTTPResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(allowHTTPResp.Body)
 		t.Errorf("control API allow-http status = %d, want 200 (body: %s)", allowHTTPResp.StatusCode, string(body))
 	}
 
-	allowHTTPBadResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-http", `{"entries":["evil.com"]}`)
+	allowHTTPBadResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-http", controlPort), `{"entries":["added-http.example"]}`)
 	defer allowHTTPBadResp.Body.Close()
 	if allowHTTPBadResp.StatusCode != http.StatusBadRequest {
 		body, _ := io.ReadAll(allowHTTPBadResp.Body)
 		t.Errorf("control API allow-http malformed status = %d, want 400 (body: %s)", allowHTTPBadResp.StatusCode, string(body))
 	}
 
-	allowDNSResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-dns", `{"entries":["internal.example.com"]}`)
+	allowDNSResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-dns", controlPort), `{"entries":["internal.example.com"]}`)
 	defer allowDNSResp.Body.Close()
 	if allowDNSResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(allowDNSResp.Body)
 		t.Errorf("control API allow-dns status = %d, want 200 (body: %s)", allowDNSResp.StatusCode, string(body))
 	}
 
-	allowDNSBadResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-dns", `{"entries":["internal.example.com:443"]}`)
+	allowDNSBadResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-dns", controlPort), `{"entries":["internal.example.com:443"]}`)
 	defer allowDNSBadResp.Body.Close()
 	if allowDNSBadResp.StatusCode != http.StatusBadRequest {
 		body, _ := io.ReadAll(allowDNSBadResp.Body)
@@ -122,7 +152,7 @@ func TestProxyServerIntegration(t *testing.T) {
 	// Use the HTTP proxy to verify blocked requests.
 	proxyClient := &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(mustParseURL("http://localhost:3128")),
+			Proxy: http.ProxyURL(mustParseURL(fmt.Sprintf("http://localhost:%d", proxyPort))),
 		},
 	}
 
