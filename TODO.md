@@ -2,6 +2,7 @@ TODO
 ====
 
 - Allow global preset configuration again.
+- Rename "proxy" to "http" in monitor and API. (so we have http and dns)
 - Start website and documentation
   - Check if there are tech-writer skills for Claude Code
   - Let Claude generate an architecture diagram and documentation
@@ -35,7 +36,9 @@ TODO
   was denied. Maybe that helps agents to tell users what to do.
   ("connection denied to to firewall policy - use vibepit add or monitor to allow...")
 - Create end-to-end tests with testcontainers
-- Use Claude Code telemetry to monitor usage: https://code.claude.com/docs/en/monitoring-usage
+- Use Claude Code/Codex telemetry to monitor usage
+  - Claude Code: https://code.claude.com/docs/en/monitoring-usage
+  - Codex: https://developers.openai.com/codex/security/#enable-otel-opt-in
   - The proxy can be the OTLP receiver
   - Can we replicate ccusage with it? If not, how can we do that?
 - Use `CLAUDE_CODE_SHELL_PREFIX` to audit commands?
