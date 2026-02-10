@@ -302,5 +302,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		client.StopAndRemove(ctx, devContainerID)
 	}()
 
+	fmt.Println()
 	return client.AttachSession(ctx, devContainerID)
 }
