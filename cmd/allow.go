@@ -9,10 +9,10 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func AllowCommand() *cli.Command {
+func AllowHTTPCommand() *cli.Command {
 	return &cli.Command{
-		Name:      "allow",
-		Usage:     "Add domains to the proxy allowlist",
+		Name:      "allow-http",
+		Usage:     "Add entries to the proxy HTTP allowlist",
 		ArgsUsage: "<domain:port-pattern>...",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
@@ -55,6 +55,61 @@ func AllowCommand() *cli.Command {
 
 			projectPath := config.DefaultProjectPath(session.ProjectDir)
 			if err := config.AppendAllowHTTP(projectPath, entries); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+			fmt.Printf("+ saved to %s\n", projectPath)
+
+			return nil
+		},
+	}
+}
+
+func AllowDNSCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "allow-dns",
+		Usage:     "Add entries to the proxy DNS allowlist",
+		ArgsUsage: "<domain-pattern>...",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "no-save",
+				Usage: "Skip persisting to project config",
+			},
+			sessionFlag,
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			entries := cmd.Args().Slice()
+			if len(entries) == 0 {
+				return cli.ShowSubcommandHelp(cmd)
+			}
+			if err := proxy.ValidateDNSEntries(entries); err != nil {
+				return err
+			}
+
+			session, err := discoverSession(ctx, cmd.String("session"))
+			if err != nil {
+				return fmt.Errorf("cannot find running proxy: %w", err)
+			}
+
+			client, err := NewControlClient(session)
+			if err != nil {
+				return err
+			}
+
+			added, err := client.AllowDNS(entries)
+			if err != nil {
+				return err
+			}
+
+			for _, d := range added {
+				fmt.Printf("+ allowed %s\n", d)
+			}
+
+			if cmd.Bool("no-save") {
+				return nil
+			}
+
+			projectPath := config.DefaultProjectPath(session.ProjectDir)
+			if err := config.AppendAllowDNS(projectPath, entries); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
 			fmt.Printf("+ saved to %s\n", projectPath)

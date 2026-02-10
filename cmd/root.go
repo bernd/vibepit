@@ -19,7 +19,8 @@ func RootCommand() *cli.Command {
 		Commands: []*cli.Command{
 			// Order matters here!
 			RunCommand(),
-			AllowCommand(),
+			AllowHTTPCommand(),
+			AllowDNSCommand(),
 			ProxyCommand(),
 			SessionsCommand(),
 			MonitorCommand(),

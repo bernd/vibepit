@@ -55,10 +55,11 @@ vibepit -a example.com:443
 vibepit -p github
 ```
 
-Add domains to the allowlist of a running session:
+Add entries to the HTTP or DNS allowlist of a running session:
 
 ```sh
-vibepit allow example.com:443
+vibepit allow-http example.com:443
+vibepit allow-dns internal.example.com
 ```
 
 Open the interactive monitor to view proxy logs and manage the allowlist for a running session:
