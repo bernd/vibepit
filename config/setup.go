@@ -112,7 +112,7 @@ func writeYAMLListSection(sb *strings.Builder, comment, key string, entries []st
 	if len(entries) > 0 {
 		fmt.Fprintf(sb, "%s:\n", key)
 		for _, d := range entries {
-			fmt.Fprintf(sb, "  - %s\n", d)
+			fmt.Fprintf(sb, "  - %s\n", formatYAMLListValue(d))
 		}
 	} else {
 		fmt.Fprintf(sb, "# %s:\n", key)
@@ -120,6 +120,14 @@ func writeYAMLListSection(sb *strings.Builder, comment, key string, entries []st
 			fmt.Fprintf(sb, "#   - %s\n", d)
 		}
 	}
+}
+
+// formatYAMLListValue quotes values that would otherwise be parsed as aliases.
+func formatYAMLListValue(v string) string {
+	if strings.HasPrefix(v, "*") {
+		return fmt.Sprintf("%q", v)
+	}
+	return v
 }
 
 // containsLine checks if a string contains a line starting with the given prefix.
@@ -131,13 +139,33 @@ func containsLine(content, prefix string) bool {
 // AppendAllowHTTP adds entries to the allow-http list of an existing project config.
 // It loads the current config, deduplicates, and writes back.
 func AppendAllowHTTP(projectConfigPath string, entries []string) error {
+	return appendAllowEntries(projectConfigPath, "allow-http", entries)
+}
+
+// AppendAllowDNS adds entries to the allow-dns list of an existing project config.
+// It loads the current config, deduplicates, and writes back.
+func AppendAllowDNS(projectConfigPath string, entries []string) error {
+	return appendAllowEntries(projectConfigPath, "allow-dns", entries)
+}
+
+func appendAllowEntries(projectConfigPath, sectionKey string, entries []string) error {
 	var cfg ProjectConfig
 	if err := loadFile(projectConfigPath, &cfg); err != nil {
 		return fmt.Errorf("load project config: %w", err)
 	}
 
-	existing := make(map[string]bool, len(cfg.AllowHTTP))
-	for _, d := range cfg.AllowHTTP {
+	var current []string
+	switch sectionKey {
+	case "allow-http":
+		current = cfg.AllowHTTP
+	case "allow-dns":
+		current = cfg.AllowDNS
+	default:
+		return fmt.Errorf("unknown config section %q", sectionKey)
+	}
+
+	existing := make(map[string]bool, len(current))
+	for _, d := range current {
 		existing[d] = true
 	}
 
@@ -145,9 +173,15 @@ func AppendAllowHTTP(projectConfigPath string, entries []string) error {
 	for _, d := range entries {
 		if !existing[d] {
 			existing[d] = true
-			cfg.AllowHTTP = append(cfg.AllowHTTP, d)
+			current = append(current, d)
 			added = append(added, d)
 		}
+	}
+	switch sectionKey {
+	case "allow-http":
+		cfg.AllowHTTP = current
+	case "allow-dns":
+		cfg.AllowDNS = current
 	}
 
 	if len(added) == 0 {
@@ -163,27 +197,29 @@ func AppendAllowHTTP(projectConfigPath string, entries []string) error {
 	}
 
 	content := string(data)
-	hasAllow := containsLine(content, "allow-http:")
-	hasCommentedAllow := containsLine(content, "# allow-http:")
+	activeLine := sectionKey + ":"
+	commentedLine := "# " + sectionKey + ":"
+	hasAllow := containsLine(content, activeLine)
+	hasCommentedAllow := containsLine(content, commentedLine)
 
 	var sb strings.Builder
 
 	if hasAllow {
-		// File already has an allow-http section — append new entries at end.
+		// File already has the section — append only newly added entries.
 		sb.WriteString(content)
 		if !strings.HasSuffix(content, "\n") {
 			sb.WriteString("\n")
 		}
 		for _, d := range added {
-			fmt.Fprintf(&sb, "  - %s\n", d)
+			fmt.Fprintf(&sb, "  - %s\n", formatYAMLListValue(d))
 		}
 	} else if hasCommentedAllow {
-		// Replace the commented-out allow-http section with a real one.
+		// Replace the commented-out section with a real one.
 		lines := strings.Split(content, "\n")
 		inCommentedAllow := false
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
-			if trimmed == "# allow-http:" {
+			if trimmed == commentedLine {
 				inCommentedAllow = true
 				continue
 			}
@@ -194,20 +230,20 @@ func AppendAllowHTTP(projectConfigPath string, entries []string) error {
 			sb.WriteString(line)
 			sb.WriteString("\n")
 		}
-		// Add the allow-http section with all entries.
-		sb.WriteString("allow-http:\n")
-		for _, d := range cfg.AllowHTTP {
-			fmt.Fprintf(&sb, "  - %s\n", d)
+		// Add the active section with all entries.
+		fmt.Fprintf(&sb, "%s\n", activeLine)
+		for _, d := range current {
+			fmt.Fprintf(&sb, "  - %s\n", formatYAMLListValue(d))
 		}
 	} else {
-		// No allow-http section at all — append one.
+		// No section at all — append one.
 		sb.WriteString(content)
 		if !strings.HasSuffix(content, "\n") {
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\nallow-http:\n")
-		for _, d := range cfg.AllowHTTP {
-			fmt.Fprintf(&sb, "  - %s\n", d)
+		fmt.Fprintf(&sb, "\n%s\n", activeLine)
+		for _, d := range current {
+			fmt.Fprintf(&sb, "  - %s\n", formatYAMLListValue(d))
 		}
 	}
 

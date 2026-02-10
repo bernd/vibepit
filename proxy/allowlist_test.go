@@ -214,3 +214,34 @@ func TestValidateHTTPEntry(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDNSEntry(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+		want  bool
+	}{
+		{"exact domain", "github.com", true},
+		{"wildcard domain", "*.example.com", true},
+		{"empty string", "", false},
+		{"entry with port", "github.com:443", false},
+		{"space in domain", "git hub.com", false},
+		{"empty wildcard suffix", "*.", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDNSEntry(tt.entry)
+			if tt.want {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateDNSEntries(t *testing.T) {
+	assert.NoError(t, ValidateDNSEntries([]string{"example.com", "*.svc.local"}))
+	assert.Error(t, ValidateDNSEntries([]string{"example.com:443"}))
+}

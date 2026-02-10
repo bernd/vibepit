@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +22,16 @@ func mustParseURL(raw string) *url.URL {
 		panic(err)
 	}
 	return u
+}
+
+func controlAPIPostJSON(t *testing.T, client *http.Client, url string, body string) *http.Response {
+	t.Helper()
+
+	resp, err := client.Post(url, "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("control API POST request: %v", err)
+	}
+	return resp
 }
 
 // TestProxyServerIntegration starts the proxy server and validates filtering.
@@ -77,6 +89,34 @@ func TestProxyServerIntegration(t *testing.T) {
 
 	if resp.StatusCode != 200 {
 		t.Errorf("control API status = %d, want 200", resp.StatusCode)
+	}
+
+	allowHTTPResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-http", `{"entries":["evil.com:80"]}`)
+	defer allowHTTPResp.Body.Close()
+	if allowHTTPResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(allowHTTPResp.Body)
+		t.Errorf("control API allow-http status = %d, want 200 (body: %s)", allowHTTPResp.StatusCode, string(body))
+	}
+
+	allowHTTPBadResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-http", `{"entries":["evil.com"]}`)
+	defer allowHTTPBadResp.Body.Close()
+	if allowHTTPBadResp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(allowHTTPBadResp.Body)
+		t.Errorf("control API allow-http malformed status = %d, want 400 (body: %s)", allowHTTPBadResp.StatusCode, string(body))
+	}
+
+	allowDNSResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-dns", `{"entries":["internal.example.com"]}`)
+	defer allowDNSResp.Body.Close()
+	if allowDNSResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(allowDNSResp.Body)
+		t.Errorf("control API allow-dns status = %d, want 200 (body: %s)", allowDNSResp.StatusCode, string(body))
+	}
+
+	allowDNSBadResp := controlAPIPostJSON(t, tlsClient, "https://127.0.0.1:3129/allow-dns", `{"entries":["internal.example.com:443"]}`)
+	defer allowDNSBadResp.Body.Close()
+	if allowDNSBadResp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(allowDNSBadResp.Body)
+		t.Errorf("control API allow-dns malformed status = %d, want 400 (body: %s)", allowDNSBadResp.StatusCode, string(body))
 	}
 
 	// Use the HTTP proxy to verify blocked requests.

@@ -102,6 +102,24 @@ func NewDNSAllowlist(entries []string) *DNSAllowlist {
 	return al
 }
 
+// Add parses new DNS entries and appends them atomically.
+func (al *DNSAllowlist) Add(entries []string) {
+	newRules := make([]DNSRule, 0, len(entries))
+	for _, entry := range entries {
+		newRules = append(newRules, parseDNSRule(entry))
+	}
+
+	for {
+		current := al.rules.Load()
+		merged := make([]DNSRule, len(*current), len(*current)+len(newRules))
+		copy(merged, *current)
+		merged = append(merged, newRules...)
+		if al.rules.CompareAndSwap(current, &merged) {
+			return
+		}
+	}
+}
+
 func parseDNSRule(entry string) DNSRule {
 	var r DNSRule
 	if strings.HasPrefix(entry, "*.") {
@@ -205,5 +223,33 @@ func ValidateHTTPEntry(entry string) error {
 		}
 	}
 
+	return nil
+}
+
+// ValidateDNSEntries validates all allow-dns entries and returns the first error.
+func ValidateDNSEntries(entries []string) error {
+	for _, entry := range entries {
+		if err := ValidateDNSEntry(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateDNSEntry validates a single allow-dns entry.
+// Entry format is "domain" or "*.domain" and must not include a port.
+func ValidateDNSEntry(entry string) error {
+	if entry == "" {
+		return fmt.Errorf("invalid allow-dns entry: empty string")
+	}
+	if strings.Contains(entry, ":") {
+		return fmt.Errorf("invalid allow-dns entry %q: ports are not allowed", entry)
+	}
+	if strings.HasPrefix(entry, "*.") && len(entry) == 2 {
+		return fmt.Errorf("invalid allow-dns entry %q: wildcard domain must include a suffix", entry)
+	}
+	if strings.Contains(entry, " ") {
+		return fmt.Errorf("invalid allow-dns entry %q: spaces are not allowed", entry)
+	}
 	return nil
 }

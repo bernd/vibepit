@@ -141,3 +141,52 @@ func TestAppendAllowHTTP(t *testing.T) {
 		assert.Contains(t, cfg.AllowHTTP, "bun.sh:443")
 	})
 }
+
+func TestAppendAllowDNS(t *testing.T) {
+	t.Run("adds to existing allow-dns section", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		os.WriteFile(path, []byte("presets:\n  - node\n\nallow-dns:\n  - internal.example.com\n"), 0o644)
+
+		require.NoError(t, AppendAllowDNS(path, []string{"svc.local", "*.corp.example"}))
+
+		cfg := &ProjectConfig{}
+		require.NoError(t, loadFile(path, cfg))
+
+		assert.Contains(t, cfg.AllowDNS, "internal.example.com")
+		assert.Contains(t, cfg.AllowDNS, "svc.local")
+		assert.Contains(t, cfg.AllowDNS, "*.corp.example")
+	})
+
+	t.Run("creates allow-dns section from commented template", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		os.WriteFile(path, []byte("presets:\n  - node\n\n# allow-dns:\n#   - internal.corp.example.com\n"), 0o644)
+
+		require.NoError(t, AppendAllowDNS(path, []string{"svc.local"}))
+
+		cfg := &ProjectConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Contains(t, cfg.AllowDNS, "svc.local")
+	})
+
+	t.Run("deduplicates existing entries", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		os.WriteFile(path, []byte("allow-dns:\n  - internal.example.com\n"), 0o644)
+
+		require.NoError(t, AppendAllowDNS(path, []string{"internal.example.com", "svc.local"}))
+
+		cfg := &ProjectConfig{}
+		require.NoError(t, loadFile(path, cfg))
+
+		count := 0
+		for _, d := range cfg.AllowDNS {
+			if d == "internal.example.com" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "internal.example.com should appear exactly once")
+		assert.Contains(t, cfg.AllowDNS, "svc.local")
+	})
+}

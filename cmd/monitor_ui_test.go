@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
@@ -313,5 +316,67 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
 		assert.Equal(t, 0, s.newCount)
 		assert.Equal(t, 4, s.cursor.Pos)
+	})
+}
+
+func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
+	makeScreen := func(t *testing.T) (*monitorScreen, *proxy.HTTPAllowlist, *proxy.DNSAllowlist, string) {
+		t.Helper()
+		projectDir := t.TempDir()
+		projectPath := config.DefaultProjectPath(projectDir)
+		require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
+		require.NoError(t, os.WriteFile(projectPath, []byte("presets:\n  - default\n"), 0o644))
+
+		httpAllowlist := proxy.NewHTTPAllowlist(nil)
+		dnsAllowlist := proxy.NewDNSAllowlist(nil)
+		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist)
+		client := testControlClient(t, api)
+		screen := newMonitorScreen(&SessionInfo{
+			SessionID:  "test123456",
+			ProjectDir: projectDir,
+		}, client)
+
+		return screen, httpAllowlist, dnsAllowlist, projectPath
+	}
+
+	t.Run("proxy source uses HTTP allow and saves to allow-http", func(t *testing.T) {
+		screen, httpAllowlist, dnsAllowlist, projectPath := makeScreen(t)
+
+		msg := screen.allowCmd(0, proxy.LogEntry{
+			Domain: "api.openai.com",
+			Port:   "443",
+			Source: proxy.SourceProxy,
+		}, true)()
+		result, ok := msg.(allowResultMsg)
+		require.True(t, ok)
+		require.NoError(t, result.err)
+		assert.Equal(t, statusSaved, result.status)
+		assert.True(t, httpAllowlist.Allows("api.openai.com", "443"))
+		assert.False(t, dnsAllowlist.Allows("api.openai.com"))
+
+		cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"), projectPath)
+		require.NoError(t, err)
+		assert.Contains(t, cfg.Project.AllowHTTP, "api.openai.com:443")
+		assert.NotContains(t, cfg.Project.AllowDNS, "api.openai.com")
+	})
+
+	t.Run("dns source uses DNS allow and saves to allow-dns", func(t *testing.T) {
+		screen, httpAllowlist, dnsAllowlist, projectPath := makeScreen(t)
+
+		msg := screen.allowCmd(0, proxy.LogEntry{
+			Domain: "internal.example.com",
+			Source: proxy.SourceDNS,
+		}, true)()
+		result, ok := msg.(allowResultMsg)
+		require.True(t, ok)
+		require.NoError(t, result.err)
+		assert.Equal(t, statusSaved, result.status)
+		assert.True(t, dnsAllowlist.Allows("internal.example.com"))
+		assert.False(t, httpAllowlist.Allows("internal.example.com", "443"))
+
+		cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.yaml"), projectPath)
+		require.NoError(t, err)
+		assert.Contains(t, cfg.Project.AllowDNS, "internal.example.com")
+		assert.NotContains(t, cfg.Project.AllowHTTP, "internal.example.com")
 	})
 }

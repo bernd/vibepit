@@ -66,27 +66,36 @@ func (c *ControlClient) Config() (*config.MergedConfig, error) {
 	return &cfg, nil
 }
 
-// Allow adds domains to the proxy allowlist and returns the entries that were added.
-func (c *ControlClient) Allow(entries []string) ([]string, error) {
+// AllowHTTP adds domains to the proxy HTTP allowlist and returns the entries that were added.
+func (c *ControlClient) AllowHTTP(entries []string) ([]string, error) {
+	return c.postAllow("/allow-http", entries)
+}
+
+// AllowDNS adds domains to the proxy DNS allowlist and returns the entries that were added.
+func (c *ControlClient) AllowDNS(entries []string) ([]string, error) {
+	return c.postAllow("/allow-dns", entries)
+}
+
+func (c *ControlClient) postAllow(path string, entries []string) ([]string, error) {
 	body, err := json.Marshal(map[string]any{"entries": entries})
 	if err != nil {
 		return nil, fmt.Errorf("marshal allow entries: %w", err)
 	}
-	resp, err := c.http.Post(c.baseURL+"/allow", "application/json", bytes.NewReader(body))
+	resp, err := c.http.Post(c.baseURL+path, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("POST /allow: %w", err)
+		return nil, fmt.Errorf("POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("POST /allow: %s", resp.Status)
+		return nil, fmt.Errorf("POST %s: %s", path, resp.Status)
 	}
 
 	var result struct {
 		Added []string `json:"added"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode allow response: %w", err)
+		return nil, fmt.Errorf("decode %s response: %w", path, err)
 	}
 	return result.Added, nil
 }

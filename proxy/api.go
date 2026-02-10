@@ -9,23 +9,26 @@ import (
 
 // ControlAPI serves proxy status and configuration over HTTP.
 type ControlAPI struct {
-	mux       *http.ServeMux
-	log       *LogBuffer
-	config    any
-	allowlist *HTTPAllowlist
+	mux           *http.ServeMux
+	log           *LogBuffer
+	config        any
+	httpAllowlist *HTTPAllowlist
+	dnsAllowlist  *DNSAllowlist
 }
 
-func NewControlAPI(log *LogBuffer, config any, allowlist *HTTPAllowlist) *ControlAPI {
+func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist) *ControlAPI {
 	api := &ControlAPI{
-		mux:       http.NewServeMux(),
-		log:       log,
-		config:    config,
-		allowlist: allowlist,
+		mux:           http.NewServeMux(),
+		log:           log,
+		config:        config,
+		httpAllowlist: httpAllowlist,
+		dnsAllowlist:  dnsAllowlist,
 	}
 	api.mux.HandleFunc("GET /logs", api.handleLogs)
 	api.mux.HandleFunc("GET /stats", api.handleStats)
 	api.mux.HandleFunc("GET /config", api.handleConfig)
-	api.mux.HandleFunc("POST /allow", api.handleAllow)
+	api.mux.HandleFunc("POST /allow-http", api.handleAllowHTTP)
+	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
 	return api
 }
 
@@ -49,24 +52,45 @@ func (a *ControlAPI) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.config)
 }
 
-func (a *ControlAPI) handleAllow(w http.ResponseWriter, r *http.Request) {
+func (a *ControlAPI) decodeAllowRequest(r *http.Request) ([]string, error) {
 	var req struct {
 		Entries []string `json:"entries"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf(`{"error":"invalid JSON"}`)
 	}
 	if len(req.Entries) == 0 {
-		http.Error(w, `{"error":"entries required"}`, http.StatusBadRequest)
+		return nil, fmt.Errorf(`{"error":"entries required"}`)
+	}
+	return req.Entries, nil
+}
+
+func (a *ControlAPI) handleAllowHTTP(w http.ResponseWriter, r *http.Request) {
+	entries, err := a.decodeAllowRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := ValidateHTTPEntries(req.Entries); err != nil {
+	if err := ValidateHTTPEntries(entries); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	a.allowlist.Add(req.Entries)
-	writeJSON(w, map[string]any{"added": req.Entries})
+	a.httpAllowlist.Add(entries)
+	writeJSON(w, map[string]any{"added": entries})
+}
+
+func (a *ControlAPI) handleAllowDNS(w http.ResponseWriter, r *http.Request) {
+	entries, err := a.decodeAllowRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := ValidateDNSEntries(entries); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	a.dnsAllowlist.Add(entries)
+	writeJSON(w, map[string]any{"added": entries})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

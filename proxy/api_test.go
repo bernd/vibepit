@@ -22,7 +22,8 @@ func TestControlAPI(t *testing.T) {
 	}
 
 	allowlist := NewHTTPAllowlist([]string{"a.com:443", "b.com:443"})
-	api := NewControlAPI(log, mergedConfig, allowlist)
+	dnsAllowlist := NewDNSAllowlist([]string{"c.com"})
+	api := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist)
 
 	t.Run("GET /logs returns entries", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/logs", nil)
@@ -60,9 +61,9 @@ func TestControlAPI(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 
-	t.Run("POST /allow adds entries to allowlist", func(t *testing.T) {
+	t.Run("POST /allow-http adds entries to allowlist", func(t *testing.T) {
 		body := `{"entries": ["bun.sh:443", "esm.sh:*"]}`
-		req := httptest.NewRequest("POST", "/allow", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -78,30 +79,56 @@ func TestControlAPI(t *testing.T) {
 		assert.False(t, allowlist.Allows("bun.sh", "80"))
 	})
 
-	t.Run("POST /allow with empty entries returns 400", func(t *testing.T) {
+	t.Run("POST /allow-http with empty entries returns 400", func(t *testing.T) {
 		body := `{"entries": []}`
-		req := httptest.NewRequest("POST", "/allow", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("POST /allow with invalid JSON returns 400", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/allow", strings.NewReader("not json"))
+	t.Run("POST /allow-http with invalid JSON returns 400", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader("not json"))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("POST /allow with malformed entry returns 400", func(t *testing.T) {
+	t.Run("POST /allow-http with malformed entry returns 400", func(t *testing.T) {
 		body := `{"entries": ["github.com"]}`
-		req := httptest.NewRequest("POST", "/allow", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.False(t, allowlist.Allows("github.com", "443"))
+	})
+
+	t.Run("POST /allow-dns adds entries to DNS allowlist", func(t *testing.T) {
+		body := `{"entries": ["internal.example.com", "*.svc.local"]}`
+		req := httptest.NewRequest("POST", "/allow-dns", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var resp map[string][]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, []string{"internal.example.com", "*.svc.local"}, resp["added"])
+		assert.True(t, dnsAllowlist.Allows("internal.example.com"))
+		assert.True(t, dnsAllowlist.Allows("db.svc.local"))
+		assert.False(t, dnsAllowlist.Allows("svc.local"))
+	})
+
+	t.Run("POST /allow-dns with malformed entry returns 400", func(t *testing.T) {
+		body := `{"entries": ["github.com:443"]}`
+		req := httptest.NewRequest("POST", "/allow-dns", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.False(t, dnsAllowlist.Allows("github.com"))
 	})
 }

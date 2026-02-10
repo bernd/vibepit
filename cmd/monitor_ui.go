@@ -55,9 +55,24 @@ type allowResultMsg struct {
 	err    error
 }
 
-func (s *monitorScreen) allowCmd(index int, domain string, save bool) tea.Cmd {
+func allowValueForEntry(entry proxy.LogEntry) string {
+	if entry.Source == proxy.SourceProxy && entry.Port != "" {
+		return entry.Domain + ":" + entry.Port
+	}
+	return entry.Domain
+}
+
+func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea.Cmd {
 	return func() tea.Msg {
-		_, err := s.client.Allow([]string{domain})
+		value := allowValueForEntry(entry)
+
+		var err error
+		switch entry.Source {
+		case proxy.SourceDNS:
+			_, err = s.client.AllowDNS([]string{value})
+		default:
+			_, err = s.client.AllowHTTP([]string{value})
+		}
 		if err != nil {
 			return allowResultMsg{index: index, err: err}
 		}
@@ -66,7 +81,13 @@ func (s *monitorScreen) allowCmd(index int, domain string, save bool) tea.Cmd {
 		if save {
 			status = statusSaved
 			projectPath := config.DefaultProjectPath(s.session.ProjectDir)
-			if err := config.AppendAllowHTTP(projectPath, []string{domain}); err != nil {
+			switch entry.Source {
+			case proxy.SourceDNS:
+				err = config.AppendAllowDNS(projectPath, []string{value})
+			default:
+				err = config.AppendAllowHTTP(projectPath, []string{value})
+			}
+			if err != nil {
 				return allowResultMsg{index: index, err: err}
 			}
 		}
@@ -82,11 +103,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
 				item := s.items[s.cursor.Pos]
 				if item.entry.Action == proxy.ActionBlock && item.status == statusNone {
-					domain := item.entry.Domain
-					if item.entry.Port != "" {
-						domain += ":" + item.entry.Port
-					}
-					return s, s.allowCmd(s.cursor.Pos, domain, msg.String() == "A")
+					return s, s.allowCmd(s.cursor.Pos, item.entry, msg.String() == "A")
 				}
 				w.SetFlash("already allowed")
 			}

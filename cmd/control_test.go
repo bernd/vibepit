@@ -22,7 +22,7 @@ func TestControlClient_Logs(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock, Source: proxy.SourceDNS})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
 	client := testControlClient(t, api)
 
 	t.Run("returns all entries", func(t *testing.T) {
@@ -36,7 +36,7 @@ func TestControlClient_Logs(t *testing.T) {
 	})
 
 	t.Run("returns empty slice when no logs", func(t *testing.T) {
-		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil))
+		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
 		c := testControlClient(t, emptyAPI)
 
 		entries, err := c.Logs()
@@ -51,7 +51,7 @@ func TestControlClient_LogsAfter(t *testing.T) {
 		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	}
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
 	client := testControlClient(t, api)
 
 	t.Run("returns last 25 entries for initial request", func(t *testing.T) {
@@ -84,7 +84,7 @@ func TestControlClient_Stats(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionBlock})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
 	client := testControlClient(t, api)
 
 	stats, err := client.Stats()
@@ -100,7 +100,7 @@ func TestControlClient_Config(t *testing.T) {
 		BlockCIDR: []string{"10.0.0.0/8"},
 	}
 
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewHTTPAllowlist(nil))
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
 	client := testControlClient(t, api)
 
 	cfg, err := client.Config()
@@ -110,13 +110,13 @@ func TestControlClient_Config(t *testing.T) {
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.BlockCIDR)
 }
 
-func TestControlClient_Allow(t *testing.T) {
+func TestControlClient_AllowHTTP(t *testing.T) {
 	allowlist := proxy.NewHTTPAllowlist([]string{"existing.com:443"})
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist, proxy.NewDNSAllowlist(nil))
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
-		added, err := client.Allow([]string{"new.com:443", "other.com:8080"})
+		added, err := client.AllowHTTP([]string{"new.com:443", "other.com:8080"})
 		require.NoError(t, err)
 		assert.Equal(t, []string{"new.com:443", "other.com:8080"}, added)
 	})
@@ -127,17 +127,42 @@ func TestControlClient_Allow(t *testing.T) {
 	})
 
 	t.Run("malformed entries return error and are not added", func(t *testing.T) {
-		_, err := client.Allow([]string{"github.com"})
+		_, err := client.AllowHTTP([]string{"github.com"})
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "400")
 		assert.False(t, allowlist.Allows("github.com", "443"))
 	})
 }
 
+func TestControlClient_AllowDNS(t *testing.T) {
+	dnsAllowlist := proxy.NewDNSAllowlist([]string{"existing.com"})
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), dnsAllowlist)
+	client := testControlClient(t, api)
+
+	t.Run("adds entries and returns them", func(t *testing.T) {
+		added, err := client.AllowDNS([]string{"internal.example.com", "*.svc.local"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"internal.example.com", "*.svc.local"}, added)
+	})
+
+	t.Run("dns allowlist is updated on the server", func(t *testing.T) {
+		assert.True(t, dnsAllowlist.Allows("internal.example.com"))
+		assert.True(t, dnsAllowlist.Allows("api.svc.local"))
+		assert.False(t, dnsAllowlist.Allows("svc.local"))
+	})
+
+	t.Run("malformed entries return error and are not added", func(t *testing.T) {
+		_, err := client.AllowDNS([]string{"github.com:443"})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "400")
+		assert.False(t, dnsAllowlist.Allows("github.com"))
+	})
+}
+
 func TestControlClient_ServerError(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
 	allowlist := proxy.NewHTTPAllowlist(nil)
-	api := proxy.NewControlAPI(log, nil, allowlist)
+	api := proxy.NewControlAPI(log, nil, allowlist, proxy.NewDNSAllowlist(nil))
 	client := testControlClient(t, api)
 
 	t.Run("GET non-existent path returns error", func(t *testing.T) {
@@ -145,8 +170,14 @@ func TestControlClient_ServerError(t *testing.T) {
 		assert.ErrorContains(t, err, "404")
 	})
 
-	t.Run("POST /allow with empty entries returns error", func(t *testing.T) {
-		_, err := client.Allow([]string{})
+	t.Run("POST /allow-http with empty entries returns error", func(t *testing.T) {
+		_, err := client.AllowHTTP([]string{})
+		assert.Error(t, err)
+		assert.ErrorContains(t, err, "400")
+	})
+
+	t.Run("POST /allow-dns with empty entries returns error", func(t *testing.T) {
+		_, err := client.AllowDNS([]string{})
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "400")
 	})

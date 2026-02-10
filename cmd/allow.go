@@ -40,7 +40,7 @@ func AllowCommand() *cli.Command {
 				return err
 			}
 
-			added, err := client.Allow(entries)
+			added, err := client.AllowHTTP(entries)
 			if err != nil {
 				return err
 			}
