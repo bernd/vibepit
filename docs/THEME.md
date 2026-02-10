@@ -1,15 +1,17 @@
 # Vibepit Theme
 
-A cyberpunk color palette and CSS theme inspired by the Vibepit arena aesthetic.
+A cyberpunk UI palette inspired by the Vibepit logo and tuned for readability,
+consistency, and accessibility. It is intentionally curated, not a literal pixel
+extraction.
 
 ---
 
-## Color Palette
+## Brand-Inspired Palette
 
 | Name | Hex | Use |
 |------|-----|-----|
 | Neon Cyan | `#00d4ff` | Primary brand, glows |
-| Electric Blue | `#5ce1ff` | Highlights, hover states |
+| Glow Cyan | `#00f0f0` | Highlights, hover states |
 | Deep Teal | `#0099cc` | Primary dark, borders |
 | Violet | `#8b5cf6` | Secondary accent |
 | Purple Haze | `#6d28d9` | Secondary dark |
@@ -22,7 +24,15 @@ A cyberpunk color palette and CSS theme inspired by the Vibepit arena aesthetic.
 | Sky Glow | `#7dd3fc` | Secondary text |
 | Muted Teal | `#4a90a4` | Disabled, hints |
 | Robot Gray | `#6b7280` | Icons, borders |
-| Matrix Green | `#22d3a0` | Success states |
+
+## System/Semantic Palette
+
+| Name | Hex | Use |
+|------|-----|-----|
+| Success Green | `#10b981` | Success states |
+| Warning Amber | `#f59e0b` | Warning states |
+| Error Red | `#ef4444` | Error states |
+| Matrix Green (Alt) | `#22d3a0` | Secondary success accent |
 
 ---
 
@@ -32,7 +42,7 @@ A cyberpunk color palette and CSS theme inspired by the Vibepit arena aesthetic.
 :root {
   /* Primary - Cyan/Teal glow */
   --color-primary: #00d4ff;
-  --color-primary-light: #5ce1ff;
+  --color-primary-light: #00f0f0;
   --color-primary-dark: #0099cc;
   
   /* Secondary - Purple accent */
@@ -169,5 +179,9 @@ The core palette uses five colors working together:
 3. **Orange** (`#f97316`) — High contrast punch for CTAs and emphasis
 4. **Black** (`#0a0a0a`) — Deep void background
 5. **Dark Blue** (`#0d1829` → `#1a2744`) — Gradient for layered depth
+
+Accessibility usage note:
+Use `--color-secondary-dark` and similarly dark accent tones for decorative
+elements, not small text on dark backgrounds.
 
 The aesthetic is inspired by cyberpunk arenas, circuit boards, and neon lighting. Use glow effects sparingly for emphasis, and maintain high contrast between text and backgrounds for readability.
