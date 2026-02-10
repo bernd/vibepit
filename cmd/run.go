@@ -17,6 +17,7 @@ import (
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/proxy"
+	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
 )
 
@@ -121,7 +122,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != "" {
-		fmt.Printf("+ Attaching to running session in %s\n", projectRoot)
+		tui.Status("Attaching", "to running session in %s", projectRoot)
 		return client.ExecSession(ctx, existing)
 	}
 
@@ -188,7 +189,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	networkName := networkNamePrefix + sessionID
 
-	fmt.Printf("+ Creating network: %s\n", networkName)
+	tui.Status("Creating", "network %s", networkName)
 	netInfo, err := client.CreateNetwork(ctx, networkName)
 	if err != nil {
 		return fmt.Errorf("network: %w", err)
@@ -225,12 +226,12 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	tmpFile.Close()
 
 	defer func() {
-		fmt.Printf("+ Removing network: %s\n", networkName)
+		tui.Status("Removing", "network %s", networkName)
 		client.RemoveNetwork(ctx, netInfo.ID)
 	}()
 
 	// Generate ephemeral mTLS credentials for the control API.
-	fmt.Println("+ Generating mTLS credentials")
+	tui.Status("Generating", "mTLS credentials")
 	creds, err := proxy.GenerateMTLSCredentials(30 * 24 * time.Hour)
 	if err != nil {
 		return fmt.Errorf("mtls: %w", err)
@@ -242,9 +243,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("session credentials: %w", err)
 	}
 	defer CleanupSessionCredentials(sessionID)
-	fmt.Printf("+ Session: %s (credentials in %s)\n", sessionID, sessionDir)
+	tui.Status("Session", "%s (credentials in %s)", sessionID, sessionDir)
 
-	fmt.Println("+ Starting proxy container")
+	tui.Status("Starting", "proxy container")
 	proxyContainerID, controlPort, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
 		BinaryPath:     selfBinary,
 		ConfigPath:     tmpFile.Name(),
@@ -261,9 +262,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("proxy container: %w", err)
 	}
-	fmt.Printf("+ Control API on 127.0.0.1:%s\n", controlPort)
+	tui.Status("Listening", "control API on 127.0.0.1:%s", controlPort)
 	defer func() {
-		fmt.Println("+ Stopping proxy container")
+		tui.Status("Stopping", "proxy container")
 		client.StopAndRemove(ctx, proxyContainerID)
 	}()
 
@@ -275,7 +276,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		term = "xterm-256color"
 	}
 
-	fmt.Printf("+ Starting dev container in %s\n", projectRoot)
+	tui.Status("Starting", "dev container in %s", projectRoot)
 	devContainerID, err := client.StartDevContainer(ctx, ctr.DevContainerConfig{
 		Image:      image,
 		ProjectDir: projectRoot,
@@ -295,7 +296,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("dev container: %w", err)
 	}
 	defer func() {
-		fmt.Println("+ Stopping dev container")
+		tui.Status("Stopping", "dev container")
 		client.StopAndRemove(ctx, devContainerID)
 	}()
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
+	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
 )
 
@@ -46,7 +47,7 @@ func AllowHTTPCommand() *cli.Command {
 			}
 
 			for _, d := range added {
-				fmt.Printf("+ allowed %s\n", d)
+				tui.Status("Allowed", "%s", d)
 			}
 
 			if cmd.Bool("no-save") {
@@ -57,7 +58,7 @@ func AllowHTTPCommand() *cli.Command {
 			if err := config.AppendAllowHTTP(projectPath, entries); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
-			fmt.Printf("+ saved to %s\n", projectPath)
+			tui.Status("Saved", "to %s", projectPath)
 
 			return nil
 		},
@@ -101,7 +102,7 @@ func AllowDNSCommand() *cli.Command {
 			}
 
 			for _, d := range added {
-				fmt.Printf("+ allowed %s\n", d)
+				tui.Status("Allowed", "%s", d)
 			}
 
 			if cmd.Bool("no-save") {
@@ -112,7 +113,7 @@ func AllowDNSCommand() *cli.Command {
 			if err := config.AppendAllowDNS(projectPath, entries); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
-			fmt.Printf("+ saved to %s\n", projectPath)
+			tui.Status("Saved", "to %s", projectPath)
 
 			return nil
 		},

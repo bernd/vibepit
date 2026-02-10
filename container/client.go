@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/config"
+	"github.com/bernd/vibepit/tui"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -95,7 +96,7 @@ func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) error 
 
 // PullImage pulls the latest version of the image.
 func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
-	fmt.Printf("+ Pulling image: %s\n", ref)
+	tui.Status("Pulling", "image %s", ref)
 	reader, err := c.docker.ImagePull(ctx, ref, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
