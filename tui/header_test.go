@@ -83,6 +83,51 @@ func TestRenderHeader_ContainsSessionInfo(t *testing.T) {
 	assert.Contains(t, header, "myproject")
 }
 
+func TestRenderBanner_CompactWhenShort(t *testing.T) {
+	banner := tui.RenderBanner(80, 10)
+	lines := strings.Split(banner, "\n")
+	assert.Equal(t, 1, len(lines), "compact banner should be a single line")
+	assert.Contains(t, banner, "VIBEPIT")
+	assert.Contains(t, banner, "I pity the vibes")
+}
+
+func TestRenderBanner_FullWhenTall(t *testing.T) {
+	banner := tui.RenderBanner(80, 30)
+	lines := strings.Split(banner, "\n")
+	assert.GreaterOrEqual(t, len(lines), 4, "full banner should have at least 4 lines")
+	assert.Contains(t, banner, "I PITY THE VIBES")
+}
+
+func TestRenderBanner_NoSessionInfo(t *testing.T) {
+	full := tui.RenderBanner(80, 30)
+	compact := tui.RenderBanner(80, 10)
+	// Banner lines should end with field chars, not session info
+	for _, line := range strings.Split(full, "\n") {
+		if strings.Contains(line, "PITY") {
+			continue // tagline line
+		}
+		assert.True(t, strings.HasSuffix(line, "╱"), "wordmark lines should end with field chars")
+	}
+	_ = compact // compact is tested separately
+}
+
+func TestRenderBanner_CompactAtThreshold(t *testing.T) {
+	compact := tui.RenderBanner(80, tui.CompactHeaderThreshold-1)
+	compactLines := strings.Split(compact, "\n")
+	assert.Equal(t, 1, len(compactLines))
+
+	full := tui.RenderBanner(80, tui.CompactHeaderThreshold)
+	fullLines := strings.Split(full, "\n")
+	assert.GreaterOrEqual(t, len(fullLines), 4)
+}
+
+func TestRenderBanner_Print(t *testing.T) {
+	t.Skip("visual check only — run with: go test ./tui/ -run TestRenderBanner_Print -v -count=1")
+	fmt.Println(tui.RenderBanner(100, 30))
+	fmt.Println()
+	fmt.Println(tui.RenderBanner(100, 10))
+}
+
 func TestRenderHeader_Print(t *testing.T) {
 	t.Skip("visual check only — run with: go test ./cmd/ -run TestRenderHeader_Print -v -count=1")
 	fmt.Println(tui.RenderHeader(&tui.HeaderInfo{

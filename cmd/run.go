@@ -70,6 +70,8 @@ func imageName(u *user.User) string {
 }
 
 func RunAction(ctx context.Context, cmd *cli.Command) error {
+	tui.PrintHeader()
+
 	projectRoot := cmd.Args().First()
 	if projectRoot == "" {
 		wd, err := os.Getwd()

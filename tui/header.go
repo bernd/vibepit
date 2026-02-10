@@ -2,11 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"golang.org/x/term"
 )
 
 // Theme colors
@@ -112,6 +114,8 @@ func applyGradient(s string, colorA, colorB lipgloss.Color) string {
 // collapses to a single line.
 const CompactHeaderThreshold = 15
 
+const defaultBannerWidth = 80
+
 type HeaderInfo struct {
 	ProjectDir string
 	SessionID  string
@@ -154,6 +158,91 @@ func renderCompactHeader(info *HeaderInfo, width int) string {
 	line := leftPad + " " + name + "  " + tagline + " " + fieldFill + " " + sessionInfo + " " + rightPad
 
 	return line
+}
+
+// PrintHeader prints a branding header (wordmark + tagline) to stdout.
+// It detects terminal size and uses the compact layout on short terminals.
+func PrintHeader() {
+	width, height, err := term.GetSize(int(os.Stdout.Fd()))
+	width, height = normalizeBannerSize(width, height, err)
+	writeBanner(os.Stdout, width, height)
+}
+
+func writeBanner(w io.Writer, width, height int) {
+	fmt.Fprintln(w, RenderBanner(width, height))
+	fmt.Fprintln(w)
+}
+
+func normalizeBannerSize(width int, height int, err error) (int, int) {
+	if err != nil || width <= 0 {
+		width = defaultBannerWidth
+	}
+	if err != nil || height <= 0 {
+		height = 0
+	}
+	return width, height
+}
+
+// RenderBanner produces a branding-only header string (wordmark + tagline,
+// no session info). It uses the compact layout when height < CompactHeaderThreshold.
+func RenderBanner(width, height int) string {
+	if width < 40 {
+		width = 40
+	}
+	if height > 0 && height < CompactHeaderThreshold {
+		return renderCompactBanner(width)
+	}
+	return renderFullBanner(width)
+}
+
+// renderCompactBanner produces a single-line branding banner without session info.
+func renderCompactBanner(width int) string {
+	fieldChar := lipgloss.NewStyle().Foreground(ColorField).Render("╱")
+
+	name := applyGradient("VIBEPIT", ColorCyan, ColorPurple)
+	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I pity the vibes")
+
+	leftPad := strings.Repeat(fieldChar, 3)
+	rightPad := strings.Repeat(fieldChar, 3)
+
+	nameWidth := ansi.StringWidth("VIBEPIT")
+	taglineWidth := ansi.StringWidth("I pity the vibes")
+	fixedWidth := 3 + 1 + nameWidth + 2 + taglineWidth + 1 + 3
+	fill := width - fixedWidth
+	if fill < 1 {
+		fill = 1
+	}
+	fieldFill := strings.Repeat(fieldChar, fill)
+
+	return leftPad + " " + name + "  " + tagline + " " + fieldFill + rightPad
+}
+
+// renderFullBanner produces the 3-row block-art wordmark with tagline, no session info.
+func renderFullBanner(width int) string {
+	rows := buildWordmark("VIBEPIT")
+	wordmarkWidth := ansi.StringWidth(rows[0])
+
+	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I PITY THE VIBES")
+
+	fieldChar := lipgloss.NewStyle().Foreground(ColorField).Render("╱")
+	leftFieldCharLen := 3
+	leftPadLen := leftFieldCharLen + 2
+
+	var lines []string
+	for i := 0; i < 3; i++ {
+		coloredRow := applyGradient(rows[i], ColorCyan, ColorPurple)
+		leftPad := strings.Repeat(fieldChar, leftFieldCharLen)
+		remaining := width - wordmarkWidth - leftPadLen
+		if remaining < 0 {
+			remaining = 0
+		}
+		field := strings.Repeat(fieldChar, remaining)
+		lines = append(lines, leftPad+coloredRow+"  "+field)
+	}
+
+	lines = append(lines, strings.Repeat(" ", leftPadLen)+tagline)
+
+	return strings.Join(lines, "\n")
 }
 
 // RenderHeader produces the styled monitor header with wordmark, tagline,

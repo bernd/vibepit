@@ -13,7 +13,7 @@ var (
 	stderrRenderer = lipgloss.NewRenderer(os.Stderr)
 
 	statusStyle = stdoutRenderer.NewStyle().Bold(true).Foreground(ColorCyan)
-	errorStyle  = stderrRenderer.NewStyle().Bold(true).Foreground(ColorError)
+	errorStyle  = stderrRenderer.NewStyle().Bold(true).Foreground(ColorOrange)
 )
 
 func writeStatus(w io.Writer, verb string, style lipgloss.Style, format string, args ...any) {
