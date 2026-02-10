@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if ! command -v bun >/dev/null; then
+	/usr/local/bin/brew install oven-sh/bun/bun
+fi
+
+# https://skills.sh/
+
+exec bunx skills@latest "$@"
