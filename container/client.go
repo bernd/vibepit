@@ -554,9 +554,11 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 	}
 	if cfg.OTLPPort > 0 {
 		env = append(env,
+			"CLAUDE_CODE_ENABLE_TELEMETRY=1",
+			"OTEL_METRICS_EXPORTER=otlp",
+			"OTEL_LOGS_EXPORTER=otlp",
 			fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://%s:%d", cfg.ProxyIP, cfg.OTLPPort),
 			"OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
-			"CLAUDE_CODE_ENABLE_TELEMETRY=1",
 		)
 	}
 
