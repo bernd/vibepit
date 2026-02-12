@@ -116,6 +116,9 @@ func (a *ControlAPI) handleTelemetryEvents(w http.ResponseWriter, r *http.Reques
 		}
 		events = filtered
 	}
+	if events == nil {
+		events = []TelemetryEvent{}
+	}
 	writeJSON(w, events)
 }
 

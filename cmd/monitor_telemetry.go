@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,10 +20,9 @@ type telemetryScreen struct {
 	pollCursor      uint64
 	events          []proxy.TelemetryEvent
 	metricSummaries []proxy.MetricSummary
-	agents          []string
-	agentFilter     string
-	newCount        int
-	firstTickSeen   bool
+	agents        []string
+	agentFilter   string
+	firstTickSeen bool
 	disabled        bool
 }
 
@@ -189,8 +189,15 @@ func (s *telemetryScreen) renderMetricsHeader() []string {
 	style := lipgloss.NewStyle().Foreground(tui.ColorField)
 	valueStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
 
+	agents := make([]string, 0, len(byAgent))
+	for agent := range byAgent {
+		agents = append(agents, agent)
+	}
+	slices.Sort(agents)
+
 	var lines []string
-	for agent, metrics := range byAgent {
+	for _, agent := range agents {
+		metrics := byAgent[agent]
 		var parts []string
 		parts = append(parts, lipgloss.NewStyle().Foreground(tui.ColorOrange).Render(agent))
 		for _, m := range metrics {

@@ -165,10 +165,7 @@ func extractServiceName(res *resourcepb.Resource) string {
 	for _, attr := range res.Attributes {
 		if attr.Key == "service.name" {
 			if sv, ok := attr.Value.Value.(*commonpb.AnyValue_StringValue); ok {
-				name := sv.StringValue
-				if len(name) > 64 {
-					name = name[:64]
-				}
+				name := truncate(sv.StringValue, 64)
 				return name
 			}
 		}

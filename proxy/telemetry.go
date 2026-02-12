@@ -163,9 +163,13 @@ func (b *TelemetryBuffer) Metrics() []MetricSummary {
 	return result
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+func truncate(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
 		return s
 	}
-	return s[:maxLen]
+	// Avoid splitting a multi-byte UTF-8 character.
+	for maxBytes > 0 && s[maxBytes]>>6 == 0b10 {
+		maxBytes--
+	}
+	return s[:maxBytes]
 }
