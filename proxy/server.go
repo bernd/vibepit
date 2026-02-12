@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 )
 
 const (
@@ -28,6 +29,7 @@ type ProxyConfig struct {
 	ProxyPort      int      `json:"proxy-port"`
 	ControlAPIPort int      `json:"control-api-port"`
 	DNSPort        int      `json:"dns-port"`
+	OTLPPort       int      `json:"otlp-port,omitempty"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
@@ -58,10 +60,11 @@ func (s *Server) Run(ctx context.Context) error {
 	dnsAllowlist := NewDNSAllowlist(s.config.AllowDNS)
 	cidr := NewCIDRBlocker(s.config.BlockCIDR)
 	log := NewLogBuffer(LogBufferCapacity)
+	telemetry := NewTelemetryBuffer(TelemetryBufferCapacity)
 
 	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.Upstream)
 	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.Upstream)
-	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist, nil)
+	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist, telemetry)
 
 	// Configure host.vibepit support.
 	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {
@@ -75,7 +78,11 @@ func (s *Server) Run(ctx context.Context) error {
 	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
 	dnsAddr := fmt.Sprintf(":%d", s.dnsPort())
 
-	errCh := make(chan error, 3)
+	serviceCount := 3
+	if s.config.OTLPPort > 0 {
+		serviceCount = 4
+	}
+	errCh := make(chan error, serviceCount)
 
 	go func() {
 		fmt.Printf("proxy: HTTP proxy listening on %s\n", proxyAddr)
@@ -101,6 +108,22 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		errCh <- http.Serve(ln, controlAPI)
 	}()
+
+	if s.config.OTLPPort > 0 {
+		otlpReceiver := NewOTLPReceiver(telemetry)
+		otlpAddr := fmt.Sprintf(":%d", s.config.OTLPPort)
+		go func() {
+			fmt.Printf("proxy: OTLP receiver listening on %s\n", otlpAddr)
+			srv := &http.Server{
+				Addr:         otlpAddr,
+				Handler:      otlpReceiver,
+				ReadTimeout:  30 * time.Second,
+				WriteTimeout: 30 * time.Second,
+				IdleTimeout:  60 * time.Second,
+			}
+			errCh <- srv.ListenAndServe()
+		}()
+	}
 
 	select {
 	case err := <-errCh:
