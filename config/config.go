@@ -57,7 +57,7 @@ type MergedConfig struct {
 func RandomProxyPort(excluded map[int]bool) (int, error) {
 	const lo, hi = 49152, 65535
 	rangeSize := hi - lo + 1
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		var b [2]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			return 0, err

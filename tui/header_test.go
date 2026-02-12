@@ -102,7 +102,7 @@ func TestRenderBanner_NoSessionInfo(t *testing.T) {
 	full := tui.RenderBanner(80, 30)
 	compact := tui.RenderBanner(80, 10)
 	// Banner lines should end with field chars, not session info
-	for _, line := range strings.Split(full, "\n") {
+	for line := range strings.SplitSeq(full, "\n") {
 		if strings.Contains(line, "PITY") {
 			continue // tagline line
 		}

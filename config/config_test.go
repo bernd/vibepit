@@ -76,7 +76,7 @@ allow-host-ports:
 
 	t.Run("generates random port in ephemeral range avoiding excluded", func(t *testing.T) {
 		excluded := map[int]bool{55000: true, 55001: true}
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			port, err := RandomProxyPort(excluded)
 			require.NoError(t, err)
 			assert.GreaterOrEqual(t, port, 49152)

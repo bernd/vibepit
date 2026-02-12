@@ -79,7 +79,7 @@ func TestLogBuffer(t *testing.T) {
 func TestEntriesAfter(t *testing.T) {
 	t.Run("zero afterID returns last 25 entries", func(t *testing.T) {
 		buf := NewLogBuffer(100)
-		for i := 0; i < 30; i++ {
+		for range 30 {
 			buf.Add(LogEntry{Domain: "a.com"})
 		}
 
@@ -91,7 +91,7 @@ func TestEntriesAfter(t *testing.T) {
 
 	t.Run("zero afterID with fewer than 25 entries returns all", func(t *testing.T) {
 		buf := NewLogBuffer(100)
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			buf.Add(LogEntry{Domain: "a.com"})
 		}
 
@@ -102,7 +102,7 @@ func TestEntriesAfter(t *testing.T) {
 
 	t.Run("returns entries after given ID", func(t *testing.T) {
 		buf := NewLogBuffer(100)
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			buf.Add(LogEntry{Domain: "a.com"})
 		}
 
@@ -115,7 +115,7 @@ func TestEntriesAfter(t *testing.T) {
 
 	t.Run("returns nil when no new entries", func(t *testing.T) {
 		buf := NewLogBuffer(100)
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			buf.Add(LogEntry{Domain: "a.com"})
 		}
 
@@ -126,7 +126,7 @@ func TestEntriesAfter(t *testing.T) {
 	t.Run("works after buffer wraps", func(t *testing.T) {
 		buf := NewLogBuffer(3)
 		// Add 5 entries to a buffer of capacity 3; entries 1 and 2 are overwritten
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			buf.Add(LogEntry{Domain: fmt.Sprintf("%d.com", i+1)})
 		}
 
@@ -141,7 +141,7 @@ func TestEntriesAfter(t *testing.T) {
 
 	t.Run("works after wrap with recent cursor", func(t *testing.T) {
 		buf := NewLogBuffer(3)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			buf.Add(LogEntry{Domain: fmt.Sprintf("%d.com", i+1)})
 		}
 

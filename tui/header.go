@@ -149,10 +149,7 @@ func renderCompactHeader(info *HeaderInfo, width int) string {
 	nameWidth := ansi.StringWidth("VIBEPIT")
 	taglineWidth := ansi.StringWidth("I PITY THE VIBES")
 	fixedWidth := 3 + 1 + nameWidth + 2 + taglineWidth + 1 + 1 + ansi.StringWidth(sessionInfo) + 1 + 3
-	fill := width - fixedWidth
-	if fill < 1 {
-		fill = 1
-	}
+	fill := max(width-fixedWidth, 1)
 	fieldFill := strings.Repeat(fieldChar, fill)
 
 	line := leftPad + " " + name + "  " + tagline + " " + fieldFill + " " + sessionInfo + " " + rightPad
@@ -208,10 +205,7 @@ func renderCompactBanner(width int) string {
 	nameWidth := ansi.StringWidth("VIBEPIT")
 	taglineWidth := ansi.StringWidth("I pity the vibes")
 	fixedWidth := 3 + 1 + nameWidth + 2 + taglineWidth + 1 + 3
-	fill := width - fixedWidth
-	if fill < 1 {
-		fill = 1
-	}
+	fill := max(width-fixedWidth, 1)
 	fieldFill := strings.Repeat(fieldChar, fill)
 
 	return leftPad + " " + name + "  " + tagline + " " + fieldFill + rightPad
@@ -229,13 +223,10 @@ func renderFullBanner(width int) string {
 	leftPadLen := leftFieldCharLen + 2
 
 	var lines []string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		coloredRow := applyGradient(rows[i], ColorCyan, ColorPurple)
 		leftPad := strings.Repeat(fieldChar, leftFieldCharLen)
-		remaining := width - wordmarkWidth - leftPadLen
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(width-wordmarkWidth-leftPadLen, 0)
 		field := strings.Repeat(fieldChar, remaining)
 		lines = append(lines, leftPad+coloredRow+"  "+field)
 	}
@@ -270,23 +261,17 @@ func RenderHeader(info *HeaderInfo, width int, height int) string {
 	leftPadLen := leftFieldCharLen + 2 // spacing
 
 	var lines []string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		coloredRow := applyGradient(rows[i], ColorCyan, ColorPurple)
 		leftPad := strings.Repeat(fieldChar, leftFieldCharLen)
-		remaining := width - wordmarkWidth - leftPadLen
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(width-wordmarkWidth-leftPadLen, 0)
 		field := strings.Repeat(fieldChar, remaining)
 		lines = append(lines, leftPad+coloredRow+"  "+field)
 	}
 
 	taglineWidth := ansi.StringWidth(tagline)
 	sessionWidth := ansi.StringWidth(sessionInfo)
-	gap := width - leftPadLen - taglineWidth - sessionWidth
-	if gap < 2 {
-		gap = 2
-	}
+	gap := max(width-leftPadLen-taglineWidth-sessionWidth, 2)
 	lines = append(lines, strings.Repeat(" ", leftPadLen)+tagline+strings.Repeat(" ", gap)+sessionInfo)
 
 	return strings.Join(lines, "\n")

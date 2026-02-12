@@ -25,7 +25,7 @@ func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s.items = append(s.items, logItem{
 			entry: proxy.LogEntry{
 				ID:     uint64(i + 1),

@@ -84,11 +84,11 @@ func TestProxyContainerConfigHasTLSFields(t *testing.T) {
 }
 
 func TestBoolPtr(t *testing.T) {
-	p := boolPtr(true)
+	p := new(true)
 	if p == nil || !*p {
 		t.Error("boolPtr(true) should return pointer to true")
 	}
-	p = boolPtr(false)
+	p = new(false)
 	if p == nil || *p {
 		t.Error("boolPtr(false) should return pointer to false")
 	}

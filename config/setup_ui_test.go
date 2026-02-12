@@ -433,9 +433,7 @@ func TestPresetScreen_SpaceOnlyTogglesPresets(t *testing.T) {
 
 	// Snapshot again (expand may not have changed checked, but be safe).
 	checkedBefore = make(map[string]bool)
-	for k, v := range s.checked {
-		checkedBefore[k] = v
-	}
+	maps.Copy(checkedBefore, s.checked)
 
 	// Space on domain line should not change checked state.
 	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)

@@ -47,7 +47,7 @@ func TestControlClient_Logs(t *testing.T) {
 
 func TestControlClient_LogsAfter(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	}
 

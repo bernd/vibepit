@@ -173,10 +173,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 func (s *monitorScreen) View(w *tui.Window) string {
 	var logLines []string
-	end := s.cursor.Offset + s.cursor.VpHeight
-	if end > len(s.items) {
-		end = len(s.items)
-	}
+	end := min(s.cursor.Offset+s.cursor.VpHeight, len(s.items))
 	for i := s.cursor.Offset; i < end; i++ {
 		logLines = append(logLines, renderLogLine(s.items[i], i == s.cursor.Pos))
 	}

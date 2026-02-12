@@ -582,7 +582,7 @@ func (c *Client) StartDevContainer(ctx context.Context, cfg DevContainerConfig) 
 		&container.HostConfig{
 			Binds:          binds,
 			DNS:            []string{cfg.ProxyIP},
-			Init:           boolPtr(true),
+			Init:           new(true),
 			ReadonlyRootfs: true,
 			CapDrop:        []string{"ALL"},
 			SecurityOpt:    []string{"no-new-privileges"},
@@ -661,5 +661,3 @@ func (c *Client) StreamLogs(ctx context.Context, containerID string, w io.Writer
 	_, err = io.Copy(w, reader)
 	return err
 }
-
-func boolPtr(b bool) *bool { return &b }
