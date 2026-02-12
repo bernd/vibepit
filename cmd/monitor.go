@@ -38,7 +38,13 @@ func MonitorCommand() *cli.Command {
 				if err != nil {
 					return nil, func() tea.Msg { return sessionErrorMsg{err} }
 				}
-				return newMonitorScreen(info, client), nil
+				var telemetryClient *ControlClient
+				if cfg, err := client.Config(); err == nil && cfg.OTLPPort > 0 {
+					telemetryClient = client
+				}
+				network := newMonitorScreen(info, client)
+				telemetry := newTelemetryScreen(telemetryClient)
+				return newTabbedMonitorScreen(network, telemetry), nil
 			}
 			s := newSessionScreen(sessions, onSelect)
 			header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
@@ -57,7 +63,16 @@ func runMonitor(session *SessionInfo) error {
 	if err != nil {
 		return err
 	}
-	screen := newMonitorScreen(session, client)
+
+	// Check if telemetry is enabled by inspecting the proxy config.
+	var telemetryClient *ControlClient
+	if cfg, err := client.Config(); err == nil && cfg.OTLPPort > 0 {
+		telemetryClient = client
+	}
+
+	network := newMonitorScreen(session, client)
+	telemetry := newTelemetryScreen(telemetryClient)
+	screen := newTabbedMonitorScreen(network, telemetry)
 	header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
 	w := tui.NewWindow(header, screen)
 	p := tea.NewProgram(w, tea.WithAltScreen())
