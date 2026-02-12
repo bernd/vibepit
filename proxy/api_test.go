@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,8 @@ func TestControlAPI(t *testing.T) {
 
 	allowlist := NewHTTPAllowlist([]string{"a.com:443", "b.com:443"})
 	dnsAllowlist := NewDNSAllowlist([]string{"c.com"})
-	api := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist)
+	telBuf := NewTelemetryBuffer(100)
+	api := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist, telBuf)
 
 	t.Run("GET /logs returns entries", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/logs", nil)
@@ -130,5 +132,74 @@ func TestControlAPI(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.False(t, dnsAllowlist.Allows("github.com"))
+	})
+
+	t.Run("GET /telemetry/events returns events", func(t *testing.T) {
+		telBuf.AddEvent(TelemetryEvent{Time: time.Now(), Agent: "claude-code", EventName: "tool_result"})
+		telBuf.AddEvent(TelemetryEvent{Time: time.Now(), Agent: "codex", EventName: "api_request"})
+
+		req := httptest.NewRequest("GET", "/telemetry/events", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var events []TelemetryEvent
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &events))
+		assert.Len(t, events, 2)
+	})
+
+	t.Run("GET /telemetry/events with after param", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/telemetry/events?after=1", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var events []TelemetryEvent
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &events))
+		assert.Len(t, events, 1)
+		assert.Equal(t, "codex", events[0].Agent)
+	})
+
+	t.Run("GET /telemetry/events with agent filter", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/telemetry/events?agent=claude-code", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var events []TelemetryEvent
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &events))
+		assert.Len(t, events, 1)
+		assert.Equal(t, "claude-code", events[0].Agent)
+	})
+
+	t.Run("GET /telemetry/metrics returns metrics", func(t *testing.T) {
+		telBuf.UpdateMetric(MetricSummary{Name: "tokens", Agent: "claude-code", Value: 42})
+
+		req := httptest.NewRequest("GET", "/telemetry/metrics", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var metrics []MetricSummary
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &metrics))
+		assert.Len(t, metrics, 1)
+	})
+
+	t.Run("GET /telemetry/events with nil buffer returns empty array", func(t *testing.T) {
+		nilAPI := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist, nil)
+		req := httptest.NewRequest("GET", "/telemetry/events", nil)
+		w := httptest.NewRecorder()
+		nilAPI.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "[]\n", w.Body.String())
+	})
+
+	t.Run("GET /telemetry/metrics with nil buffer returns empty array", func(t *testing.T) {
+		nilAPI := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist, nil)
+		req := httptest.NewRequest("GET", "/telemetry/metrics", nil)
+		w := httptest.NewRecorder()
+		nilAPI.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "[]\n", w.Body.String())
 	})
 }

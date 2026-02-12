@@ -329,7 +329,7 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 
 		httpAllowlist := proxy.NewHTTPAllowlist(nil)
 		dnsAllowlist := proxy.NewDNSAllowlist(nil)
-		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist)
+		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist, nil)
 		client := testControlClient(t, api)
 		screen := newMonitorScreen(&SessionInfo{
 			SessionID:  "test123456",

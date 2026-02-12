@@ -61,7 +61,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.Upstream)
 	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.Upstream)
-	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
+	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist, nil)
 
 	// Configure host.vibepit support.
 	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {

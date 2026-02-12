@@ -11,15 +11,17 @@ import (
 type ControlAPI struct {
 	mux           *http.ServeMux
 	log           *LogBuffer
+	telemetry     *TelemetryBuffer
 	config        any
 	httpAllowlist *HTTPAllowlist
 	dnsAllowlist  *DNSAllowlist
 }
 
-func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist) *ControlAPI {
+func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist, telemetry *TelemetryBuffer) *ControlAPI {
 	api := &ControlAPI{
 		mux:           http.NewServeMux(),
 		log:           log,
+		telemetry:     telemetry,
 		config:        config,
 		httpAllowlist: httpAllowlist,
 		dnsAllowlist:  dnsAllowlist,
@@ -29,6 +31,8 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 	api.mux.HandleFunc("GET /config", api.handleConfig)
 	api.mux.HandleFunc("POST /allow-http", api.handleAllowHTTP)
 	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
+	api.mux.HandleFunc("GET /telemetry/events", api.handleTelemetryEvents)
+	api.mux.HandleFunc("GET /telemetry/metrics", api.handleTelemetryMetrics)
 	return api
 }
 
@@ -91,6 +95,36 @@ func (a *ControlAPI) handleAllowDNS(w http.ResponseWriter, r *http.Request) {
 	}
 	a.dnsAllowlist.Add(entries)
 	writeJSON(w, map[string]any{"added": entries})
+}
+
+func (a *ControlAPI) handleTelemetryEvents(w http.ResponseWriter, r *http.Request) {
+	if a.telemetry == nil {
+		writeJSON(w, []TelemetryEvent{})
+		return
+	}
+	var afterID uint64
+	if s := r.URL.Query().Get("after"); s != "" {
+		afterID, _ = strconv.ParseUint(s, 10, 64)
+	}
+	events := a.telemetry.EventsAfter(afterID)
+	if agent := r.URL.Query().Get("agent"); agent != "" {
+		filtered := events[:0]
+		for _, e := range events {
+			if e.Agent == agent {
+				filtered = append(filtered, e)
+			}
+		}
+		events = filtered
+	}
+	writeJSON(w, events)
+}
+
+func (a *ControlAPI) handleTelemetryMetrics(w http.ResponseWriter, r *http.Request) {
+	if a.telemetry == nil {
+		writeJSON(w, []MetricSummary{})
+		return
+	}
+	writeJSON(w, a.telemetry.Metrics())
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

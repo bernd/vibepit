@@ -22,7 +22,7 @@ func TestControlClient_Logs(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock, Source: proxy.SourceDNS})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
 	client := testControlClient(t, api)
 
 	t.Run("returns all entries", func(t *testing.T) {
@@ -36,7 +36,7 @@ func TestControlClient_Logs(t *testing.T) {
 	})
 
 	t.Run("returns empty slice when no logs", func(t *testing.T) {
-		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
+		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
 		c := testControlClient(t, emptyAPI)
 
 		entries, err := c.Logs()
@@ -51,7 +51,7 @@ func TestControlClient_LogsAfter(t *testing.T) {
 		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	}
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
 	client := testControlClient(t, api)
 
 	t.Run("returns last 25 entries for initial request", func(t *testing.T) {
@@ -84,7 +84,7 @@ func TestControlClient_Stats(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionBlock})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
 	client := testControlClient(t, api)
 
 	stats, err := client.Stats()
@@ -100,7 +100,7 @@ func TestControlClient_Config(t *testing.T) {
 		BlockCIDR: []string{"10.0.0.0/8"},
 	}
 
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil))
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
 	client := testControlClient(t, api)
 
 	cfg, err := client.Config()
@@ -112,7 +112,7 @@ func TestControlClient_Config(t *testing.T) {
 
 func TestControlClient_AllowHTTP(t *testing.T) {
 	allowlist := proxy.NewHTTPAllowlist([]string{"existing.com:443"})
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist, proxy.NewDNSAllowlist(nil))
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist, proxy.NewDNSAllowlist(nil), nil)
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestControlClient_AllowHTTP(t *testing.T) {
 
 func TestControlClient_AllowDNS(t *testing.T) {
 	dnsAllowlist := proxy.NewDNSAllowlist([]string{"existing.com"})
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), dnsAllowlist)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), dnsAllowlist, nil)
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
@@ -162,7 +162,7 @@ func TestControlClient_AllowDNS(t *testing.T) {
 func TestControlClient_ServerError(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
 	allowlist := proxy.NewHTTPAllowlist(nil)
-	api := proxy.NewControlAPI(log, nil, allowlist, proxy.NewDNSAllowlist(nil))
+	api := proxy.NewControlAPI(log, nil, allowlist, proxy.NewDNSAllowlist(nil), nil)
 	client := testControlClient(t, api)
 
 	t.Run("GET non-existent path returns error", func(t *testing.T) {
