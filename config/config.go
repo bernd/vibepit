@@ -34,6 +34,16 @@ type ProjectConfig struct {
 	AllowHTTP      []string `koanf:"allow-http"`
 	AllowDNS       []string `koanf:"allow-dns"`
 	AllowHostPorts []int    `koanf:"allow-host-ports"`
+	AgentTelemetry *bool    `koanf:"agent-telemetry"`
+}
+
+// AgentTelemetryEnabled returns whether agent telemetry is enabled.
+// It defaults to true when not explicitly set.
+func (p ProjectConfig) AgentTelemetryEnabled() bool {
+	if p.AgentTelemetry == nil {
+		return true
+	}
+	return *p.AgentTelemetry
 }
 
 type Config struct {
@@ -50,6 +60,8 @@ type MergedConfig struct {
 	HostGateway    string   `json:"host-gateway,omitempty"`
 	ProxyPort      int      `json:"proxy-port,omitempty"`
 	ControlAPIPort int      `json:"control-api-port,omitempty"`
+	OTLPPort       int      `json:"otlp-port,omitempty"`
+	AgentTelemetry bool     `json:"-"`
 }
 
 // RandomProxyPort returns a random port in the ephemeral range (49152-65535)
@@ -113,6 +125,7 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
 		AllowDNS:       allowDNS,
 		BlockCIDR:      c.Global.BlockCIDR,
 		AllowHostPorts: c.Project.AllowHostPorts,
+		AgentTelemetry: c.Project.AgentTelemetryEnabled(),
 	}
 }
 

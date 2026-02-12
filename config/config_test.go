@@ -142,6 +142,28 @@ func TestAppendAllowHTTP(t *testing.T) {
 	})
 }
 
+func TestAgentTelemetryConfig(t *testing.T) {
+	t.Run("defaults to true when not set", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		os.WriteFile(path, []byte("presets:\n  - node\n"), 0o644)
+
+		cfg, err := Load(filepath.Join(dir, "global.yaml"), path)
+		require.NoError(t, err)
+		assert.True(t, cfg.Project.AgentTelemetryEnabled())
+	})
+
+	t.Run("can be disabled explicitly", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		os.WriteFile(path, []byte("agent-telemetry: false\n"), 0o644)
+
+		cfg, err := Load(filepath.Join(dir, "global.yaml"), path)
+		require.NoError(t, err)
+		assert.False(t, cfg.Project.AgentTelemetryEnabled())
+	})
+}
+
 func TestAppendAllowDNS(t *testing.T) {
 	t.Run("adds to existing allow-dns section", func(t *testing.T) {
 		dir := t.TempDir()
