@@ -525,6 +525,7 @@ type DevContainerConfig struct {
 	NetworkID  string
 	ProxyIP    string
 	ProxyPort  int
+	OTLPPort   int // 0 means telemetry disabled
 	Name       string
 	Term       string
 	ColorTerm  string
@@ -545,11 +546,18 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 		"HTTPS_PROXY=" + proxyURL,
 		"http_proxy=" + proxyURL,
 		"https_proxy=" + proxyURL,
-		"NO_PROXY=localhost,127.0.0.1",
-		"no_proxy=localhost,127.0.0.1",
+		fmt.Sprintf("NO_PROXY=localhost,127.0.0.1,%s", cfg.ProxyIP),
+		fmt.Sprintf("no_proxy=localhost,127.0.0.1,%s", cfg.ProxyIP),
 	}
 	if cfg.ColorTerm != "" {
 		env = append(env, fmt.Sprintf("COLORTERM=%s", cfg.ColorTerm))
+	}
+	if cfg.OTLPPort > 0 {
+		env = append(env,
+			fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://%s:%d", cfg.ProxyIP, cfg.OTLPPort),
+			"OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+			"CLAUDE_CODE_ENABLE_TELEMETRY=1",
+		)
 	}
 
 	binds := []string{

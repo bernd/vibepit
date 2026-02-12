@@ -215,6 +215,16 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("control API port: %w", err)
 	}
+	var otlpPort int
+	if merged.AgentTelemetry {
+		excluded[controlAPIPort] = true
+		otlpPort, err = config.RandomProxyPort(excluded)
+		if err != nil {
+			return fmt.Errorf("OTLP port: %w", err)
+		}
+		merged.OTLPPort = otlpPort
+	}
+
 	merged.ProxyPort = proxyPort
 	merged.ControlAPIPort = controlAPIPort
 
@@ -288,6 +298,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		NetworkID:  netInfo.ID,
 		ProxyIP:    proxyIP,
 		ProxyPort:  proxyPort,
+		OTLPPort:   otlpPort,
 		Name:       "vibepit-sandbox-" + sessionID,
 		Term:       term,
 		ColorTerm:  os.Getenv("COLORTERM"),
