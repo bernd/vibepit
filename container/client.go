@@ -162,15 +162,12 @@ func (c *Client) FindProxyIP(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("proxy container has no IP address")
 }
 
-// AttachSession connects to a container's main process stdio. When the
-// user exits the shell, the container's entrypoint exits and the container
-// stops on its own. Returns an *ExitError if the container exits with a
-// non-zero status code.
-func (c *Client) AttachSession(ctx context.Context, containerID string) error {
-	// Start waiting for the container exit before attaching to avoid a
-	// race where the container exits between attach and wait.
-	waitCh, waitErrCh := c.docker.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
-
+// AttachAndStartSession connects to a container's main process stdio, then starts it.
+// This ensures startup output from the entrypoint is visible to the attached
+// client. When the user exits the shell, the container's entrypoint exits and
+// the container stops on its own. Returns an *ExitError if the container exits
+// with a non-zero status code.
+func (c *Client) AttachAndStartSession(ctx context.Context, containerID string) error {
 	resp, err := c.docker.ContainerAttach(ctx, containerID, container.AttachOptions{
 		Stream: true,
 		Stdin:  true,
@@ -181,6 +178,16 @@ func (c *Client) AttachSession(ctx context.Context, containerID string) error {
 		return fmt.Errorf("attach: %w", err)
 	}
 	defer resp.Close()
+
+	waitCtx, cancelWait := context.WithCancel(ctx)
+	defer cancelWait()
+	// Register wait before start to avoid missing fast exits between start and wait.
+	// Use next-exit so created containers do not return immediately.
+	waitCh, waitErrCh := c.docker.ContainerWait(waitCtx, containerID, container.WaitConditionNextExit)
+
+	if err := c.docker.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("start attached container: %w", err)
+	}
 
 	resizeFn := func(height, width uint) {
 		c.docker.ContainerResize(ctx, containerID, container.ResizeOptions{
@@ -525,9 +532,9 @@ type DevContainerConfig struct {
 	User       string
 }
 
-// StartDevContainer creates and starts the sandboxed development container
+// CreateDevContainer creates the sandboxed development container
 // with proxy environment variables and a read-only root filesystem.
-func (c *Client) StartDevContainer(ctx context.Context, cfg DevContainerConfig) (string, error) {
+func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig) (string, error) {
 	proxyURL := fmt.Sprintf("http://%s:%d", cfg.ProxyIP, cfg.ProxyPort)
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
@@ -598,9 +605,6 @@ func (c *Client) StartDevContainer(ctx context.Context, cfg DevContainerConfig) 
 	)
 	if err != nil {
 		return "", fmt.Errorf("create dev container: %w", err)
-	}
-	if err := c.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return "", fmt.Errorf("start dev container: %w", err)
 	}
 	return resp.ID, nil
 }

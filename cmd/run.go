@@ -278,8 +278,8 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		term = "xterm-256color"
 	}
 
-	tui.Status("Starting", "dev container in %s", projectRoot)
-	devContainerID, err := client.StartDevContainer(ctx, ctr.DevContainerConfig{
+	tui.Status("Creating", "dev container in %s", projectRoot)
+	devContainerID, err := client.CreateDevContainer(ctx, ctr.DevContainerConfig{
 		Image:      image,
 		ProjectDir: projectRoot,
 		WorkDir:    projectRoot,
@@ -302,6 +302,8 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		client.StopAndRemove(ctx, devContainerID)
 	}()
 
+	tui.Status("Starting", "dev container")
+	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	return client.AttachSession(ctx, devContainerID)
+	return client.AttachAndStartSession(ctx, devContainerID)
 }
