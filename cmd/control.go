@@ -100,6 +100,22 @@ func (c *ControlClient) postAllow(path string, entries []string) ([]string, erro
 	return result.Added, nil
 }
 
+func (c *ControlClient) TelemetryEventsAfter(afterID uint64) ([]proxy.TelemetryEvent, error) {
+	var events []proxy.TelemetryEvent
+	if err := c.get(fmt.Sprintf("/telemetry/events?after=%d", afterID), &events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (c *ControlClient) TelemetryMetrics() ([]proxy.MetricSummary, error) {
+	var metrics []proxy.MetricSummary
+	if err := c.get("/telemetry/metrics", &metrics); err != nil {
+		return nil, err
+	}
+	return metrics, nil
+}
+
 func (c *ControlClient) get(path string, dest any) error {
 	resp, err := c.http.Get(c.baseURL + path)
 	if err != nil {

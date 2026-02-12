@@ -159,6 +159,43 @@ func TestControlClient_AllowDNS(t *testing.T) {
 	})
 }
 
+func TestControlClient_TelemetryEventsAfter(t *testing.T) {
+	telBuf := proxy.NewTelemetryBuffer(100)
+	telBuf.AddEvent(proxy.TelemetryEvent{Agent: "claude-code", EventName: "tool_result"})
+	telBuf.AddEvent(proxy.TelemetryEvent{Agent: "claude-code", EventName: "api_request"})
+	telBuf.AddEvent(proxy.TelemetryEvent{Agent: "codex", EventName: "tool_result"})
+
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), telBuf)
+	client := testControlClient(t, api)
+
+	t.Run("returns last events for initial request", func(t *testing.T) {
+		events, err := client.TelemetryEventsAfter(0)
+		require.NoError(t, err)
+		require.Len(t, events, 3)
+	})
+
+	t.Run("returns only new events after cursor", func(t *testing.T) {
+		events, err := client.TelemetryEventsAfter(2)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		assert.Equal(t, "codex", events[0].Agent)
+	})
+}
+
+func TestControlClient_TelemetryMetrics(t *testing.T) {
+	telBuf := proxy.NewTelemetryBuffer(100)
+	telBuf.UpdateMetric(proxy.MetricSummary{Name: "tokens", Agent: "claude-code", Value: 42})
+
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), telBuf)
+	client := testControlClient(t, api)
+
+	metrics, err := client.TelemetryMetrics()
+	require.NoError(t, err)
+	require.Len(t, metrics, 1)
+	assert.Equal(t, "tokens", metrics[0].Name)
+	assert.Equal(t, float64(42), metrics[0].Value)
+}
+
 func TestControlClient_ServerError(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
 	allowlist := proxy.NewHTTPAllowlist(nil)
