@@ -68,6 +68,19 @@ Open the interactive monitor to view proxy logs and manage the allowlist for a r
 vibepit monitor
 ```
 
+## Documentation Site
+
+Build or serve the MkDocs site locally:
+
+```sh
+make docs-install
+make docs-build
+make docs-serve
+```
+
+These targets use [`uv`](https://docs.astral.sh/uv/) to manage Python dependencies.
+`make docs-build` outputs the MkDocs site into `site/`.
+
 ## Contributing
 
 Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues) but are not accepting pull requests at this time.

@@ -1,0 +1,57 @@
+site_name: Vibepit
+site_description: Run AI coding agents in isolated containers with network filtering.
+site_url: https://vibepit.dev
+repo_url: https://github.com/bernd/vibepit
+repo_name: bernd/vibepit
+
+docs_dir: docs/content
+site_dir: site
+
+theme:
+  name: material
+  logo: assets/logo-text.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: cyan
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: cyan
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+extra_css:
+  - stylesheets/theme.css
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - First Sandbox: tutorials/first-sandbox.md
+  - How-To Guides:
+      - Manage Allowlist and Monitor: how-to/allowlist-and-monitor.md
+      - Troubleshoot Common Issues: how-to/troubleshooting.md
+  - Reference:
+      - CLI: reference/cli.md
+  - Explanations:
+      - Security Model: explanations/security-model.md
