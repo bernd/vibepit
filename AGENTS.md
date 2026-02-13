@@ -58,6 +58,7 @@ Current root commands are defined in `cmd/root.go` and include:
 - `proxy` -- internal command used inside the proxy container.
 - `sessions` -- list active sessions.
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
+- `telemetry` -- stream raw OTLP events and metrics as JSON lines.
 - `update` -- pull latest runtime images.
 
 When docs and behavior differ, treat `cmd/root.go` and command files under
