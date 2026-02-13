@@ -77,13 +77,14 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 	// First try the regular Docker environment chain.
 	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
 	if err == nil {
-		if _, err := cli.Ping(context.Background()); err == nil {
+		if _, pingErr := cli.Ping(context.Background()); pingErr == nil {
 			displayDockerHost(client.debug, cli)
 			client.docker = cli
 			return client, nil
-		}
-		if client.debug {
-			tui.Debug("Could not ping Docker: %v", err)
+		} else {
+			if client.debug {
+				tui.Debug("Could not ping Docker: %v", pingErr)
+			}
 		}
 		cli.Close()
 	} else {
@@ -129,12 +130,6 @@ func findSocket(debug bool, paths ...string) (*dockerclient.Client, error) {
 	for _, path := range paths {
 		if debug {
 			tui.Debug("Trying socket: %s", path)
-		}
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			if debug {
-				tui.Debug("Socket does not exist: %s", path)
-			}
-			continue
 		}
 		cli, err := dockerclient.NewClientWithOpts(
 			dockerclient.WithHost(path),
