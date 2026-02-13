@@ -116,6 +116,11 @@ func (a *ControlAPI) handleTelemetryEvents(w http.ResponseWriter, r *http.Reques
 		}
 		events = filtered
 	}
+	if r.URL.Query().Get("raw") != "true" {
+		for i := range events {
+			events[i].RawLog = nil
+		}
+	}
 	if events == nil {
 		events = []TelemetryEvent{}
 	}
@@ -127,7 +132,13 @@ func (a *ControlAPI) handleTelemetryMetrics(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, []MetricSummary{})
 		return
 	}
-	writeJSON(w, a.telemetry.Metrics())
+	metrics := a.telemetry.Metrics()
+	if r.URL.Query().Get("raw") != "true" {
+		for i := range metrics {
+			metrics[i].RawMetric = nil
+		}
+	}
+	writeJSON(w, metrics)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
