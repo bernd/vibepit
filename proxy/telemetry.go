@@ -146,6 +146,7 @@ func (b *TelemetryBuffer) UpdateMetric(m MetricSummary) {
 	key := metricKey{name: m.Name, agent: m.Agent, metricType: m.Attributes["type"]}
 	if existing, ok := b.metrics[key]; ok {
 		existing.Value = m.Value
+		existing.RawMetric = m.RawMetric
 		return
 	}
 	if len(b.metrics) >= b.maxMetricSeries {
