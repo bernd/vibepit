@@ -113,7 +113,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		image = localImage
 	}
 
-	client, err := ctr.NewClient()
+	client, err := ctr.NewClient(ctr.WithDebug(cmd.Bool(debugFlag)))
 	if err != nil {
 		return err
 	}
