@@ -7,9 +7,13 @@ repo_name: bernd/vibepit
 docs_dir: docs/content
 site_dir: site
 
+copyright: "&copy; 2026 Bernd Ahlers &amp; the Vibepit contributors"
+
 theme:
   name: material
+  custom_dir: docs/overrides
   logo: assets/logo-text.png
+  favicon: assets/favicon/favicon.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
