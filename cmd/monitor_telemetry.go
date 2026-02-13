@@ -70,7 +70,7 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 
 	case tui.TickMsg:
 		if s.client != nil && (w.IntervalElapsed(telemetryPollInterval) || !s.firstTickSeen) {
-			events, err := s.client.TelemetryEventsAfter(s.pollCursor)
+			events, err := s.client.TelemetryEventsAfter(s.pollCursor, "", false)
 			if err != nil {
 				w.SetError(err)
 			} else {
@@ -89,7 +89,7 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 				}
 			}
 
-			metrics, err := s.client.TelemetryMetrics()
+			metrics, err := s.client.TelemetryMetrics(false)
 			if err == nil {
 				s.metricSummaries = metrics
 			}

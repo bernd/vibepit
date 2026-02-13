@@ -100,17 +100,28 @@ func (c *ControlClient) postAllow(path string, entries []string) ([]string, erro
 	return result.Added, nil
 }
 
-func (c *ControlClient) TelemetryEventsAfter(afterID uint64) ([]proxy.TelemetryEvent, error) {
+func (c *ControlClient) TelemetryEventsAfter(afterID uint64, agent string, raw bool) ([]proxy.TelemetryEvent, error) {
 	var events []proxy.TelemetryEvent
-	if err := c.get(fmt.Sprintf("/telemetry/events?after=%d", afterID), &events); err != nil {
+	path := fmt.Sprintf("/telemetry/events?after=%d", afterID)
+	if agent != "" {
+		path += "&agent=" + agent
+	}
+	if raw {
+		path += "&raw=true"
+	}
+	if err := c.get(path, &events); err != nil {
 		return nil, err
 	}
 	return events, nil
 }
 
-func (c *ControlClient) TelemetryMetrics() ([]proxy.MetricSummary, error) {
+func (c *ControlClient) TelemetryMetrics(raw bool) ([]proxy.MetricSummary, error) {
 	var metrics []proxy.MetricSummary
-	if err := c.get("/telemetry/metrics", &metrics); err != nil {
+	path := "/telemetry/metrics"
+	if raw {
+		path += "?raw=true"
+	}
+	if err := c.get(path, &metrics); err != nil {
 		return nil, err
 	}
 	return metrics, nil

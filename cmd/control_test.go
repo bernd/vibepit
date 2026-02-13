@@ -169,13 +169,13 @@ func TestControlClient_TelemetryEventsAfter(t *testing.T) {
 	client := testControlClient(t, api)
 
 	t.Run("returns last events for initial request", func(t *testing.T) {
-		events, err := client.TelemetryEventsAfter(0)
+		events, err := client.TelemetryEventsAfter(0, "", false)
 		require.NoError(t, err)
 		require.Len(t, events, 3)
 	})
 
 	t.Run("returns only new events after cursor", func(t *testing.T) {
-		events, err := client.TelemetryEventsAfter(2)
+		events, err := client.TelemetryEventsAfter(2, "", false)
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		assert.Equal(t, "codex", events[0].Agent)
@@ -189,7 +189,7 @@ func TestControlClient_TelemetryMetrics(t *testing.T) {
 	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), telBuf)
 	client := testControlClient(t, api)
 
-	metrics, err := client.TelemetryMetrics()
+	metrics, err := client.TelemetryMetrics(false)
 	require.NoError(t, err)
 	require.Len(t, metrics, 1)
 	assert.Equal(t, "tokens", metrics[0].Name)
