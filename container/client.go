@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bernd/vibepit/config"
@@ -50,31 +53,106 @@ const (
 // to the Podman-compatible socket.
 type Client struct {
 	docker *dockerclient.Client
+	debug  bool
 }
 
-func NewClient() (*Client, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
-	if err == nil {
-		if _, err := cli.Ping(context.Background()); err == nil {
-			return &Client{docker: cli}, nil
+type ClientOpt func(*Client) error
+
+func WithDebug(debug bool) ClientOpt {
+	return func(c *Client) error {
+		c.debug = debug
+		return nil
+	}
+}
+
+func NewClient(opts ...ClientOpt) (*Client, error) {
+	client := &Client{}
+
+	for _, opt := range opts {
+		if err := opt(client); err != nil {
+			return nil, fmt.Errorf("applying client option: %w", err)
 		}
-		cli.Close()
 	}
 
-	// Fall back to the rootless Podman socket which exposes a Docker-compatible API.
-	podmanSock := fmt.Sprintf("unix:///run/user/%d/podman/podman.sock", os.Getuid())
-	cli, err = dockerclient.NewClientWithOpts(
-		dockerclient.WithHost(podmanSock),
-		dockerclient.WithAPIVersionNegotiation(),
+	// First try the regular Docker environment chain.
+	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err == nil {
+		if _, pingErr := cli.Ping(context.Background()); pingErr == nil {
+			displayDockerHost(client.debug, cli)
+			client.docker = cli
+			return client, nil
+		} else {
+			if client.debug {
+				tui.Debug("Could not ping Docker: %v", pingErr)
+			}
+		}
+		cli.Close()
+	} else {
+		if client.debug {
+			tui.Debug("Could not connect to Docker: %s", err)
+		}
+	}
+
+	// Then fall back to manual socket detection.
+	u, err := user.Current()
+	if err != nil {
+		return nil, fmt.Errorf("cannot determine current user: %w", err)
+	}
+
+	detectedCli, err := findSocket(
+		client.debug,
+		// Used on macOS with Docker Desktop
+		fmt.Sprintf("unix://%s/.docker/run/docker.sock", u.HomeDir),
+		// Rootless Podman
+		fmt.Sprintf("unix:///run/user/%s/podman/podman.sock", u.Uid),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("no Docker or Podman socket found: %w", err)
+		return nil, err
 	}
-	if _, err := cli.Ping(context.Background()); err != nil {
-		cli.Close()
-		return nil, fmt.Errorf("no Docker or Podman socket found: %w", err)
+
+	client.docker = detectedCli
+	return client, nil
+}
+
+func displayDockerHost(debug bool, cli *dockerclient.Client) {
+	host := cli.DaemonHost()
+	if path, ok := strings.CutPrefix(host, "unix://"); ok {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != path {
+			host = fmt.Sprintf("unix://%s -> %s", path, resolved)
+		}
 	}
-	return &Client{docker: cli}, nil
+	if debug {
+		tui.Debug("Using container daemon at %s", host)
+	}
+}
+
+func findSocket(debug bool, paths ...string) (*dockerclient.Client, error) {
+	for _, path := range paths {
+		if debug {
+			tui.Debug("Trying socket: %s", path)
+		}
+		cli, err := dockerclient.NewClientWithOpts(
+			dockerclient.WithHost(path),
+			dockerclient.WithAPIVersionNegotiation(),
+		)
+		if err != nil {
+			if debug {
+				tui.Debug("Could not connect to socket: %v", err)
+			}
+			continue
+		}
+		if _, err := cli.Ping(context.Background()); err != nil {
+			_ = cli.Close()
+			if debug {
+				tui.Debug("Could not ping via socket: %v", err)
+			}
+			continue
+		}
+		displayDockerHost(debug, cli)
+		return cli, nil
+	}
+
+	return nil, errors.New("couldn't find a Docker socket")
 }
 
 func (c *Client) Close() error { return c.docker.Close() }

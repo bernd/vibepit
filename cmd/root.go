@@ -9,6 +9,8 @@ var sessionFlag = &cli.StringFlag{
 	Usage: "Session ID or project path (skips interactive selection)",
 }
 
+const debugFlag = "debug"
+
 func RootCommand() *cli.Command {
 	return &cli.Command{
 		Name:            "vibepit",
@@ -16,6 +18,12 @@ func RootCommand() *cli.Command {
 		Description:     "I pity the vibes.",
 		HideHelpCommand: true,
 		DefaultCommand:  "run",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  debugFlag,
+				Usage: "Enable debug output",
+			},
+		},
 		Commands: []*cli.Command{
 			// Order matters here!
 			RunCommand(),

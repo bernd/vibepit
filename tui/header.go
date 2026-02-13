@@ -126,13 +126,9 @@ type HeaderInfo struct {
 func (info HeaderInfo) ProjectDirWithHome() string {
 	home := os.Getenv("HOME")
 	if home != "" && strings.HasPrefix(info.ProjectDir, home) {
-		return fmt.Sprintf("$HOME%s", info.replaceSlashes(strings.TrimPrefix(info.ProjectDir, home)))
+		return fmt.Sprintf("$HOME%s", strings.TrimPrefix(info.ProjectDir, home))
 	}
-	return info.replaceSlashes(info.ProjectDir)
-}
-
-func (info HeaderInfo) replaceSlashes(value string) string {
-	return strings.ReplaceAll(value, "/", "╱")
+	return info.ProjectDir
 }
 
 // renderCompactHeader produces a single-line header with gradient wordmark,
