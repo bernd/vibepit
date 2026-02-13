@@ -59,30 +59,39 @@ func TelemetryCommand() *cli.Command {
 			defer ticker.Stop()
 
 			// Initial poll before first tick.
-			cursor = pollTelemetry(ctx, client, enc, cursor, agent, raw, showEvents, showMetrics)
+			var writeErr error
+			cursor, writeErr = pollTelemetry(ctx, client, enc, cursor, agent, raw, showEvents, showMetrics)
+			if writeErr != nil {
+				return nil
+			}
 
 			for {
 				select {
 				case <-ctx.Done():
 					return nil
 				case <-ticker.C:
-					cursor = pollTelemetry(ctx, client, enc, cursor, agent, raw, showEvents, showMetrics)
+					cursor, writeErr = pollTelemetry(ctx, client, enc, cursor, agent, raw, showEvents, showMetrics)
+					if writeErr != nil {
+						return nil
+					}
 				}
 			}
 		},
 	}
 }
 
-func pollTelemetry(ctx context.Context, client *ControlClient, enc *json.Encoder, cursor uint64, agent string, raw, showEvents, showMetrics bool) uint64 {
+func pollTelemetry(ctx context.Context, client *ControlClient, enc *json.Encoder, cursor uint64, agent string, raw, showEvents, showMetrics bool) (uint64, error) {
 	if ctx.Err() != nil {
-		return cursor
+		return cursor, nil
 	}
 
 	if showEvents {
 		events, err := client.TelemetryEventsAfter(cursor, agent, raw)
 		if err == nil {
 			for _, e := range events {
-				enc.Encode(e)
+				if err := enc.Encode(e); err != nil {
+					return cursor, err
+				}
 				if e.ID > cursor {
 					cursor = e.ID
 				}
@@ -97,13 +106,15 @@ func pollTelemetry(ctx context.Context, client *ControlClient, enc *json.Encoder
 				if agent != "" && m.Agent != agent {
 					continue
 				}
-				enc.Encode(struct {
+				if err := enc.Encode(struct {
 					Type string `json:"type"`
 					proxy.MetricSummary
-				}{Type: "metric", MetricSummary: m})
+				}{Type: "metric", MetricSummary: m}); err != nil {
+					return cursor, err
+				}
 			}
 		}
 	}
 
-	return cursor
+	return cursor, nil
 }

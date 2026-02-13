@@ -22,7 +22,8 @@ func TestPollTelemetry_Events(t *testing.T) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 
-	cursor := pollTelemetry(context.Background(), client, enc, 0, "", false, true, false)
+	cursor, err := pollTelemetry(context.Background(), client, enc, 0, "", false, true, false)
+	require.NoError(t, err)
 
 	assert.Greater(t, cursor, uint64(0))
 
@@ -45,7 +46,8 @@ func TestPollTelemetry_AgentFilter(t *testing.T) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 
-	pollTelemetry(context.Background(), client, enc, 0, "codex", false, true, false)
+	_, err := pollTelemetry(context.Background(), client, enc, 0, "codex", false, true, false)
+	require.NoError(t, err)
 
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
 	require.Len(t, lines, 1)
@@ -65,7 +67,8 @@ func TestPollTelemetry_Metrics(t *testing.T) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 
-	pollTelemetry(context.Background(), client, enc, 0, "", false, false, true)
+	_, err := pollTelemetry(context.Background(), client, enc, 0, "", false, false, true)
+	require.NoError(t, err)
 
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
 	require.Len(t, lines, 1)
@@ -92,14 +95,16 @@ func TestPollTelemetry_CursorAdvances(t *testing.T) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 
-	cursor := pollTelemetry(context.Background(), client, enc, 0, "", false, true, false)
+	cursor, err := pollTelemetry(context.Background(), client, enc, 0, "", false, true, false)
+	require.NoError(t, err)
 	require.Greater(t, cursor, uint64(0))
 
 	// Add another event, poll from cursor — should only get the new one.
 	telBuf.AddEvent(proxy.TelemetryEvent{Agent: "claude", EventName: "e2"})
 	buf.Reset()
 
-	cursor2 := pollTelemetry(context.Background(), client, enc, cursor, "", false, true, false)
+	cursor2, err := pollTelemetry(context.Background(), client, enc, cursor, "", false, true, false)
+	require.NoError(t, err)
 	assert.Greater(t, cursor2, cursor)
 
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
@@ -123,7 +128,8 @@ func TestPollTelemetry_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	cursor := pollTelemetry(ctx, client, enc, 0, "", false, true, true)
+	cursor, err := pollTelemetry(ctx, client, enc, 0, "", false, true, true)
+	require.NoError(t, err)
 	assert.Equal(t, uint64(0), cursor)
 	assert.Empty(t, buf.String())
 }

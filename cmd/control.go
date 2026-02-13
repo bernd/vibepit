@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/bernd/vibepit/config"
@@ -104,7 +105,7 @@ func (c *ControlClient) TelemetryEventsAfter(afterID uint64, agent string, raw b
 	var events []proxy.TelemetryEvent
 	path := fmt.Sprintf("/telemetry/events?after=%d", afterID)
 	if agent != "" {
-		path += "&agent=" + agent
+		path += "&agent=" + url.QueryEscape(agent)
 	}
 	if raw {
 		path += "&raw=true"
