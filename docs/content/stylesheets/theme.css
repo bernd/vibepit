@@ -106,6 +106,7 @@
   margin: 1.05rem 0 0;
   font-size: 0.84rem;
   opacity: 0.86;
+  color: #f59e0b; /* Warning Amber */
 }
 
 .vp-landing__panel {
