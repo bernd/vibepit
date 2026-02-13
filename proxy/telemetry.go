@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -18,6 +19,7 @@ type TelemetryEvent struct {
 	Agent     string            `json:"agent"`
 	EventName string            `json:"event_name"`
 	Attrs     map[string]string `json:"attrs,omitempty"`
+	RawLog    json.RawMessage   `json:"raw_log,omitempty"`
 }
 
 type MetricSummary struct {
@@ -25,6 +27,7 @@ type MetricSummary struct {
 	Agent      string            `json:"agent"`
 	Value      float64           `json:"value"`
 	Attributes map[string]string `json:"attributes,omitempty"`
+	RawMetric  json.RawMessage   `json:"raw_metric,omitempty"`
 }
 
 // metricKey uniquely identifies a metric series. Only name, agent, and the

@@ -1,12 +1,14 @@
 package proxy
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
 	"golang.org/x/time/rate"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -71,6 +73,9 @@ func (r *OTLPReceiver) handleLogs(w http.ResponseWriter, req *http.Request) {
 					event.EventName = name
 					delete(event.Attrs, "event.name")
 				}
+				if raw, err := protojson.Marshal(lr); err == nil {
+					event.RawLog = raw
+				}
 				r.buf.AddEvent(event)
 			}
 		}
@@ -98,12 +103,17 @@ func (r *OTLPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 		agent := extractServiceName(rm.Resource)
 		for _, sm := range rm.ScopeMetrics {
 			for _, m := range sm.Metrics {
+				var rawMetric json.RawMessage
+				if raw, err := protojson.Marshal(m); err == nil {
+					rawMetric = raw
+				}
 				for _, dp := range extractDataPoints(m) {
 					r.buf.UpdateMetric(MetricSummary{
 						Name:       m.Name,
 						Agent:      agent,
 						Value:      dp.value,
 						Attributes: dp.attrs,
+						RawMetric:  rawMetric,
 					})
 				}
 			}
