@@ -64,6 +64,14 @@ sudo mv vibepit /usr/local/bin/</code></pre>
     <p>Review command syntax, flags, and operational behavior.</p>
   </article>
   <article class="vp-card">
+    <h3><a href="how-to/ai-coding-agents/">AI Coding Agents</a></h3>
+    <p>Set up Claude Code, Cursor, or Copilot with the right network presets.</p>
+  </article>
+  <article class="vp-card">
+    <h3><a href="explanations/architecture/">Architecture</a></h3>
+    <p>How the proxy, dev container, and isolated network fit together.</p>
+  </article>
+  <article class="vp-card">
     <h3><a href="explanations/security-model/">Security Model</a></h3>
     <p>Understand assumptions, boundaries, and defense-in-depth controls.</p>
   </article>
