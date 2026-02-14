@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 
 {% block announce %}
-  Vibepit is in alpha. Expect breaking changes.
+  <span class="vp-announce">
+    <span class="vp-announce__icon md-icon" aria-hidden="true">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+        <path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21Z"/>
+      </svg>
+    </span>
+    <span>Vibepit is in alpha. Expect breaking changes.</span>
+  </span>
 {% endblock %}
 
 {% block extrahead %}
