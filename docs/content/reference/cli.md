@@ -230,19 +230,3 @@ vibepit update
 - Pulls the latest sandbox image for your UID/GID combination (e.g., `ghcr.io/bernd/vibepit:main-uid-1000-gid-1000`).
 - Pulls the latest proxy base image (`gcr.io/distroless/base-debian13:latest`).
 
----
-
-## Environment variables
-
-The following environment variables are set automatically inside the sandbox
-container to route traffic through the filtering proxy:
-
-| Variable | Value |
-|----------|-------|
-| `HTTP_PROXY` | `http://<proxy-ip>:<proxy-port>` |
-| `HTTPS_PROXY` | `http://<proxy-ip>:<proxy-port>` |
-| `http_proxy` | `http://<proxy-ip>:<proxy-port>` |
-| `https_proxy` | `http://<proxy-ip>:<proxy-port>` |
-
-These variables are set to the same value. Both uppercase and lowercase variants
-are provided for compatibility with different tools and libraries.

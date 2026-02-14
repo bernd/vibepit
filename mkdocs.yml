@@ -60,6 +60,7 @@ nav:
       - Troubleshoot Common Issues: how-to/troubleshooting.md
   - Reference:
       - CLI: reference/cli.md
+      - Sandbox Environment: reference/sandbox.md
       - Network Presets: reference/presets.md
   - Explanations:
       - Architecture: explanations/architecture.md
