@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bernd/vibepit/proxy"
+	"github.com/bernd/vibepit/telemetry"
 	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -81,7 +81,6 @@ func (s *metricsScreen) rebuildLines() {
 		byAgent[m.Agent] = append(byAgent[m.Agent], m)
 	}
 
-	// Use sorted agent order from s.filter.agents.
 	s.lines = nil
 	for _, agent := range s.filter.agents {
 		metrics, ok := byAgent[agent]
@@ -89,14 +88,8 @@ func (s *metricsScreen) rebuildLines() {
 			continue
 		}
 		s.lines = append(s.lines, metricsLine{isAgent: true, text: agent})
-		for _, m := range metrics {
-			label := m.Name
-			if t, ok := m.Attributes["type"]; ok {
-				label += "(" + t + ")"
-			}
-			s.lines = append(s.lines, metricsLine{
-				text: fmt.Sprintf("  %s: %g", label, m.Value),
-			})
+		for _, line := range telemetry.FormatAgent(agent, metrics) {
+			s.lines = append(s.lines, metricsLine{text: line})
 		}
 	}
 	s.cursor.ItemCount = len(s.lines)
