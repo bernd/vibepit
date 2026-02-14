@@ -110,6 +110,7 @@
   gap: clamp(1.35rem, 2.6vw, 2rem);
   align-items: center;
   box-shadow: var(--vp-landing-shadow);
+  max-width: 100%;
 }
 
 .vp-landing__copy h1 {
@@ -152,6 +153,7 @@
   border-color: var(--vp-cta-secondary-border);
   color: var(--vp-cta-secondary-color);
   min-width: 0;
+  white-space: normal;
   text-align: center;
   font-weight: 700;
   transition: var(--vp-interactive-transition);
@@ -249,12 +251,16 @@
   border: 1px solid var(--vp-install-border);
   background: var(--vp-install-bg) !important;
   position: relative;
-  overflow: hidden;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .md-typeset .vp-landing__install code {
   display: block;
   padding: 0.85rem 2.75rem 0.85rem 1rem;
+  box-sizing: border-box;
+  max-width: 100%;
   white-space: pre;
   overflow-x: auto;
   word-break: normal;
@@ -363,6 +369,18 @@
     gap: 1rem;
   }
 
+  .vp-landing__panel {
+    order: -1;
+  }
+
+  .vp-landing__copy {
+    order: 0;
+  }
+
+  .vp-landing__install-wide {
+    order: 1;
+  }
+
   .vp-landing__copy h1 {
     font-size: clamp(1.45rem, 7vw, 2rem);
     max-width: none;
@@ -379,14 +397,30 @@
 }
 
 @media screen and (max-width: 46em) {
+  .vp-landing {
+    padding: 1rem;
+  }
+
   .vp-landing__actions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media screen and (max-width: 30em) {
+  .vp-landing {
+    padding: 0.9rem;
+  }
+
   .vp-landing__actions {
     grid-template-columns: 1fr;
+  }
+
+  .md-typeset .vp-landing__install code {
+    padding: 0.75rem 0.95rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    font-size: 0.78rem;
   }
 }
 
