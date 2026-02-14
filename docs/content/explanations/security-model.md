@@ -93,8 +93,13 @@ Vibepit is not VM-level isolation. The sandbox container shares the host kernel,
 
 Treat Vibepit as defense in depth: multiple independent controls that collectively reduce risk. It is not absolute containment. For workloads that require stronger isolation guarantees, consider running Vibepit inside a VM.
 
-### A note on macOS and Windows
+### Container runtimes and VM boundaries
 
-On macOS and Windows, Docker Desktop and Podman run the container runtime inside a lightweight Linux VM. This means a container escape lands in the VM guest, not directly on your host. The VM boundary provides an additional layer of isolation that does not exist on Linux, where containers share the host kernel directly.
+Some container runtimes run containers inside a lightweight Linux VM:
 
-However, this VM is designed for developer convenience, not as a security boundary. File sharing, socket forwarding, and networking features bridge the VM boundary in various ways, and the project directory is bind-mounted through it. Vibepit does not control or harden this VM layer, so you should not treat it as a guaranteed security control — but it does reduce the practical risk of a container escape reaching your host compared to running on Linux.
+- **Docker Desktop** (macOS, Windows, and Linux) runs a VM using the platform's hypervisor (Apple Virtualization framework, Hyper-V/WSL2, or KVM).
+- **Podman Machine** (macOS, Windows) runs a Fedora CoreOS VM.
+
+When a VM is present, a container escape lands in the VM guest, not directly on your host. This adds a boundary that does not exist when using **Docker Engine** or **Podman** directly on Linux, where containers share the host kernel.
+
+However, these VMs are designed for developer convenience, not as security boundaries. File sharing, socket forwarding, and networking features bridge the VM boundary in various ways, and the project directory is bind-mounted through it. Vibepit does not control or harden this VM layer, so you should not treat it as a guaranteed security control — but it does reduce the practical risk of a container escape reaching your host.
