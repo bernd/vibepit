@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/bernd/vibepit/proxy"
@@ -33,8 +34,16 @@ func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {
 		}
 	}
 
+	// Sort prefixes for stable output order across refreshes.
+	prefixes := make([]string, 0, len(matched))
+	for p := range matched {
+		prefixes = append(prefixes, p)
+	}
+	slices.Sort(prefixes)
+
 	var lines []string
-	for prefix, ms := range matched {
+	for _, prefix := range prefixes {
+		ms := matched[prefix]
 		if fn, ok := registry[prefix]; ok {
 			lines = append(lines, fn(agent, ms)...)
 		} else {
@@ -47,6 +56,9 @@ func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {
 	return lines
 }
 
+// detectPrefix returns the first registered prefix matching name. If multiple
+// prefixes overlap (e.g. "foo." and "foo.bar."), the match is arbitrary — keep
+// registry prefixes non-overlapping.
 func detectPrefix(name string) string {
 	for prefix := range registry {
 		if strings.HasPrefix(name, prefix) {
