@@ -70,7 +70,7 @@ valid responses; all other queries return `NXDOMAIN`.
 | Capabilities | All dropped (`CAP_DROP: ALL`) |
 | Security options | `no-new-privileges` |
 | Init process | Enabled (tini) |
-| Hostname | `vibepit` |
+| Hostname | `vibes` |
 
 For a full description of these controls, see the
 [Security Model](../explanations/security-model.md).
