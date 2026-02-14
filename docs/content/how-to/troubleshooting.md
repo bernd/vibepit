@@ -35,10 +35,6 @@ permission to access its socket.
 
     Log out and back in for the group change to take effect.
 
-!!! note
-    Inside a nested Vibepit sandbox (Vibepit developing Vibepit), the container
-    runtime socket is intentionally unavailable. This is expected behavior.
-
 ---
 
 ## `allow-http`, `allow-dns`, or `monitor` Cannot Connect
