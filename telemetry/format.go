@@ -11,6 +11,7 @@ type MetricFormatter func(agent string, metrics []proxy.MetricSummary) []string
 
 var registry = map[string]MetricFormatter{
 	"claude_code.": formatClaudeCode,
+	"codex.":       formatCodex,
 }
 
 // FormatAgent formats all metrics for a single agent. Metrics matching a

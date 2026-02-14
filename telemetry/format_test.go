@@ -69,3 +69,11 @@ func TestFormatAgent_ClaudeCode_ZeroValuesSkipped(t *testing.T) {
 	assert.Contains(t, joined, "Cost")
 	assert.NotContains(t, joined, "Sessions")
 }
+
+func TestFormatAgent_Codex_FallsBackToGeneric(t *testing.T) {
+	metrics := []proxy.MetricSummary{
+		{Name: "codex.api_request", Agent: "codex", Value: 10},
+	}
+	lines := FormatAgent("codex", metrics)
+	assert.Contains(t, lines, "  codex.api_request: 10")
+}
