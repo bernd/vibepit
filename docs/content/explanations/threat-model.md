@@ -18,8 +18,8 @@ An agent does not need to be intentionally malicious. Several realistic attack v
 - **Malicious agent skills or plugins.** Third-party skills, extensions, or plugins loaded into the agent can contain arbitrary code or prompt overrides that alter the agent's behavior without your knowledge.
 
 !!! note
-    Vibepit does not prevent these attacks from happening — it limits the damage
-    by constraining what a compromised agent can do. Without network isolation,
+    **Vibepit does not prevent these attacks from happening — it limits the
+    damage by constraining what a compromised agent can do.** Without network isolation,
     a prompt-injected agent with shell access can exfiltrate your source code,
     credentials, and environment variables in seconds. With Vibepit, that same
     agent can only reach the domains you have explicitly allowed.
