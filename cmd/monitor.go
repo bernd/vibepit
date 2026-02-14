@@ -43,8 +43,9 @@ func MonitorCommand() *cli.Command {
 					telemetryClient = client
 				}
 				network := newMonitorScreen(info, client)
-				telemetry := newTelemetryScreen(telemetryClient)
-				return newTabbedMonitorScreen(network, telemetry), nil
+				events := newTelemetryScreen(telemetryClient)
+				metrics := newMetricsScreen(telemetryClient)
+				return newTabbedMonitorScreen(network, events, metrics), nil
 			}
 			s := newSessionScreen(sessions, onSelect)
 			header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
@@ -71,8 +72,9 @@ func runMonitor(session *SessionInfo) error {
 	}
 
 	network := newMonitorScreen(session, client)
-	telemetry := newTelemetryScreen(telemetryClient)
-	screen := newTabbedMonitorScreen(network, telemetry)
+	events := newTelemetryScreen(telemetryClient)
+	metrics := newMetricsScreen(telemetryClient)
+	screen := newTabbedMonitorScreen(network, events, metrics)
 	header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
 	w := tui.NewWindow(header, screen)
 	p := tea.NewProgram(w, tea.WithAltScreen())

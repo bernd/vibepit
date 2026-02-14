@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,32 +15,28 @@ import (
 const telemetryPollInterval = time.Second
 
 type telemetryScreen struct {
-	client          *ControlClient
-	cursor          tui.Cursor
-	pollCursor      uint64
-	events          []proxy.TelemetryEvent
-	metricSummaries []proxy.MetricSummary
-	agents          []string
-	agentFilter     string
-	firstTickSeen   bool
-	disabled        bool
-	heightOffset    int // lines reserved by parent (e.g. tab bar)
+	client        *ControlClient
+	cursor        tui.Cursor
+	pollCursor    uint64
+	events        []proxy.TelemetryEvent
+	filter        agentFilter
+	firstTickSeen bool
+	heightOffset  int // lines reserved by parent (e.g. tab bar)
 }
 
 func newTelemetryScreen(client *ControlClient) *telemetryScreen {
 	return &telemetryScreen{
-		client:   client,
-		disabled: client == nil,
+		client: client,
 	}
 }
 
 func (s *telemetryScreen) filteredEvents() []proxy.TelemetryEvent {
-	if s.agentFilter == "" {
+	if s.filter.active == "" {
 		return s.events
 	}
 	var filtered []proxy.TelemetryEvent
 	for _, e := range s.events {
-		if e.Agent == s.agentFilter {
+		if e.Agent == s.filter.active {
 			filtered = append(filtered, e)
 		}
 	}
@@ -52,7 +48,7 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "f":
-			s.cycleAgentFilter()
+			s.filter.cycle()
 			filtered := s.filteredEvents()
 			s.cursor.ItemCount = len(filtered)
 			s.cursor.EnsureVisible()
@@ -66,7 +62,7 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 		}
 
 	case tea.WindowSizeMsg:
-		s.cursor.VpHeight = w.VpHeight() - s.heightOffset - s.metricsHeaderHeight()
+		s.cursor.VpHeight = w.VpHeight() - s.heightOffset
 		s.cursor.EnsureVisible()
 
 	case tui.TickMsg:
@@ -80,7 +76,7 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 				for _, e := range events {
 					s.events = append(s.events, e)
 					s.pollCursor = e.ID
-					s.trackAgent(e.Agent)
+					s.filter.track(e.Agent)
 				}
 				filtered := s.filteredEvents()
 				s.cursor.ItemCount = len(filtered)
@@ -89,11 +85,6 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 					s.cursor.EnsureVisible()
 				}
 			}
-
-			metrics, err := s.client.TelemetryMetrics(false)
-			if err == nil {
-				s.metricSummaries = metrics
-			}
 		}
 		s.firstTickSeen = true
 	}
@@ -101,49 +92,11 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 	return s, nil
 }
 
-func (s *telemetryScreen) cycleAgentFilter() {
-	if len(s.agents) == 0 {
-		return
-	}
-	if s.agentFilter == "" {
-		s.agentFilter = s.agents[0]
-		return
-	}
-	for i, a := range s.agents {
-		if a == s.agentFilter {
-			if i+1 < len(s.agents) {
-				s.agentFilter = s.agents[i+1]
-			} else {
-				s.agentFilter = "" // back to all
-			}
-			return
-		}
-	}
-	s.agentFilter = ""
-}
-
-func (s *telemetryScreen) trackAgent(agent string) {
-	if slices.Contains(s.agents, agent) {
-		return
-	}
-	s.agents = append(s.agents, agent)
-}
-
-func (s *telemetryScreen) metricsHeaderHeight() int {
-	if len(s.metricSummaries) == 0 {
-		return 0
-	}
-	agents := make(map[string]bool)
-	for _, m := range s.metricSummaries {
-		agents[m.Agent] = true
-	}
-	return len(agents)
-}
 
 func (s *telemetryScreen) View(w *tui.Window) string {
 	height := w.VpHeight() - s.heightOffset
 
-	if s.disabled {
+	if s.client == nil {
 		msg := lipgloss.NewStyle().Foreground(tui.ColorField).
 			Render("Agent telemetry is disabled. Set agent-telemetry: true in .vibepit/network.yaml to enable.")
 		pad := height / 2
@@ -158,15 +111,9 @@ func (s *telemetryScreen) View(w *tui.Window) string {
 		return strings.Join(lines, "\n")
 	}
 
-	var lines []string
-
-	// Metrics header.
-	lines = append(lines, s.renderMetricsHeader()...)
-
-	// Event stream.
 	filtered := s.filteredEvents()
-	vpHeight := height - len(lines)
-	end := min(s.cursor.Offset+vpHeight, len(filtered))
+	var lines []string
+	end := min(s.cursor.Offset+height, len(filtered))
 	for i := s.cursor.Offset; i < end; i++ {
 		lines = append(lines, renderTelemetryLine(filtered[i], i == s.cursor.Pos))
 	}
@@ -175,42 +122,6 @@ func (s *telemetryScreen) View(w *tui.Window) string {
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-func (s *telemetryScreen) renderMetricsHeader() []string {
-	if len(s.metricSummaries) == 0 {
-		return nil
-	}
-
-	byAgent := make(map[string][]proxy.MetricSummary)
-	for _, m := range s.metricSummaries {
-		byAgent[m.Agent] = append(byAgent[m.Agent], m)
-	}
-
-	style := lipgloss.NewStyle().Foreground(tui.ColorField)
-	valueStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
-
-	agents := make([]string, 0, len(byAgent))
-	for agent := range byAgent {
-		agents = append(agents, agent)
-	}
-	slices.Sort(agents)
-
-	var lines []string
-	for _, agent := range agents {
-		metrics := byAgent[agent]
-		var parts []string
-		parts = append(parts, lipgloss.NewStyle().Foreground(tui.ColorOrange).Render(agent))
-		for _, m := range metrics {
-			label := m.Name
-			if t, ok := m.Attributes["type"]; ok {
-				label += "(" + t + ")"
-			}
-			parts = append(parts, style.Render(label+":")+valueStyle.Render(fmt.Sprintf(" %.4g", m.Value)))
-		}
-		lines = append(lines, strings.Join(parts, "  "))
-	}
-	return lines
 }
 
 // stripControl removes ANSI escape sequences and control characters (except
@@ -263,14 +174,17 @@ func renderTelemetryLine(e proxy.TelemetryEvent, highlighted bool) string {
 		details = append(details, base.Foreground(tui.ColorField).Render(v+"ms"))
 	}
 	if v, ok := e.Attrs["cost_usd"]; ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			v = fmt.Sprintf("%.4g", f)
+		}
 		details = append(details, base.Foreground(tui.ColorField).Render("$"+v))
 	}
 	if v, ok := e.Attrs["input_tokens"]; ok {
-		tok := v
+		tok := v + "\u2191"
 		if out, ok2 := e.Attrs["output_tokens"]; ok2 {
-			tok += "\u2192" + out
+			tok += " " + out + "\u2193"
 		}
-		details = append(details, base.Foreground(tui.ColorField).Render(tok+" tok"))
+		details = append(details, base.Foreground(tui.ColorField).Render(tok))
 	}
 
 	sp := base.Render(" ")
@@ -290,8 +204,8 @@ func (s *telemetryScreen) FooterStatus(w *tui.Window) string {
 		parts = append(parts, lipgloss.NewStyle().Foreground(tui.ColorField).Render("\u283f"))
 	}
 
-	if s.agentFilter != "" {
-		parts = append(parts, lipgloss.NewStyle().Foreground(tui.ColorOrange).Render("agent:"+s.agentFilter))
+	if s.filter.active != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(tui.ColorOrange).Render("agent:"+s.filter.active))
 	}
 
 	return strings.Join(parts, " ")

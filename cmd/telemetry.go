@@ -87,7 +87,9 @@ func pollTelemetry(ctx context.Context, client *ControlClient, enc *json.Encoder
 
 	if showEvents {
 		events, err := client.TelemetryEventsAfter(cursor, agent, raw)
-		if err == nil {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "telemetry: events poll: %v\n", err)
+		} else {
 			for _, e := range events {
 				if err := enc.Encode(e); err != nil {
 					return cursor, err
@@ -101,7 +103,9 @@ func pollTelemetry(ctx context.Context, client *ControlClient, enc *json.Encoder
 
 	if showMetrics {
 		metrics, err := client.TelemetryMetrics(raw)
-		if err == nil {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "telemetry: metrics poll: %v\n", err)
+		} else {
 			for _, m := range metrics {
 				if agent != "" && m.Agent != agent {
 					continue

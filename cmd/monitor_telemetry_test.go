@@ -12,8 +12,7 @@ import (
 )
 
 func makeTelemetrySetup(n int) (*telemetryScreen, *tui.Window) {
-	s := newTelemetryScreen(nil)
-	s.disabled = false // allow event display without a live client
+	s := newTelemetryScreen(&ControlClient{}) // non-nil to avoid disabled state
 	header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
@@ -53,18 +52,18 @@ func TestTelemetryScreen_CursorNavigation(t *testing.T) {
 func TestTelemetryScreen_AgentFilter(t *testing.T) {
 	t.Run("f key cycles agent filter", func(t *testing.T) {
 		s, w := makeTelemetrySetup(0)
-		s.agents = []string{"claude-code", "codex"}
+		s.filter.agents = []string{"claude-code", "codex"}
 
-		assert.Equal(t, "", s.agentFilter) // all
-
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}, w)
-		assert.Equal(t, "claude-code", s.agentFilter)
+		assert.Equal(t, "", s.filter.active) // all
 
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}, w)
-		assert.Equal(t, "codex", s.agentFilter)
+		assert.Equal(t, "claude-code", s.filter.active)
 
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}, w)
-		assert.Equal(t, "", s.agentFilter) // back to all
+		assert.Equal(t, "codex", s.filter.active)
+
+		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}}, w)
+		assert.Equal(t, "", s.filter.active) // back to all
 	})
 }
 
@@ -74,15 +73,6 @@ func TestTelemetryScreen_View(t *testing.T) {
 		view := s.View(w)
 		assert.Contains(t, view, "claude-code")
 		assert.Contains(t, view, "Read")
-	})
-
-	t.Run("shows metrics header", func(t *testing.T) {
-		s, w := makeTelemetrySetup(0)
-		s.metricSummaries = []proxy.MetricSummary{
-			{Name: "claude_code.token.usage", Agent: "claude-code", Value: 1234, Attributes: map[string]string{"type": "input"}},
-		}
-		view := s.View(w)
-		assert.Contains(t, view, "1234")
 	})
 
 	t.Run("shows disabled message when client is nil", func(t *testing.T) {
@@ -105,7 +95,7 @@ func TestTelemetryScreen_Footer(t *testing.T) {
 
 	t.Run("shows active filter in footer", func(t *testing.T) {
 		s, w := makeTelemetrySetup(0)
-		s.agentFilter = "claude-code"
+		s.filter.active = "claude-code"
 		status := s.FooterStatus(w)
 		assert.Contains(t, status, "claude-code")
 	})

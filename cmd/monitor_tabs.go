@@ -14,12 +14,13 @@ type tabbedMonitorScreen struct {
 	screens   []tui.Screen
 }
 
-func newTabbedMonitorScreen(network *monitorScreen, telemetry *telemetryScreen) *tabbedMonitorScreen {
+func newTabbedMonitorScreen(network *monitorScreen, events *telemetryScreen, metrics *metricsScreen) *tabbedMonitorScreen {
 	network.heightOffset = tabBarHeight
-	telemetry.heightOffset = tabBarHeight
+	events.heightOffset = tabBarHeight
+	metrics.heightOffset = tabBarHeight
 	return &tabbedMonitorScreen{
-		tabs:    []string{"Network", "Telemetry"},
-		screens: []tui.Screen{network, telemetry},
+		tabs:    []string{"Network", "Events", "Metrics"},
+		screens: []tui.Screen{network, events, metrics},
 	}
 }
 
@@ -38,6 +39,9 @@ func (t *tabbedMonitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, te
 			return t, nil
 		case "2":
 			t.activeTab = 1
+			return t, nil
+		case "3":
+			t.activeTab = 2
 			return t, nil
 		}
 	}

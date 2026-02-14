@@ -170,12 +170,18 @@ func (b *TelemetryBuffer) Metrics() []MetricSummary {
 		if c := cmp.Compare(a.Agent, b.Agent); c != 0 {
 			return c
 		}
-		return cmp.Compare(a.Name, b.Name)
+		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Attributes["type"], b.Attributes["type"])
 	})
 	return result
 }
 
 func truncate(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
 	if len(s) <= maxBytes {
 		return s
 	}
