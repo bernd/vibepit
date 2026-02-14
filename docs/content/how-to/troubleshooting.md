@@ -35,6 +35,13 @@ permission to access its socket.
 
     Log out and back in for the group change to take effect.
 
+4. Run Vibepit with `--debug` for more detail on what socket path it is trying
+   to connect to and where it fails:
+
+    ```bash
+    vibepit --debug
+    ```
+
 ---
 
 ## `allow-http`, `allow-dns`, or `monitor` Cannot Connect
