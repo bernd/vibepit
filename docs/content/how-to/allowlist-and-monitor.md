@@ -1,8 +1,35 @@
-# Manage Allowlist and Monitor
+# Monitor and Allowlist
 
-This guide covers updating network permissions and inspecting traffic for a
+This guide covers inspecting traffic and updating network permissions for a
 running Vibepit session. You need at least one active session before using these
 commands — start one with `vibepit run` if you have not already.
+
+## Open the monitor
+
+Launch the interactive monitor to inspect proxy traffic in real time:
+
+```bash
+vibepit monitor
+```
+
+The monitor displays a live stream of proxy log entries. Each line shows a
+timestamp, source (HTTP or DNS), domain, port (for HTTP entries), and whether
+the request was allowed or blocked:
+
+- **`+`** — request was allowed by an existing rule.
+- **`x`** — request was blocked.
+
+### Allow domains from the monitor
+
+You can add allowlist entries directly from the monitor without leaving the TUI:
+
+1. Navigate to a blocked entry using the arrow keys.
+2. Press **`a`** to allow the domain for the current session only.
+3. Press **`A`** (shift) to allow the domain **and** save it to your project
+   configuration for future sessions.
+
+After allowing, the entry marker changes to reflect its new status, and the
+footer confirms the action.
 
 ## Add HTTP(S) allowlist entries
 
@@ -79,9 +106,9 @@ When you have a single running session, `allow-http`, `allow-dns`, and
 which one with `--session`:
 
 ```bash
+vibepit monitor --session <session-id>
 vibepit allow-http --session <session-id> api.example.com:443
 vibepit allow-dns --session <session-id> internal.example.com
-vibepit monitor --session <session-id>
 ```
 
 Retrieve session IDs with:
@@ -92,33 +119,6 @@ vibepit sessions
 
 When multiple sessions exist and you omit `--session`, an interactive selector
 appears so you can choose the target session.
-
-## Open the monitor
-
-Launch the interactive monitor to inspect proxy traffic in real time:
-
-```bash
-vibepit monitor
-```
-
-The monitor displays a live stream of proxy log entries. Each line shows a
-timestamp, source (HTTP or DNS), domain, port (for HTTP entries), and whether
-the request was allowed or blocked:
-
-- **`+`** — request was allowed by an existing rule.
-- **`x`** — request was blocked.
-
-### Allow domains from the monitor
-
-You can add allowlist entries directly from the monitor without leaving the TUI:
-
-1. Navigate to a blocked entry using the arrow keys.
-2. Press **`a`** to allow the domain for the current session only.
-3. Press **`A`** (shift) to allow the domain **and** save it to your project
-   configuration for future sessions.
-
-After allowing, the entry marker changes to reflect its new status, and the
-footer confirms the action.
 
 See the [CLI Reference](../reference/cli.md) for full flag details on all
 commands.

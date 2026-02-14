@@ -133,7 +133,7 @@ vibepit monitor
 ```
 
 For details on using the monitor and managing the allowlist at runtime, see
-[Manage Allowlist and Monitor](../how-to/allowlist-and-monitor.md).
+[Monitor and Allowlist](../how-to/allowlist-and-monitor.md).
 
 ## 9. Reattach to a session
 

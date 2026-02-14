@@ -78,7 +78,7 @@ allow-dns:
 
 A `*.` prefix matches any subdomain but not the apex domain. Port patterns
 support digits and `*` as a wildcard. See the
-[Allowlist and Monitor](allowlist-and-monitor.md) guide for full wildcard
+[Monitor and Allowlist](allowlist-and-monitor.md) guide for full wildcard
 details.
 
 ## Allow host ports

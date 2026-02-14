@@ -56,8 +56,8 @@ sudo mv vibepit /usr/local/bin/</code></pre>
     <p>Launch your first isolated session in a project directory.</p>
   </article>
   <article class="vp-card">
-    <h3><a href="how-to/allowlist-and-monitor/">Allowlist and Monitor</a></h3>
-    <p>Handle live session access changes and inspect proxy logs.</p>
+    <h3><a href="how-to/allowlist-and-monitor/">Monitor and Allowlist</a></h3>
+    <p>Inspect proxy logs and manage live session access.</p>
   </article>
   <article class="vp-card">
     <h3><a href="reference/cli/">CLI Reference</a></h3>

@@ -53,7 +53,7 @@ nav:
   - Tutorials:
       - First Sandbox: tutorials/first-sandbox.md
   - How-To Guides:
-      - Manage Allowlist and Monitor: how-to/allowlist-and-monitor.md
+      - Monitor and Allowlist: how-to/allowlist-and-monitor.md
       - Configure Network Presets: how-to/configure-presets.md
       - Use with AI Coding Agents: how-to/ai-coding-agents.md
       - Troubleshoot Common Issues: how-to/troubleshooting.md

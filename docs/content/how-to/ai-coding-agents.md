@@ -103,4 +103,4 @@ domains for your workflow, save them to your project config so they apply to
 future sessions automatically.
 
 For full details on allowlist management and the monitor interface, see
-[Manage Allowlist and Monitor](allowlist-and-monitor.md).
+[Monitor and Allowlist](allowlist-and-monitor.md).
