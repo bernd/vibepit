@@ -7,7 +7,7 @@ repo_name: bernd/vibepit
 docs_dir: docs/content
 site_dir: site
 
-copyright: "&copy; 2026 Bernd Ahlers &amp; the Vibepit contributors"
+copyright: "&copy; 2026 Bernd Ahlers"
 
 theme:
   name: material
