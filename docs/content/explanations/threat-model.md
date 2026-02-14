@@ -1,3 +1,7 @@
+---
+description: Threats Vibepit defends against — network exfiltration, lateral movement, privilege escalation — and known limitations.
+---
+
 # Threat Model
 
 For the specific controls that implement these defenses, see the [Security Model](security-model.md). For how the components fit together at runtime, see the [Architecture](architecture.md).

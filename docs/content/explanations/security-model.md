@@ -1,3 +1,7 @@
+---
+description: Defense-in-depth controls in Vibepit including container hardening, network isolation, CIDR blocking, DNS filtering, and mTLS authentication.
+---
+
 # Security Model
 
 Vibepit applies defense-in-depth controls to reduce risk when you run AI coding agents. No single layer is sufficient on its own; each control limits the blast radius if another fails. This page explains what each control does and why it exists.

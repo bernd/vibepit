@@ -1,3 +1,7 @@
+---
+description: Install Vibepit, launch an isolated sandbox for a project, and verify that network filtering is active.
+---
+
 # First Sandbox
 
 Install Vibepit, launch an isolated sandbox for a project, and verify that

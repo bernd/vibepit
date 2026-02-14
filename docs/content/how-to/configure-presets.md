@@ -1,3 +1,7 @@
+---
+description: Manage network presets, allowlist entries, and host port access in Vibepit project and global configuration files.
+---
+
 # Configure Network Presets
 
 Vibepit filters all network traffic from the sandbox container through a proxy.

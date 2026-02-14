@@ -1,3 +1,7 @@
+---
+description: Inspect proxy traffic in real time and manage HTTP, HTTPS, and DNS allowlist entries for a running Vibepit session.
+---
+
 # Monitor and Allowlist
 
 You need at least one active session before using these commands — start one

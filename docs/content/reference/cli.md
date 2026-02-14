@@ -1,3 +1,7 @@
+---
+description: Complete reference for vibepit commands, flags, and arguments including run, allow-http, allow-dns, sessions, monitor, and update.
+---
+
 # CLI Reference
 
 `vibepit` is a single binary that manages sandbox sessions, network filtering,

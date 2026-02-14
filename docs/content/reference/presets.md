@@ -1,3 +1,7 @@
+---
+description: Full catalog of Vibepit network presets with allowed domains for package managers, AI services, cloud platforms, and development tools.
+---
+
 # Network Presets
 
 Presets bundle commonly needed domain allowlists so you do not have to add

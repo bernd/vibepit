@@ -1,3 +1,7 @@
+---
+description: Fix common Vibepit problems including container runtime errors, connection failures, DNS issues, and image pull errors.
+---
+
 # Troubleshoot Common Issues
 
 ---

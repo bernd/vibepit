@@ -1,4 +1,5 @@
 ---
+description: Run AI coding agents in hardened containers with allowlist-based network filtering. Local only, no cloud, no accounts.
 hide:
   - navigation
   - toc

@@ -1,3 +1,7 @@
+---
+description: Reference for the Vibepit sandbox container including mounts, environment variables, DNS configuration, and hardening settings.
+---
+
 # Sandbox Environment
 
 ## User and home directory

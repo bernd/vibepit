@@ -1,3 +1,7 @@
+---
+description: Install language runtimes and development tools inside the Vibepit sandbox using Homebrew, with persistent storage across sessions.
+---
+
 # Install Development Tools
 
 The sandbox image ships with common utilities (git, curl, jq, ripgrep, python3,

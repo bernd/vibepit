@@ -1,3 +1,7 @@
+---
+description: Configure Vibepit for Claude Code, OpenAI Codex, GitHub Copilot, and other AI coding agents with the right network presets.
+---
+
 # Use with AI Coding Agents
 
 Vibepit works with any AI coding agent that runs in a terminal. The sandbox
