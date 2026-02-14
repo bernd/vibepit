@@ -42,6 +42,20 @@ permission to access its socket.
 
     Log out and back in for the group change to take effect.
 
+5. For rootless Podman, ensure your user session is set up correctly:
+
+    ```bash
+    loginctl enable-linger "$USER"
+    ```
+
+6. If the error references `XDG_RUNTIME_DIR`, confirm the variable is set and
+   the directory is accessible:
+
+    ```bash
+    echo "$XDG_RUNTIME_DIR"
+    ls -la "$XDG_RUNTIME_DIR"
+    ```
+
 ---
 
 ## `allow-http`, `allow-dns`, or `monitor` Cannot Connect
@@ -183,35 +197,3 @@ incorrect indentation or a misplaced key.
 
 ---
 
-## Permission Issues
-
-**Symptoms:** Vibepit fails with "permission denied" errors when accessing the
-container runtime socket or runtime directories.
-
-**Cause:** Your user lacks the necessary permissions for the Docker/Podman
-socket or the `XDG_RUNTIME_DIR` directory.
-
-**Fix:**
-
-1. Verify socket permissions:
-
-    ```bash
-    ls -l /var/run/docker.sock
-    ```
-
-2. Ensure your user is in the correct group (see
-   [Container Runtime Not Available](#container-runtime-not-available) above).
-
-3. If the error references `XDG_RUNTIME_DIR`, confirm the variable is set and
-   the directory is accessible:
-
-    ```bash
-    echo "$XDG_RUNTIME_DIR"
-    ls -la "$XDG_RUNTIME_DIR"
-    ```
-
-4. For rootless Podman, ensure your user session is set up correctly:
-
-    ```bash
-    loginctl enable-linger "$USER"
-    ```
