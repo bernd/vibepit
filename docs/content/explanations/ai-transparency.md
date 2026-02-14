@@ -2,7 +2,7 @@
 description: How AI tools are used to build Vibepit.
 ---
 
-# AI Disclosure
+# AI Transparency
 
 Vibepit uses AI coding agents to assist with planning, code, tests, and
 documentation.

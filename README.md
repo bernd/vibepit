@@ -85,7 +85,7 @@ These targets use [`uv`](https://docs.astral.sh/uv/) to manage Python dependenci
 
 Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues) but are not accepting pull requests at this time.
 
-## AI Disclosure
+## AI Transparency
 
 Vibepit uses AI coding agents to assist with planning, code, tests, and
 documentation. We review all AI-assisted changes before merge. A change is

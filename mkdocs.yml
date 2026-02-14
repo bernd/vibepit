@@ -66,3 +66,4 @@ nav:
       - Architecture: explanations/architecture.md
       - Security Model: explanations/security-model.md
       - Threat Model: explanations/threat-model.md
+      - AI Transparency: explanations/ai-transparency.md
