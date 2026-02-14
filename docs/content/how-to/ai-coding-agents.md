@@ -62,16 +62,15 @@ vibepit run --reconfigure
 Select the `mcp` preset in the interactive selector, then allow any remaining
 domains your MCP servers need using the discovery workflow above.
 
-## Cursor
+## OpenAI Codex
 
-Cursor communicates with its own backend services for AI features. Start with
-the `default` preset and use the discovery workflow to identify which domains
-Cursor needs. The specific domains depend on your Cursor version and
-configuration, so the monitor is the most reliable way to determine them.
+OpenAI Codex runs as a CLI agent. The `default` preset includes the `openai`
+preset, which covers core OpenAI API domains. Start with `default` and use the
+discovery workflow to identify any additional domains your setup requires.
 
 ```bash
 vibepit run
-# Start Cursor, then in another terminal:
+# Start Codex, then in another terminal:
 vibepit monitor
 ```
 
