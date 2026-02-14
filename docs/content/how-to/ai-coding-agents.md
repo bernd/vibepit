@@ -2,9 +2,7 @@
 
 Vibepit works with any AI coding agent that runs in a terminal. The sandbox
 provides network isolation by default, and you control which domains each agent
-can reach through presets and allowlist entries. This page covers a general
-workflow for discovering what your agent needs, followed by notes on common
-agents.
+can reach through presets and allowlist entries.
 
 ## Discovery workflow
 
@@ -37,7 +35,7 @@ exactly what your agent needs:
 6. Alternatively, allow domains from the command line:
 
     ```bash
-    vibepit allow-http api.example.com:443
+    vibepit allow-http --save api.example.com:443
     ```
 
 7. Repeat until your agent operates without blocked requests.
@@ -45,62 +43,25 @@ exactly what your agent needs:
 This iterative approach means you always grant the minimum access your agent
 actually needs, regardless of how its backend services evolve.
 
-## Claude Code
+## Agent-specific notes
 
-The `default` preset (pre-selected on first run) includes the `anthropic`
-preset, which covers the domains Claude Code requires for its core
-functionality. If you have `default` enabled, no additional configuration is
-needed for a standard Claude Code session.
+The `default` preset (pre-selected on first run) bundles presets for several
+common agents. In most cases, no extra configuration is needed beyond the
+discovery workflow above.
 
-If you use MCP servers that fetch remote resources, those servers may need
-access to additional domains. Enable the `mcp` preset to cover Model Context
-Protocol infrastructure:
+| Agent | Included preset | Covers |
+|---|---|---|
+| Claude Code | `anthropic` | Anthropic API domains |
+| OpenAI Codex | `openai` | OpenAI API domains |
+| GitHub Copilot | `vcs-github` | Core GitHub domains |
 
-```bash
-vibepit run --reconfigure
-```
+If you use **MCP servers** that fetch remote resources (common with Claude
+Code), enable the `mcp` preset via `vibepit run --reconfigure` and then use the
+discovery workflow to allow any remaining domains your servers need.
 
-Select the `mcp` preset in the interactive selector, then allow any remaining
-domains your MCP servers need using the discovery workflow above.
-
-## OpenAI Codex
-
-OpenAI Codex runs as a CLI agent. The `default` preset includes the `openai`
-preset, which covers core OpenAI API domains. Start with `default` and use the
-discovery workflow to identify any additional domains your setup requires.
-
-```bash
-vibepit run
-# Start Codex, then in another terminal:
-vibepit monitor
-```
-
-Allow blocked domains as they appear. Save entries to your project config
-(press **`A`** in the monitor) so they persist across sessions.
-
-## GitHub Copilot
-
-GitHub Copilot requires access to GitHub services and its own API endpoints.
-The `default` preset already includes `vcs-github`, which covers core GitHub
-domains. Use the discovery workflow to identify any additional Copilot-specific
-domains your setup requires.
-
-```bash
-vibepit run
-# Start your editor with Copilot, then in another terminal:
-vibepit monitor
-```
-
-As with other agents, allow blocked domains through the monitor and save the
-entries you want to keep.
-
-## General advice
-
-Agent backends evolve independently of Vibepit, so any static domain list
-becomes outdated. The monitor is the authoritative way to discover what your
-agent needs at any point in time. Once you have identified the right set of
-domains for your workflow, save them to your project config so they apply to
-future sessions automatically.
+For any agent not listed here, the discovery workflow works the same way — start
+a session, run the monitor, and allow what gets blocked. Save entries to your
+project config so they persist across sessions.
 
 For full details on allowlist management and the monitor interface, see
 [Monitor and Allowlist](allowlist-and-monitor.md).

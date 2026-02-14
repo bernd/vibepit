@@ -1,9 +1,5 @@
 # Sandbox Environment
 
-This page describes the environment inside the sandbox container — what is
-mounted, which environment variables are set, and how the container is
-configured.
-
 ## User and home directory
 
 The sandbox runs as the `code` user. The home directory is `/home/code`, backed

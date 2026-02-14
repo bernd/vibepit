@@ -1,8 +1,7 @@
 # Monitor and Allowlist
 
-This guide covers inspecting traffic and updating network permissions for a
-running Vibepit session. You need at least one active session before using these
-commands — start one with `vibepit run` if you have not already.
+You need at least one active session before using these commands — start one
+with `vibepit run` if you have not already.
 
 ## Open the monitor
 

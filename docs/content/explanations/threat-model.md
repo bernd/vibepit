@@ -1,6 +1,6 @@
 # Threat Model
 
-This page describes the threats Vibepit is designed to address, where its security boundaries are, and what falls outside its scope. For the specific controls that implement these defenses, see the [Security Model](security-model.md). For how the components fit together at runtime, see the [Architecture](architecture.md).
+For the specific controls that implement these defenses, see the [Security Model](security-model.md). For how the components fit together at runtime, see the [Architecture](architecture.md).
 
 ## Primary attacker profile
 
@@ -28,7 +28,7 @@ An agent does not need to be intentionally malicious. Several realistic attack v
 
 Vibepit defines four trust boundaries, each with a different level of trust:
 
-**Host system — fully trusted.** The host runs the `vibepit` CLI, the container runtime, and owns the kernel. If the host is compromised, all bets are off. Vibepit does not attempt to protect against a malicious host.
+**Host system — fully trusted.** The host runs the `vibepit` CLI, the container runtime, and owns the kernel. If the host is compromised, Vibepit's controls provide no protection. Vibepit does not attempt to protect against a malicious host.
 
 **Proxy container — trusted, minimal attack surface.** The proxy runs on a distroless base image with no shell or package manager. It enforces network policy and exposes a control API secured by mTLS. The proxy is trusted to faithfully apply allowlist rules and block unauthorized traffic.
 
@@ -84,11 +84,17 @@ Vibepit filters network traffic, not terminal output. A compromised agent can di
 
 Even within its scope, Vibepit has known limitations that you should understand.
 
-**Container escapes exist.** New container escape vulnerabilities are discovered periodically. Vibepit's hardening reduces the exploitable surface, but a sufficiently capable attacker with a zero-day kernel or runtime exploit can escape. Some runtimes — Docker Desktop on all platforms, Podman Machine on macOS/Windows — run containers inside a Linux VM, so a container escape lands in the VM guest rather than on your host. Docker Engine and Podman on Linux run containers directly on the host kernel with no VM boundary. These runtime VMs are not designed as security boundaries, so they should not be relied upon as a guarantee. For higher-assurance isolation, run Vibepit inside a dedicated VM.
+**Container escapes exist.** New container escape vulnerabilities are discovered periodically. Vibepit's hardening reduces the exploitable surface, but a sufficiently capable attacker with a zero-day kernel or runtime exploit can escape.
+
+Some runtimes run containers inside a Linux VM: Docker Desktop (all platforms) and Podman Machine (macOS/Windows). In those cases, a container escape lands in the VM guest rather than on your host. Docker Engine and Podman on Linux have no VM boundary — containers share the host kernel directly. These runtime VMs are not designed as security boundaries, so do not rely on them as a guarantee. For higher-assurance isolation, run Vibepit inside a dedicated VM.
 
 **DNS rebinding against allowlisted domains.** If you allowlist a domain and an attacker controls its DNS records, they can make it resolve to a private IP. The CIDR blocklist catches private ranges, but if the rebinding targets a public IP that you did not intend to allow, the connection succeeds. Keep your allowlist as narrow as possible.
 
-**Covert channels via allowed connections.** If the agent can reach an allowlisted domain, it can use that connection to exfiltrate data. The most prominent example is the agent's own provider API — domains like `api.anthropic.com` or `api.openai.com` must be allowlisted for the agent to function, and every API request can carry data in prompts, tool calls, or context. Features like web search or file uploads send additional data through the provider's infrastructure. An agent with access to `github.com` could similarly push data to a repository it controls. Vibepit cannot distinguish legitimate use of an allowlisted domain from abuse. Limit your allowlist to domains the agent genuinely needs. A MITM (man-in-the-middle) proxy that terminates TLS could inspect payloads and detect some exfiltration patterns, but Vibepit currently uses CONNECT tunneling and does not inspect encrypted traffic. Even with content inspection, a determined attacker can encode data in legitimate-looking requests, making this an arms race rather than a complete solution.
+**Covert channels via allowed connections.** If the agent can reach an allowlisted domain, it can use that connection to exfiltrate data.
+
+The most prominent example is the agent's own provider API. Domains like `api.anthropic.com` or `api.openai.com` must be allowlisted for the agent to function, and every API request can carry data in prompts, tool calls, or context. Web search and file upload features send additional data through the provider's infrastructure. An agent with access to `github.com` could similarly push data to a repository it controls.
+
+Vibepit cannot distinguish legitimate use of an allowlisted domain from abuse. Limit your allowlist to domains the agent genuinely needs. A MITM proxy that terminates TLS could inspect payloads and detect some exfiltration patterns, but Vibepit currently uses CONNECT tunneling and does not inspect encrypted traffic. Even with content inspection, a determined attacker can encode data in legitimate-looking requests, making this an arms race rather than a complete solution.
 
 ## Mitigations and their limits
 

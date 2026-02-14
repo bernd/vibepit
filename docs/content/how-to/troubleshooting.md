@@ -1,9 +1,5 @@
 # Troubleshoot Common Issues
 
-This page covers the most frequent problems you may encounter when using
-Vibepit. Each section follows the same format: what you see (symptoms), why it
-happens (cause), and what to do about it (fix).
-
 ---
 
 ## Container Runtime Not Available

@@ -1,8 +1,5 @@
 # Configure Network Presets
 
-This guide explains how to configure which domains your sandbox can reach,
-using presets and manual allowlist entries.
-
 Vibepit filters all network traffic from the sandbox container through a proxy.
 Only domains you explicitly allow — via presets or individual entries — are
 reachable. Configuration lives in YAML files at the project and global level.

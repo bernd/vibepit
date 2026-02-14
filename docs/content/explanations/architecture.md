@@ -60,11 +60,11 @@ The proxy container is connected to two networks: the isolated session network (
 
 The proxy runs three services in a single process:
 
-1. **HTTP proxy** (dynamic port) — handles both HTTP and HTTPS (via `CONNECT` tunneling). Every request is checked against the HTTP allowlist, which matches on domain and port. Requests to non-allowed destinations are rejected. A CIDR blocklist prevents connections to private and link-local IP ranges, blocking attempts to reach the Docker host or other local services.
+1. **HTTP proxy** (dynamic port) — handles both HTTP and HTTPS (via `CONNECT` tunneling). Every request is checked against the HTTP allowlist, which matches on domain and port. Requests to non-allowed destinations are rejected. A separate CIDR blocklist prevents connections to private and link-local IP ranges, blocking attempts to reach the Docker host or other local services.
 
-2. **DNS server** (port 53) — receives all DNS queries from the sandbox container. Queries for allowed domains are forwarded to an upstream resolver (defaults to `9.9.9.9`). Queries for non-allowed domains return `NXDOMAIN`. This prevents DNS-based data exfiltration and ensures the sandbox container cannot resolve hosts it is not allowed to reach.
+2. **DNS server** (port 53) — receives all DNS queries from the sandbox container. Allowed domains are forwarded to an upstream resolver (defaults to `9.9.9.9`). Everything else returns `NXDOMAIN`, preventing DNS-based data exfiltration.
 
-3. **Control API** (dynamic port) — an mTLS-secured HTTP API used by the CLI's `allow-http`, `allow-dns`, and `monitor` commands. The control API port is published to `127.0.0.1` on the host, so only local processes with the correct client certificate can connect. See [Control API](#control-api) below for details on the mTLS setup.
+3. **Control API** (dynamic port) — an mTLS-secured HTTP API used by the CLI's `allow-http`, `allow-dns`, and `monitor` commands. The port is published to `127.0.0.1` on the host, so only local processes with the correct client certificate can connect. See [Control API](#control-api) below for details.
 
 All three services share the same allowlist, which is updated atomically at runtime when you use `allow-http` or `allow-dns`.
 
