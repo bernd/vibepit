@@ -60,15 +60,9 @@ available presets.
 
 ## What persists between sessions
 
-The sandbox home directory (`/home/code`) is a Docker volume that survives
-across sessions. This includes:
+Homebrew and all installed packages live in the persistent home volume
+(`/home/code`), so they survive across sessions. Your project directory is
+bind-mounted from the host and is always up to date.
 
-- Homebrew and all installed packages
-- Shell history and configuration (`.bashrc`, `.profile`)
-- Tool configuration files (`.gitconfig`, `.npmrc`, etc.)
-
-Your project directory is bind-mounted from the host and is always up to date.
-
-The root filesystem is read-only. `/tmp` is writable but ephemeral — it is a
-tmpfs mount that is cleared when the container stops. Changes to the root
-filesystem outside of these locations are not possible.
+For the full list of mounts and what persists, see the
+[Sandbox Environment](../reference/sandbox.md) reference.

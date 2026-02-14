@@ -106,13 +106,13 @@ to note:
   sandbox). This keeps file references and tooling consistent.
 - Your home directory inside the sandbox is `/home/code`, not your host home
   directory. This is a persistent volume that survives across sessions.
-- `HTTP_PROXY` and `HTTPS_PROXY` are set automatically. Tools that respect these
-  variables (curl, pip, npm, and most language package managers) route traffic
-  through the filtering proxy.
-- You can install additional language runtimes and tools with Homebrew. See
-  [Install Development Tools](../how-to/install-tools.md) for details.
 - Only allowlisted domains are reachable. Requests to any other destination are
   blocked by the proxy.
+- You can install additional language runtimes and tools with Homebrew. See
+  [Install Development Tools](../how-to/install-tools.md) for details.
+
+For the full list of environment variables, mounts, and hardening settings, see
+the [Sandbox Environment](../reference/sandbox.md) reference.
 
 ## 7. Check active sessions
 
