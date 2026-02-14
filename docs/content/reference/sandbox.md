@@ -62,6 +62,10 @@ proxy's DNS server. All DNS queries from the sandbox are resolved by the proxy,
 which filters them against the DNS allowlist. Only allowlisted domains receive
 valid responses; all other queries return `NXDOMAIN`.
 
+## Hostname
+
+The sandbox container's hostname is `vibes`.
+
 ## Container hardening
 
 | Setting | Value |
@@ -70,7 +74,6 @@ valid responses; all other queries return `NXDOMAIN`.
 | Capabilities | All dropped (`CAP_DROP: ALL`) |
 | Security options | `no-new-privileges` |
 | Init process | Enabled (tini) |
-| Hostname | `vibes` |
 
 For a full description of these controls, see the
 [Security Model](../explanations/security-model.md).
