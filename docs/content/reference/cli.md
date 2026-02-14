@@ -90,7 +90,7 @@ vibepit allow-http [flags] <domain:port-pattern>...
 
 | Argument | Description |
 |----------|-------------|
-| `domain:port-pattern` | One or more domain-and-port patterns to allow. Required. |
+| `domain:port-pattern` | One or more domain-and-port patterns to allow. Required. The port is not optional — use `example.com:443` for HTTPS, `example.com:80` for HTTP, or `example.com:*` for any port. |
 
 ### Flags
 
