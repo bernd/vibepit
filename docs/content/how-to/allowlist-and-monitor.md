@@ -34,13 +34,17 @@ footer confirms the action.
 ## Add HTTP(S) allowlist entries
 
 Grant the sandbox access to an HTTP or HTTPS endpoint with `allow-http`. Each
-entry requires a domain **and** a port pattern in the form `domain:port-pattern`.
-The port is not optional — `vibepit allow-http example.com` will be rejected.
-Most HTTPS services use port `443`:
+entry takes the form `domain:port-pattern`:
 
 ```bash
 vibepit allow-http api.example.com:443
 ```
+
+!!! note "The port is required"
+    Every `allow-http` entry needs a port pattern.
+    `vibepit allow-http example.com` will be rejected — use
+    `example.com:443` for HTTPS, `example.com:80` for HTTP, or
+    `example.com:*` for any port.
 
 You can add multiple entries in a single command:
 
