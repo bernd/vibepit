@@ -13,7 +13,7 @@ theme:
   name: material
   custom_dir: docs/overrides
   logo: assets/logo-text.png
-  favicon: assets/favicon/favicon.svg
+  favicon: assets/favicon/favicon-32x32.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
