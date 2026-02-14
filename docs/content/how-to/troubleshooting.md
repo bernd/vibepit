@@ -1,45 +1,236 @@
 # Troubleshoot Common Issues
 
+This page covers the most frequent problems you may encounter when using
+Vibepit. Each section follows the same format: what you see (symptoms), why it
+happens (cause), and what to do about it (fix).
+
+---
+
 ## Container Runtime Not Available
 
-Symptoms:
+**Symptoms:** Vibepit fails when trying to create containers or networks. You
+see errors referencing the Docker or Podman socket.
 
-- `vibepit` fails when creating containers or networks.
+**Cause:** The container runtime is not running, or your user does not have
+permission to access its socket.
 
-Checks:
+**Fix:**
 
-```bash
-docker info
-# or
-podman info
-```
+1. Verify the runtime is running:
 
-In nested Vibepit development sandboxes, this is expected because runtime socket access is unavailable.
+    ```bash
+    docker info
+    # or
+    podman info
+    ```
+
+2. If the command fails, start the Docker or Podman daemon.
+
+3. Confirm your user can access the socket. On Linux, your user typically needs
+   to be in the `docker` group:
+
+    ```bash
+    sudo usermod -aG docker "$USER"
+    ```
+
+    Log out and back in for the group change to take effect.
+
+!!! note
+    Inside a nested Vibepit sandbox (Vibepit developing Vibepit), the container
+    runtime socket is intentionally unavailable. This is expected behavior.
+
+---
 
 ## `allow-http`, `allow-dns`, or `monitor` Cannot Connect
 
-Symptoms:
+**Symptoms:** The command exits with a connection error or times out when trying
+to reach the control API.
 
-- Command fails to connect to a session.
+**Cause:** There is no running session, or you are targeting the wrong one.
 
-Checks:
+**Fix:**
 
-```bash
-vibepit sessions
-```
+1. List active sessions:
 
-Ensure you target the right session with `--session`.
+    ```bash
+    vibepit sessions
+    ```
+
+2. If no sessions are listed, start one with `vibepit run`.
+
+3. If multiple sessions are listed, specify the correct one:
+
+    ```bash
+    vibepit allow-http --session <name> example.com:443
+    ```
+
+---
 
 ## Image Pull or Update Failures
 
-Symptoms:
+**Symptoms:** `vibepit update` or the initial image pull fails with network or
+timeout errors.
 
-- Runtime image pull fails.
+**Cause:** Network filtering blocks access to the container registry. This is
+common when you run Vibepit inside another sandbox that restricts outbound
+traffic.
 
-Cause:
+**Fix:**
 
-- Network filtering blocks registry access.
+- Allow the required registry domains through the proxy, or run the update from
+  an environment with unrestricted outbound access:
 
-Action:
+    ```bash
+    vibepit update
+    ```
 
-- Allow required registries, then retry, or run in an environment with outbound access.
+- If you are inside a sandbox, exit it first and run the update on the host.
+
+---
+
+## DNS Resolution Failures Inside the Sandbox
+
+**Symptoms:** Commands inside the sandbox fail with "could not resolve host" or
+similar DNS errors, even though the domain works on the host.
+
+**Cause:** The domain is not in the DNS allowlist. The sandbox DNS server only
+resolves domains that have been explicitly allowed.
+
+**Fix:**
+
+1. Add the domain to the allowlist:
+
+    ```bash
+    vibepit allow-dns example.com
+    ```
+
+2. Check whether the domain is covered by a preset you have not enabled. For
+   example, enabling the `github` preset adds several GitHub-related domains:
+
+    ```bash
+    vibepit run -p github
+    ```
+
+3. You can also add domains interactively through the monitor TUI:
+
+    ```bash
+    vibepit monitor
+    ```
+
+---
+
+## HTTP Requests Failing Inside the Sandbox
+
+**Symptoms:** HTTP or HTTPS requests from inside the sandbox return a proxy
+error or are refused, even though DNS resolves correctly.
+
+**Cause:** The domain and port combination is not in the HTTP allowlist. Note
+that `example.com` and `*.example.com` are separate entries — allowing
+`example.com` does not automatically allow `api.example.com`.
+
+**Fix:**
+
+1. Add the specific domain and port:
+
+    ```bash
+    vibepit allow-http api.example.com:443
+    ```
+
+2. If you need to allow all subdomains, use a wildcard:
+
+    ```bash
+    vibepit allow-http "*.example.com:443"
+    ```
+
+3. Double-check your existing rules. A common mistake is allowing the apex
+   domain when the request targets a subdomain, or vice versa.
+
+---
+
+## Session Will Not Start
+
+**Symptoms:** `vibepit run` fails with errors about port conflicts, network
+creation failures, or references to stale resources.
+
+**Cause:** A previous session may not have cleaned up properly, leaving behind
+Docker networks or containers that conflict with the new session.
+
+**Fix:**
+
+1. Check for leftover Vibepit resources:
+
+    ```bash
+    docker network ls | grep vibepit
+    docker ps -a | grep vibepit
+    ```
+
+2. Remove stale networks (only after confirming no other containers depend on
+   them):
+
+    ```bash
+    docker network prune
+    ```
+
+3. If a specific container is stuck, remove it manually:
+
+    ```bash
+    docker rm -f <container-id>
+    ```
+
+---
+
+## Config File Parse Errors
+
+**Symptoms:** Vibepit exits with a configuration error on startup, referencing
+YAML parse failures or unexpected values.
+
+**Cause:** The project `.vibepit.yaml` file has a syntax error, typically
+incorrect indentation or a misplaced key.
+
+**Fix:**
+
+1. Check the file for obvious YAML issues — indentation must use spaces, not
+   tabs.
+
+2. Re-run interactive setup to regenerate a valid config:
+
+    ```bash
+    vibepit --reconfigure
+    ```
+
+    This walks you through the configuration options and writes a clean file.
+
+---
+
+## Permission Issues
+
+**Symptoms:** Vibepit fails with "permission denied" errors when accessing the
+container runtime socket or runtime directories.
+
+**Cause:** Your user lacks the necessary permissions for the Docker/Podman
+socket or the `XDG_RUNTIME_DIR` directory.
+
+**Fix:**
+
+1. Verify socket permissions:
+
+    ```bash
+    ls -l /var/run/docker.sock
+    ```
+
+2. Ensure your user is in the correct group (see
+   [Container Runtime Not Available](#container-runtime-not-available) above).
+
+3. If the error references `XDG_RUNTIME_DIR`, confirm the variable is set and
+   the directory is accessible:
+
+    ```bash
+    echo "$XDG_RUNTIME_DIR"
+    ls -la "$XDG_RUNTIME_DIR"
+    ```
+
+4. For rootless Podman, ensure your user session is set up correctly:
+
+    ```bash
+    loginctl enable-linger "$USER"
+    ```
