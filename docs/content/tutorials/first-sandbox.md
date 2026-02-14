@@ -78,25 +78,7 @@ When the sandbox starts, Vibepit:
 
 For a deeper look, see [Architecture](../explanations/architecture.md).
 
-## 5. Allow extra domains at startup
-
-If you know ahead of time that you need access to additional domains, pass them
-on the command line:
-
-```bash
-vibepit -a example.com:443
-```
-
-You can also enable an entire preset:
-
-```bash
-vibepit -p vcs-github
-```
-
-Both flags can be repeated. See the [CLI Reference](../reference/cli.md) for the
-full list of flags.
-
-## 6. Work inside the sandbox
+## 5. Work inside the sandbox
 
 Once the sandbox shell appears, you are inside the sandbox container. A few things
 to note:
@@ -114,7 +96,37 @@ to note:
 For the full list of environment variables, mounts, and hardening settings, see
 the [Sandbox Environment](../reference/sandbox.md) reference.
 
-## 7. Check active sessions
+## 6. Open the monitor
+
+The monitor provides a live view of proxy logs and lets you manage allowlist
+entries interactively. From a separate terminal on the host:
+
+```bash
+vibepit monitor
+```
+
+For details on using the monitor and managing the allowlist at runtime, see
+[Monitor and Allowlist](../how-to/allowlist-and-monitor.md).
+
+## 7. Allow extra domains at startup
+
+If you know ahead of time that you need access to additional domains, pass them
+on the command line:
+
+```bash
+vibepit -a example.com:443
+```
+
+You can also enable an entire preset:
+
+```bash
+vibepit -p vcs-github
+```
+
+Both flags can be repeated. See the [CLI Reference](../reference/cli.md) for the
+full list of flags.
+
+## 8. Check active sessions
 
 From a separate terminal on the host, list running sessions:
 
@@ -124,18 +136,6 @@ vibepit sessions
 
 This shows each active session along with its project directory and network
 details.
-
-## 8. Open the monitor
-
-The monitor provides a live view of proxy logs and lets you manage allowlist
-entries interactively:
-
-```bash
-vibepit monitor
-```
-
-For details on using the monitor and managing the allowlist at runtime, see
-[Monitor and Allowlist](../how-to/allowlist-and-monitor.md).
 
 ## 9. Open additional terminals
 
