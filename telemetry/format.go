@@ -9,7 +9,9 @@ import (
 // MetricFormatter formats an agent's metrics into plain-text display lines.
 type MetricFormatter func(agent string, metrics []proxy.MetricSummary) []string
 
-var registry = map[string]MetricFormatter{}
+var registry = map[string]MetricFormatter{
+	"claude_code.": formatClaudeCode,
+}
 
 // FormatAgent formats all metrics for a single agent. Metrics matching a
 // registered prefix use the agent-specific formatter; the rest use generic.
