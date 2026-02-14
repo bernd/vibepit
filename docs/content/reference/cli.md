@@ -227,7 +227,7 @@ vibepit update
 
 ### Behavior
 
-- Pulls the latest user-specific sandbox image from `ghcr.io/bernd/vibepit:main`.
+- Pulls the latest sandbox image for your UID/GID combination (e.g., `ghcr.io/bernd/vibepit:main-uid-1000-gid-1000`).
 - Pulls the latest proxy base image (`gcr.io/distroless/base-debian13:latest`).
 
 ---

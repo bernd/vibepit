@@ -197,3 +197,36 @@ incorrect indentation or a misplaced key.
 
 ---
 
+## Sandbox Image Not Found
+
+**Symptoms:** `vibepit run` or `vibepit update` fails with an image pull error
+referencing a tag like `main-uid-1234-gid-1234`.
+
+**Cause:** Vibepit builds sandbox images for specific UID/GID combinations to
+match file ownership between the host and the container. Pre-built images are
+available for common values (e.g., UID/GID 1000), but if your user has an
+uncommon UID or GID, no pre-built image may exist.
+
+**Fix:**
+
+1. Check your UID and GID:
+
+    ```bash
+    id
+    ```
+
+2. If no pre-built image exists for your UID/GID, build one locally:
+
+    ```bash
+    docker build --build-arg CODE_UID=$(id -u) --build-arg CODE_GID=$(id -g) \
+      -t vibepit:latest image/
+    ```
+
+3. Run Vibepit with the `--local` flag to use your locally built image:
+
+    ```bash
+    vibepit run --local
+    ```
+
+---
+
