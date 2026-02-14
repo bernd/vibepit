@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block announce %}
+  <span class="vp-announce">
+    <span class="vp-announce__icon md-icon" aria-hidden="true">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+        <path d="M13 14h-2V9h2m0 9h-2v-2h2M1 21h22L12 2 1 21Z"/>
+      </svg>
+    </span>
+    <span>Vibepit is in alpha. Expect breaking changes and bugs.</span>
+  </span>
+{% endblock %}
+
+{% block extrahead %}
+  {{ super() }}
+  <link rel="icon" href="{{ 'assets/favicon/favicon.ico' | url }}" sizes="any">
+  <link rel="icon" type="image/png" sizes="48x48" href="{{ 'assets/favicon/favicon-48x48.png' | url }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ 'assets/favicon/favicon-32x32.png' | url }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ 'assets/favicon/favicon-16x16.png' | url }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ 'assets/favicon/apple-touch-icon.png' | url }}">
+  <link rel="manifest" href="{{ 'assets/favicon/site.webmanifest' | url }}">
+{% endblock %}

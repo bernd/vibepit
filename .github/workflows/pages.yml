@@ -4,7 +4,10 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "docs/pages/**"
+      - "mkdocs.yml"
+      - "docs/content/**"
+      - "docs/pyproject.toml"
+      - "docs/uv.lock"
 
   workflow_dispatch:
 
@@ -29,13 +32,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install docs dependencies
+        run: uv sync --project docs
+
+      - name: Build site
+        run: make docs-build
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: 'docs/pages/'
+          path: "site/"
 
       - name: Deploy to GitHub Pages
         id: deployment
