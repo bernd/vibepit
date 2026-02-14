@@ -101,7 +101,11 @@ full list of flags.
 Once the sandbox shell appears, you are inside the sandbox container. A few things
 to note:
 
-- Your project is available at the **same path** as on the host.
+- Your project is mounted at its **original absolute path** (e.g.,
+  `/home/you/Code/myproject` on the host is available at the same path inside the
+  sandbox). This keeps file references and tooling consistent.
+- Your home directory inside the sandbox is `/home/code`, not your host home
+  directory. This is a persistent volume that survives across sessions.
 - `HTTP_PROXY` and `HTTPS_PROXY` are set automatically. Tools that respect these
   variables (curl, pip, npm, and most language package managers) route traffic
   through the filtering proxy.
