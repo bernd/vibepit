@@ -10,7 +10,9 @@ reachable. Configuration lives in YAML files at the project and global level.
 ## The project config file
 
 Project network configuration is stored in `.vibepit/network.yaml` at your
-project root. A typical file looks like this:
+project root. The `.vibepit` directory is hidden inside the sandbox, so the
+agent cannot read or modify its own allowlist rules. A typical file looks like
+this:
 
 ```yaml
 presets:
