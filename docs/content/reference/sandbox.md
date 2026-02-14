@@ -66,6 +66,11 @@ valid responses; all other queries return `NXDOMAIN`.
 
 The sandbox container's hostname is `vibes`.
 
+## Init process
+
+An init process (tini) runs as PID 1 to handle signal forwarding and zombie
+reaping.
+
 ## Container hardening
 
 | Setting | Value |
@@ -73,7 +78,6 @@ The sandbox container's hostname is `vibes`.
 | Root filesystem | Read-only |
 | Capabilities | All dropped (`CAP_DROP: ALL`) |
 | Security options | `no-new-privileges` |
-| Init process | Enabled (tini) |
 
 For a full description of these controls, see the
 [Security Model](../explanations/security-model.md).
