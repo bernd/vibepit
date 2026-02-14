@@ -72,7 +72,7 @@ Even within its scope, Vibepit has known limitations that you should understand.
 
 **DNS rebinding against allowlisted domains.** If you allowlist a domain and an attacker controls its DNS records, they can make it resolve to a private IP. The CIDR blocklist catches private ranges, but if the rebinding targets a public IP that you did not intend to allow, the connection succeeds. Keep your allowlist as narrow as possible.
 
-**Covert channels via allowed connections.** If the agent can reach an allowlisted domain, it can use that connection to exfiltrate data. For example, an agent with access to `github.com` could push data to a repository it controls. Vibepit cannot distinguish legitimate use of an allowlisted domain from abuse. Limit your allowlist to domains the agent genuinely needs.
+**Covert channels via allowed connections.** If the agent can reach an allowlisted domain, it can use that connection to exfiltrate data. For example, an agent with access to `github.com` could push data to a repository it controls. Vibepit cannot distinguish legitimate use of an allowlisted domain from abuse. Limit your allowlist to domains the agent genuinely needs. A MITM (man-in-the-middle) proxy that terminates TLS could inspect payloads and detect some exfiltration patterns, but Vibepit currently uses CONNECT tunneling and does not inspect encrypted traffic. Even with content inspection, a determined attacker can encode data in legitimate-looking requests, making this an arms race rather than a complete solution.
 
 ## Mitigations and their limits
 
