@@ -92,3 +92,9 @@ Vibepit is not VM-level isolation. The sandbox container shares the host kernel,
 - **Host misconfiguration** (such as mounting the Docker socket into the container) can bypass all controls.
 
 Treat Vibepit as defense in depth: multiple independent controls that collectively reduce risk. It is not absolute containment. For workloads that require stronger isolation guarantees, consider running Vibepit inside a VM.
+
+### A note on macOS and Windows
+
+On macOS and Windows, Docker Desktop and Podman run the container runtime inside a lightweight Linux VM. This means a container escape lands in the VM guest, not directly on your host. The VM boundary provides an additional layer of isolation that does not exist on Linux, where containers share the host kernel directly.
+
+However, this VM is designed for developer convenience, not as a security boundary. File sharing, socket forwarding, and networking features bridge the VM boundary in various ways, and the project directory is bind-mounted through it. Vibepit does not control or harden this VM layer, so you should not treat it as a guaranteed security control — but it does reduce the practical risk of a container escape reaching your host compared to running on Linux.

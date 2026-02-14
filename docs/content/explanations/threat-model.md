@@ -68,7 +68,7 @@ Vibepit filters network traffic, not terminal output. A compromised agent can di
 
 Even within its scope, Vibepit has known limitations that you should understand.
 
-**Container escapes exist.** New container escape vulnerabilities are discovered periodically. Vibepit's hardening reduces the exploitable surface, but a sufficiently capable attacker with a zero-day kernel or runtime exploit can escape. For higher-assurance isolation, run Vibepit inside a VM.
+**Container escapes exist.** New container escape vulnerabilities are discovered periodically. Vibepit's hardening reduces the exploitable surface, but a sufficiently capable attacker with a zero-day kernel or runtime exploit can escape. On macOS and Windows, Docker Desktop and Podman run containers inside a Linux VM, so a container escape lands in the VM guest rather than on your host — an additional boundary that does not exist on Linux. However, this VM is not designed or hardened as a security boundary, so it should not be relied upon as a guarantee. For higher-assurance isolation, run Vibepit inside a dedicated VM.
 
 **DNS rebinding against allowlisted domains.** If you allowlist a domain and an attacker controls its DNS records, they can make it resolve to a private IP. The CIDR blocklist catches private ranges, but if the rebinding targets a public IP that you did not intend to allow, the connection succeeds. Keep your allowlist as narrow as possible.
 
