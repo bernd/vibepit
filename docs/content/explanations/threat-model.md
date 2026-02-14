@@ -15,6 +15,7 @@ An agent does not need to be intentionally malicious. Several realistic attack v
 - **Prompt injection.** Malicious instructions hidden in issue descriptions, pull request comments, code review feedback, README files, or web pages that the agent reads. The agent follows these instructions as if they came from you, potentially exfiltrating code, installing backdoors, or modifying files in ways you did not intend.
 - **Compromised dependencies.** A supply chain attack on a package the agent installs gives the attacker code execution inside the container. The agent then operates in an environment where a malicious process is running alongside it.
 - **Tool-use exploits.** MCP servers, shell tools, or other integrations that the agent calls can return crafted responses that hijack the agent's behavior.
+- **Malicious agent skills or plugins.** Third-party skills, extensions, or plugins loaded into the agent can contain arbitrary code or prompt overrides that alter the agent's behavior without your knowledge.
 
 Vibepit does not prevent these attacks from happening — it limits the damage by constraining what a compromised agent can do. Without network isolation, a prompt-injected agent with shell access can exfiltrate your source code, credentials, and environment variables in seconds. With Vibepit, that same agent can only reach the domains you have explicitly allowed.
 
