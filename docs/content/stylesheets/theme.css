@@ -72,18 +72,17 @@
 
 /* Render the header logo as a wordmark instead of a square icon. */
 .md-header__button.md-logo {
-  margin: 0 0.5rem 0 0;
+  margin: 0 0.25rem 0 0;
   padding: 0;
-  width: clamp(7.5rem, 16vw, 11rem);
+  width: auto;
+  min-width: 0;
 }
 
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
-  width: 100%;
-  height: auto;
-  max-height: 2rem;
-  object-fit: contain;
-  object-position: left center;
+  width: auto;
+  height: 1.55rem;
+  max-height: 1.55rem;
 }
 
 /* Hide the plain text site title; the wordmark is the brand label. */
@@ -92,8 +91,10 @@
 }
 
 @media screen and (max-width: 76.234375em) {
-  .md-header__button.md-logo {
-    width: clamp(6.5rem, 30vw, 9rem);
+  .md-header__button.md-logo img,
+  .md-header__button.md-logo svg {
+    height: 1.35rem;
+    max-height: 1.35rem;
   }
 }
 
