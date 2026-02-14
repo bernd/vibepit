@@ -19,9 +19,6 @@ hide:
       <a class="md-button" href="reference/cli/">CLI Reference</a>
       <a class="md-button" href="https://github.com/bernd/vibepit">GitHub</a>
     </div>
-    <p class="vp-landing__meta">
-      Alpha software. Expect breaking changes.
-    </p>
   </div>
   <div class="vp-landing__panel">
     <img class="vp-landing__logo" src="assets/logo.png" alt="Vibepit logo">
