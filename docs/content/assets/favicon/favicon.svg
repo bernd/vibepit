@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Vibepit shield monogram">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1829"/>
+      <stop offset="100%" stop-color="#4c1d95"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7ef9ff"/>
+      <stop offset="100%" stop-color="#00b4ff"/>
+    </linearGradient>
+  </defs>
+  <path d="M14 22 Q14 8 28 8 H72 Q86 8 86 22 V60 Q86 69 76 76 Q67 84 56 90 H44 Q33 84 24 76 Q14 69 14 60 Z" fill="#00d4ff"/>
+  <path d="M20 26 Q20 14 31 14 H69 Q80 14 80 26 V56 Q80 63 71 70 Q64 77 56.5 84 H43.5 Q36 77 29 70 Q20 63 20 56 Z" fill="#0099cc"/>
+  <path d="M25 29 Q25 19 33 19 H67 Q75 19 75 29 V52 Q75 58 67 64 Q61.5 70 56.8 78 H43.2 Q38.5 70 33 64 Q25 58 25 52 Z" fill="url(#bg)"/>
+  <path d="M34 30 L50 72 L66 30" fill="none" stroke="#070d18" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M34 30 L50 72 L66 30" fill="none" stroke="url(#fg)" stroke-width="10.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

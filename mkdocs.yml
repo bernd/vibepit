@@ -1,0 +1,68 @@
+site_name: Vibepit
+site_description: Run AI coding agents in isolated containers with network filtering.
+site_url: https://vibepit.dev
+repo_url: https://github.com/bernd/vibepit
+repo_name: bernd/vibepit
+
+docs_dir: docs/content
+site_dir: site
+
+copyright: "&copy; 2026 Bernd Ahlers"
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/logo-text.png
+  favicon: assets/favicon/favicon.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: cyan
+      accent: blue
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: cyan
+      accent: blue
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+extra_css:
+  - stylesheets/theme.css
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - First Sandbox: tutorials/first-sandbox.md
+  - How-To Guides:
+      - Monitor and Allowlist: how-to/allowlist-and-monitor.md
+      - Install Development Tools: how-to/install-tools.md
+      - Configure Network Presets: how-to/configure-presets.md
+      - Use with AI Coding Agents: how-to/ai-coding-agents.md
+      - Troubleshoot Common Issues: how-to/troubleshooting.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Network Presets: reference/presets.md
+      - Sandbox Environment: reference/sandbox.md
+  - Explanations:
+      - Architecture: explanations/architecture.md
+      - Security Model: explanations/security-model.md
+      - Threat Model: explanations/threat-model.md

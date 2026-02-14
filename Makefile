@@ -1,4 +1,4 @@
-.PHONY: build test test-integration clean release-build release-archive release-publish
+.PHONY: build test test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve
 
 BINARY := vibepit
 LDFLAGS := -s -w
@@ -62,3 +62,12 @@ release-publish:
 clean:
 	rm -f $(BINARY) embed/proxy/vibepit
 	rm -rf dist/
+
+docs-install:
+	uv sync --project docs
+
+docs-build:
+	uv run --project docs mkdocs build --strict
+
+docs-serve:
+	uv run --project docs mkdocs serve
