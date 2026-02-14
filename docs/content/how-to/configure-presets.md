@@ -83,15 +83,29 @@ details.
 
 ## Allow host ports
 
-The `allow-host-ports` key lists port numbers on `host.vibepit` that are
-reachable from inside the container. This is a project config setting only and
-is not available in the global config or via CLI flags.
+By default, the sandbox cannot reach services running on your host machine —
+private IP ranges are blocked by the CIDR blocklist. The `allow-host-ports`
+setting creates a controlled exception for specific ports.
+
+Inside the sandbox, the hostname `host.vibepit` resolves to your host machine.
+Requests to `host.vibepit` on a listed port bypass the CIDR blocklist and are
+forwarded to the corresponding port on the host. Requests to unlisted ports are
+blocked.
+
+This is useful when your project depends on a local service — for example, a
+database or a development API server:
 
 ```yaml
 allow-host-ports:
   - 3000
   - 5432
 ```
+
+With this configuration, `curl http://host.vibepit:3000` works inside the
+sandbox, but `curl http://host.vibepit:8080` is blocked.
+
+`allow-host-ports` is a project config setting only — it is not available in the
+global config or via CLI flags.
 
 ## Global config
 
