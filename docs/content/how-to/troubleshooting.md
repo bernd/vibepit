@@ -239,3 +239,10 @@ If your user has a different UID or GID, no pre-built image exists.
 
 ---
 
+## Still stuck?
+
+If none of the above resolves your problem, open an issue on
+[GitHub](https://github.com/bernd/vibepit/issues). Include the output of
+`vibepit --debug` and your container runtime version (`docker --version` or
+`podman --version`).
+
