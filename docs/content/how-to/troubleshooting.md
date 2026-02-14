@@ -195,7 +195,7 @@ incorrect indentation or a misplaced key.
 2. Re-run interactive setup to regenerate a valid config:
 
     ```bash
-    vibepit --reconfigure
+    vibepit run --reconfigure
     ```
 
     This walks you through the configuration options and writes a clean file.

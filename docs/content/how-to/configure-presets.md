@@ -48,13 +48,13 @@ choices.
 To re-run the interactive preset selector at any time:
 
 ```bash
-vibepit --reconfigure
+vibepit run --reconfigure
 ```
 
 Or use the short flag:
 
 ```bash
-vibepit -r
+vibepit run -r
 ```
 
 The selector opens with your current presets pre-checked. After you confirm,

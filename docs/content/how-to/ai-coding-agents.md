@@ -56,7 +56,7 @@ access to additional domains. Enable the `mcp` preset to cover Model Context
 Protocol infrastructure:
 
 ```bash
-vibepit --reconfigure
+vibepit run --reconfigure
 ```
 
 Select the `mcp` preset in the interactive selector, then allow any remaining
