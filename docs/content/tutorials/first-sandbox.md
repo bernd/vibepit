@@ -109,6 +109,8 @@ to note:
 - `HTTP_PROXY` and `HTTPS_PROXY` are set automatically. Tools that respect these
   variables (curl, pip, npm, and most language package managers) route traffic
   through the filtering proxy.
+- You can install additional language runtimes and tools with Homebrew. See
+  [Install Development Tools](../how-to/install-tools.md) for details.
 - Only allowlisted domains are reachable. Requests to any other destination are
   blocked by the proxy.
 

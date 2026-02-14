@@ -54,6 +54,7 @@ nav:
       - First Sandbox: tutorials/first-sandbox.md
   - How-To Guides:
       - Monitor and Allowlist: how-to/allowlist-and-monitor.md
+      - Install Development Tools: how-to/install-tools.md
       - Configure Network Presets: how-to/configure-presets.md
       - Use with AI Coding Agents: how-to/ai-coding-agents.md
       - Troubleshoot Common Issues: how-to/troubleshooting.md
