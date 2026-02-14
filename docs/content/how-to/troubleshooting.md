@@ -26,7 +26,14 @@ permission to access its socket.
 
 2. If the command fails, start the Docker or Podman daemon.
 
-3. Confirm your user can access the socket. On Linux, your user typically needs
+3. Run Vibepit with `--debug` for more detail on what socket path it is trying
+   to connect to and where it fails:
+
+    ```bash
+    vibepit --debug
+    ```
+
+4. Confirm your user can access the socket. On Linux, your user typically needs
    to be in the `docker` group:
 
     ```bash
@@ -34,13 +41,6 @@ permission to access its socket.
     ```
 
     Log out and back in for the group change to take effect.
-
-4. Run Vibepit with `--debug` for more detail on what socket path it is trying
-   to connect to and where it fails:
-
-    ```bash
-    vibepit --debug
-    ```
 
 ---
 
