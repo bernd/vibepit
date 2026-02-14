@@ -100,10 +100,11 @@ resolves domains that have been explicitly allowed.
     ```
 
 2. Check whether the domain is covered by a preset you have not enabled. For
-   example, enabling the `github` preset adds several GitHub-related domains:
+   example, enabling the `vcs-github` preset adds several GitHub-related
+   domains:
 
     ```bash
-    vibepit run -p github
+    vibepit run -p vcs-github
     ```
 
 3. You can also add domains interactively through the monitor TUI:
@@ -179,8 +180,8 @@ Docker networks or containers that conflict with the new session.
 **Symptoms:** Vibepit exits with a configuration error on startup, referencing
 YAML parse failures or unexpected values.
 
-**Cause:** The project `.vibepit.yaml` file has a syntax error, typically
-incorrect indentation or a misplaced key.
+**Cause:** The project `.vibepit/network.yaml` file has a syntax error,
+typically incorrect indentation or a misplaced key.
 
 **Fix:**
 

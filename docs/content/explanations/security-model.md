@@ -77,7 +77,7 @@ Each session generates ephemeral Ed25519 key pairs:
 4. TLS 1.3 is enforced as the minimum version.
 5. The server requires and verifies client certificates against the ephemeral CA (`RequireAndVerifyClientCert`).
 
-Because the CA key is discarded after signing, an attacker who compromises the proxy at runtime cannot mint new client certificates. The credentials exist only in memory for the lifetime of the session.
+Because the CA key is discarded after signing, an attacker who compromises the proxy at runtime cannot mint new client certificates. The server credentials are passed to the proxy container via environment variables and never touch disk. Client credentials (CA cert, client cert, client key) are written to `$XDG_RUNTIME_DIR/vibepit/<sessionID>/` with restrictive permissions (`0600`) so that CLI subcommands can authenticate from separate processes. These files are deleted when the session ends.
 
 ## Proxy image
 

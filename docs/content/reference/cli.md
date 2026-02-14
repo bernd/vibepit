@@ -69,7 +69,7 @@ vibepit run -L
 vibepit run -a api.example.com:443
 
 # Allow multiple domains and enable a preset
-vibepit run -a api.example.com:443 -a cdn.example.com:443 -p github
+vibepit run -a api.example.com:443 -a cdn.example.com:443 -p vcs-github
 
 # Re-run the network preset selector
 vibepit run -r

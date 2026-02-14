@@ -80,7 +80,7 @@ The sandbox container is your workspace. It runs an Ubuntu-based image with comm
 
 The container has your project directory bind-mounted (read-write) and a persistent `vibepit-home` volume mounted at `/home/code`. This volume survives across sessions, preserving installed tools, shell history, and configuration. The project's `.vibepit` configuration directory is hidden inside the sandbox to prevent the agent from modifying its own allowlist rules.
 
-Environment variables `HTTP_PROXY`, `HTTPS_PROXY`, and `DNS` are set to point at the proxy container's static IP, ensuring all outbound traffic is routed through the proxy without any additional configuration.
+Environment variables `HTTP_PROXY` and `HTTPS_PROXY` are set to point at the proxy container's static IP. DNS is configured through the container runtime's DNS settings to use the proxy's DNS server on port 53. Together, these ensure all outbound traffic is routed through the proxy without any additional configuration.
 
 For a complete description of the security controls, see [Security Model](security-model.md).
 

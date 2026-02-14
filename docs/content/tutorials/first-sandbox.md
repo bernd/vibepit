@@ -90,7 +90,7 @@ vibepit -a example.com:443
 You can also enable an entire preset:
 
 ```bash
-vibepit -p github
+vibepit -p vcs-github
 ```
 
 Both flags can be repeated. See the [CLI Reference](../reference/cli.md) for the
@@ -137,15 +137,17 @@ vibepit monitor
 For details on using the monitor and managing the allowlist at runtime, see
 [Monitor and Allowlist](../how-to/allowlist-and-monitor.md).
 
-## 9. Reattach to a session
+## 9. Open additional terminals
 
-When you exit the sandbox shell, the session keeps running in the background.
-To reattach, run `vibepit` again from the same project directory:
+While a session is running, you can open additional shells inside the same
+sandbox. Run `vibepit` again from the same project directory in a separate
+terminal:
 
 ```bash
 vibepit
 ```
 
-If a session is still active for that project, Vibepit reattaches to it
-automatically instead of creating a new one. There is no explicit detach
-command — just exit the shell.
+Vibepit detects the existing session and opens a new shell inside it instead of
+creating a new one. When you exit all shells **and** the original `vibepit`
+process, the session is cleaned up — containers and the network are removed
+automatically.
