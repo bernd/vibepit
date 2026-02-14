@@ -34,7 +34,7 @@ available inside the container at the same path.
 cd ~/projects/my-app
 ```
 
-!!! warning
+!!! tip
     Vibepit refuses to run if your working directory is your home directory.
     Always `cd` into a specific project first.
 
