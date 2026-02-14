@@ -17,7 +17,7 @@ An agent does not need to be intentionally malicious. Several realistic attack v
 - **Tool-use exploits.** MCP servers, shell tools, or other integrations that the agent calls can return crafted responses that hijack the agent's behavior.
 - **Malicious agent skills or plugins.** Third-party skills, extensions, or plugins loaded into the agent can contain arbitrary code or prompt overrides that alter the agent's behavior without your knowledge.
 
-!!! info
+!!! note
     Vibepit does not prevent these attacks from happening — it limits the damage
     by constraining what a compromised agent can do. Without network isolation,
     a prompt-injected agent with shell access can exfiltrate your source code,
