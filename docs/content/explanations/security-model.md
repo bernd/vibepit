@@ -100,6 +100,6 @@ Some container runtimes run containers inside a lightweight Linux VM:
 - **Docker Desktop** (macOS, Windows, and Linux) runs a VM using the platform's hypervisor (Apple Virtualization framework, Hyper-V/WSL2, or KVM).
 - **Podman Machine** (macOS, Windows) runs a Fedora CoreOS VM.
 
-When a VM is present, a container escape lands in the VM guest, not directly on your host. This adds a boundary that does not exist when using **Docker Engine** or **Podman** directly on Linux, where containers share the host kernel.
+When a VM is present, a container escape lands in the VM guest, not directly on your host. This adds a boundary that does not exist when using **Docker Engine** on Linux or **Podman** on Linux (including Podman Desktop), where containers run natively and share the host kernel.
 
 However, these VMs are designed for developer convenience, not as security boundaries. File sharing, socket forwarding, and networking features bridge the VM boundary in various ways, and the project directory is bind-mounted through it. Vibepit does not control or harden this VM layer, so you should not treat it as a guaranteed security control — but it does reduce the practical risk of a container escape reaching your host.
