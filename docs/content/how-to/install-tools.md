@@ -8,9 +8,9 @@ sessions.
 ## Install Homebrew
 
 The sandbox includes a `brew` wrapper that installs Homebrew on first use. Run
-any `brew` command to trigger the installation:
+any `brew` command inside the sandbox to trigger the installation:
 
-```bash
+```bash title="Inside the sandbox"
 brew --version
 ```
 
@@ -24,9 +24,9 @@ reuse the existing installation.
 
 ## Install language runtimes
 
-Use `brew install` to add language runtimes and tools:
+Use `brew install` inside the sandbox to add language runtimes and tools:
 
-```bash
+```bash title="Inside the sandbox"
 # Node.js
 brew install node
 
@@ -49,7 +49,7 @@ After installing a language runtime, its package manager (npm, pip, cargo, etc.)
 needs network access to download dependencies. Enable the matching preset for
 your ecosystem:
 
-```bash
+```bash title="On the host"
 vibepit run --reconfigure
 ```
 
@@ -69,5 +69,6 @@ across sessions. This includes:
 
 Your project directory is bind-mounted from the host and is always up to date.
 
-The root filesystem is read-only, so changes outside of `/home/code`, `/tmp`,
-and your project directory do not persist.
+The root filesystem is read-only. `/tmp` is writable but ephemeral — it is a
+tmpfs mount that is cleared when the container stops. Changes to the root
+filesystem outside of these locations are not possible.
