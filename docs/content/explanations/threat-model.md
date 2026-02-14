@@ -4,9 +4,19 @@ This page describes the threats Vibepit is designed to address, where its securi
 
 ## Primary attacker profile
 
-Vibepit assumes the primary threat is a **compromised or misbehaving AI coding agent** running inside the sandbox container. The agent has shell access and can execute arbitrary code within the container. It may attempt to exfiltrate data, reach external services, pivot to the host, or persist malicious changes — intentionally or as a side effect of a prompt injection or a compromised dependency.
+Vibepit assumes the primary threat is a **compromised or misbehaving AI coding agent** running inside the sandbox container. The agent has shell access and can execute arbitrary code within the container. It may attempt to exfiltrate data, reach external services, pivot to the host, or persist malicious changes.
 
 You are not defending against a passive observer. You are defending against an active process with full user-level access to a Linux environment that will try every tool available to it.
+
+### How an agent gets compromised
+
+An agent does not need to be intentionally malicious. Several realistic attack vectors can turn a well-behaved agent into a hostile one:
+
+- **Prompt injection.** Malicious instructions hidden in issue descriptions, pull request comments, code review feedback, README files, or web pages that the agent reads. The agent follows these instructions as if they came from you, potentially exfiltrating code, installing backdoors, or modifying files in ways you did not intend.
+- **Compromised dependencies.** A supply chain attack on a package the agent installs gives the attacker code execution inside the container. The agent then operates in an environment where a malicious process is running alongside it.
+- **Tool-use exploits.** MCP servers, shell tools, or other integrations that the agent calls can return crafted responses that hijack the agent's behavior.
+
+Vibepit does not prevent these attacks from happening — it limits the damage by constraining what a compromised agent can do. Without network isolation, a prompt-injected agent with shell access can exfiltrate your source code, credentials, and environment variables in seconds. With Vibepit, that same agent can only reach the domains you have explicitly allowed.
 
 ## Trust boundaries
 
