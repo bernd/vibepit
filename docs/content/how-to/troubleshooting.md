@@ -74,7 +74,7 @@ to reach the control API.
 3. If multiple sessions are listed, specify the correct one:
 
     ```bash
-    vibepit allow-http --session <name> example.com:443
+    vibepit allow-http --session <session-id> example.com:443
     ```
 
 ---
