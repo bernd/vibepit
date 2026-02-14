@@ -558,9 +558,23 @@
   --vp-banner-shadow: inset 0 -1px 0 rgba(0, 212, 255, 0.3);
 }
 
+.vp-footer-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+}
+
+.vp-footer-meta-row .md-copyright,
+.vp-footer-meta-row .md-copyright__highlight {
+  margin: 0;
+}
+
 .vp-footer-links {
   font-size: 0.64rem;
   opacity: 0.7;
+  margin-left: auto;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .vp-footer-links a {
@@ -569,6 +583,16 @@
 
 .vp-footer-links a:hover {
   opacity: 1;
+}
+
+@media screen and (max-width: 44.984375em) {
+  .vp-footer-meta-row {
+    align-items: flex-start;
+  }
+
+  .vp-footer-links {
+    margin-top: 0.2rem;
+  }
 }
 
 [data-md-color-scheme="default"] .md-header,
