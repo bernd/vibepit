@@ -13,7 +13,8 @@ any), and the full set of allowed domains.
 
 ## Defaults
 
-The `default` meta-preset is always active. It includes the following presets:
+The `default` meta-preset is pre-selected on first run and includes the
+following presets:
 
 - [`anthropic`](#anthropic)
 - [`cdn-github`](#cdn-github)
@@ -21,8 +22,9 @@ The `default` meta-preset is always active. It includes the following presets:
 - [`openai`](#openai)
 - [`vcs-github`](#vcs-github)
 
-You do not need to select these individually -- they are enabled for every
-session.
+You can deselect `default` in the preset selector if you want full control over
+which domains are allowed. When `default` is selected, you do not need to
+enable the included presets individually.
 
 ---
 

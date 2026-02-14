@@ -47,8 +47,9 @@ actually needs, regardless of how its backend services evolve.
 
 ## Claude Code
 
-The `default` preset includes the `anthropic` preset, which covers the domains
-Claude Code requires for its core functionality. No additional configuration is
+The `default` preset (pre-selected on first run) includes the `anthropic`
+preset, which covers the domains Claude Code requires for its core
+functionality. If you have `default` enabled, no additional configuration is
 needed for a standard Claude Code session.
 
 If you use MCP servers that fetch remote resources, those servers may need

@@ -20,7 +20,8 @@ reuse the existing installation.
 
 !!! note
     The `homebrew` and `vcs-github` presets are included in the `default`
-    preset, so no additional network configuration is needed.
+    preset. If you have `default` enabled (pre-selected on first run), no
+    additional network configuration is needed.
 
 ## Install language runtimes
 
