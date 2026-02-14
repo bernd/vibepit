@@ -221,9 +221,12 @@ If your user has a different UID or GID, no pre-built image exists.
     id
     ```
 
-2. If no pre-built image exists for your UID/GID, build one locally:
+2. If no pre-built image exists for your UID/GID, clone the repository and
+   build the image locally:
 
     ```bash
+    git clone https://github.com/bernd/vibepit.git
+    cd vibepit
     docker build --build-arg CODE_UID=$(id -u) --build-arg CODE_GID=$(id -g) \
       -t vibepit:latest image/
     ```
