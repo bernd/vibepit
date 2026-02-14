@@ -69,28 +69,6 @@ to reach the control API.
 
 ---
 
-## Image Pull or Update Failures
-
-**Symptoms:** `vibepit update` or the initial image pull fails with network or
-timeout errors.
-
-**Cause:** Network filtering blocks access to the container registry. This is
-common when you run Vibepit inside another sandbox that restricts outbound
-traffic.
-
-**Fix:**
-
-- Allow the required registry domains through the proxy, or run the update from
-  an environment with unrestricted outbound access:
-
-    ```bash
-    vibepit update
-    ```
-
-- If you are inside a sandbox, exit it first and run the update on the host.
-
----
-
 ## DNS Resolution Failures Inside the Sandbox
 
 **Symptoms:** Commands inside the sandbox fail with "could not resolve host" or
