@@ -94,6 +94,8 @@ All outbound traffic from the sandbox container follows two paths:
 
 The CIDR blocklist is applied to resolved IP addresses and blocks all private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), and link-local addresses by default. This prevents the sandbox container from reaching the Docker host, other containers, or local network services, even if a domain resolves to a private IP.
 
+**Host access via `host.vibepit`:** The one exception to CIDR blocking is the synthetic hostname `host.vibepit`. The proxy's DNS server resolves it to the host machine's gateway IP, and the HTTP proxy forwards requests to it — but only on ports explicitly listed in `allow-host-ports` in the project config. This lets the sandbox reach local development services (databases, API servers) without opening up all private IP ranges. See [Configure Network Presets](../how-to/configure-presets.md#allow-host-ports) for configuration details.
+
 ## Session Lifecycle
 
 A session progresses through these stages:
