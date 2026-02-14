@@ -626,3 +626,18 @@
 [data-md-color-scheme="slate"] .md-typeset a:hover {
   color: var(--vp-glow-cyan);
 }
+
+@media screen and (max-width: 76.234375em) {
+  [data-md-color-scheme="default"] .md-nav__source {
+    background-color: var(--vp-deep-teal) !important;
+    color: var(--vp-ice-white) !important;
+  }
+
+  [data-md-color-scheme="default"] .md-nav__source .md-source,
+  [data-md-color-scheme="default"] .md-nav__source .md-source:hover,
+  [data-md-color-scheme="default"] .md-nav__source .md-source__icon,
+  [data-md-color-scheme="default"] .md-nav__source .md-source__repository,
+  [data-md-color-scheme="default"] .md-nav__source .md-source__fact {
+    color: var(--vp-ice-white) !important;
+  }
+}
