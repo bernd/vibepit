@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 
+{% block announce %}
+  Vibepit is in alpha. Expect breaking changes.
+{% endblock %}
+
 {% block extrahead %}
   {{ super() }}
   <link rel="icon" href="{{ 'assets/favicon/favicon.ico' | url }}" sizes="any">

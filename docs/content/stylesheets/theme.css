@@ -68,6 +68,13 @@
   --vp-card-border: rgba(0, 153, 204, 0.35);
   --vp-card-bg: rgba(26, 39, 68, 0.3);
   --vp-card-hover-border: rgba(0, 212, 255, 0.6);
+  --vp-banner-bg: linear-gradient(100deg, rgba(13, 24, 41, 0.96) 0%, rgba(26, 39, 68, 0.95) 100%);
+  --vp-banner-fg: var(--vp-ice-white);
+  --vp-banner-border: rgba(0, 212, 255, 0.45);
+  --vp-banner-link: var(--vp-flame-orange);
+  --vp-banner-link-hover: var(--vp-warning-amber);
+  --vp-banner-accent: var(--vp-flame-orange);
+  --vp-banner-shadow: inset 0 -1px 0 rgba(0, 212, 255, 0.35);
 }
 
 /* Render the header logo as a wordmark instead of a square icon. */
@@ -88,6 +95,38 @@
 /* Hide the plain text site title; the wordmark is the brand label. */
 .md-header__title .md-header__topic:first-child {
   display: none;
+}
+
+.md-banner {
+  background: var(--vp-banner-bg);
+  color: var(--vp-banner-fg);
+  border-bottom: 1px solid var(--vp-banner-border);
+  box-shadow: inset 0.2rem 0 0 var(--vp-banner-accent), var(--vp-banner-shadow);
+}
+
+.md-banner__inner {
+  margin: 0.45rem auto;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.md-banner a {
+  color: var(--vp-banner-link);
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.md-banner a:hover {
+  color: var(--vp-banner-link-hover);
+}
+
+.md-banner__button {
+  color: var(--vp-banner-link);
+}
+
+.md-banner__button:hover {
+  color: var(--vp-banner-link-hover);
 }
 
 @media screen and (max-width: 76.234375em) {
@@ -464,6 +503,13 @@
   --vp-interactive-focus-ring: rgba(0, 212, 255, 0.38);
   --vp-card-bg: rgba(224, 247, 255, 0.65);
   --vp-card-border: rgba(0, 153, 204, 0.45);
+  --vp-banner-bg: linear-gradient(100deg, rgba(13, 24, 41, 0.97) 0%, rgba(13, 24, 41, 0.88) 58%, rgba(91, 33, 182, 0.78) 100%);
+  --vp-banner-fg: var(--vp-ice-white);
+  --vp-banner-border: rgba(0, 212, 255, 0.52);
+  --vp-banner-link: var(--vp-flame-orange);
+  --vp-banner-link-hover: var(--vp-warning-amber);
+  --vp-banner-accent: var(--vp-flame-orange);
+  --vp-banner-shadow: inset 0 -1px 0 rgba(0, 212, 255, 0.45);
 }
 
 [data-md-color-scheme="slate"] {
@@ -486,6 +532,13 @@
   --md-code-fg-color: var(--vp-ice-white);
   --md-code-bg-color: var(--vp-midnight-blue);
   --md-typeset-a-color: var(--vp-neon-cyan);
+  --vp-banner-bg: linear-gradient(100deg, rgba(10, 10, 10, 0.95) 0%, rgba(13, 24, 41, 0.95) 55%, rgba(91, 33, 182, 0.7) 100%);
+  --vp-banner-fg: var(--vp-ice-white);
+  --vp-banner-border: rgba(0, 212, 255, 0.42);
+  --vp-banner-link: var(--vp-flame-orange);
+  --vp-banner-link-hover: var(--vp-warning-amber);
+  --vp-banner-accent: var(--vp-flame-orange);
+  --vp-banner-shadow: inset 0 -1px 0 rgba(0, 212, 255, 0.3);
 }
 
 [data-md-color-scheme="default"] .md-header,

@@ -69,7 +69,7 @@ sudo mv vibepit /usr/local/bin/</code></pre>
   </article>
   <article class="vp-card">
     <h3><a href="explanations/architecture/">Architecture</a></h3>
-    <p>How the proxy, dev container, and isolated network fit together.</p>
+    <p>How the proxy, sandbox container, and isolated network fit together.</p>
   </article>
   <article class="vp-card">
     <h3><a href="explanations/security-model/">Security Model</a></h3>

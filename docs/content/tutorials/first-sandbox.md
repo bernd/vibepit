@@ -71,7 +71,7 @@ When the sandbox starts, Vibepit:
 2. Starts a **proxy container** on that network. The proxy runs a DNS server and
    an HTTP/HTTPS filtering proxy. Only allowlisted domains are resolvable and
    reachable.
-3. Starts a **dev container** on the same network. The container runs with a
+3. Starts a **sandbox container** on the same network. The container runs with a
    read-only root filesystem, dropped capabilities, and `no-new-privileges`. Your
    project directory is bind-mounted in, and a persistent home volume preserves
    installed tools between sessions.
@@ -98,7 +98,7 @@ full list of flags.
 
 ## 6. Work inside the sandbox
 
-Once the sandbox shell appears, you are inside the dev container. A few things
+Once the sandbox shell appears, you are inside the sandbox container. A few things
 to note:
 
 - Your project is available at the **same path** as on the host.

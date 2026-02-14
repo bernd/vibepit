@@ -18,7 +18,7 @@ The sandbox container runs with several kernel-level restrictions:
 
 **`no-new-privileges`.** The `no-new-privileges` security option prevents processes inside the container from gaining additional privileges through setuid or setgid binaries. Even if such a binary exists on a mounted volume, executing it will not escalate privileges.
 
-**Non-root `code` user.** The dev container runs as the unprivileged `code` user. If an attacker escapes the process sandbox but remains inside the container, they operate without root privileges, limiting what they can access on the host kernel.
+**Non-root `code` user.** The sandbox container runs as the unprivileged `code` user. If an attacker escapes the process sandbox but remains inside the container, they operate without root privileges, limiting what they can access on the host kernel.
 
 **Init process.** The container runs with an init process (`Init: true`) as PID 1. This ensures proper signal forwarding to child processes and reaps zombie processes, preventing resource leaks during long-running agent sessions.
 

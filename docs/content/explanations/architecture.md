@@ -1,6 +1,6 @@
 # Architecture
 
-Vibepit runs three components — a host CLI, a proxy container, and a dev container — connected by an isolated Docker network. This page explains how these pieces fit together and why each design choice exists.
+Vibepit runs three components — a host CLI, a proxy container, and a sandbox container — connected by an isolated Docker network. This page explains how these pieces fit together and why each design choice exists.
 
 ## Overview
 
@@ -28,7 +28,7 @@ When you run `vibepit`, the CLI orchestrates a small cluster of containers on yo
 └─────────────────────────────────────────────────┘
 ```
 
-The dev container has no direct internet access. All outbound traffic — DNS queries and HTTP/HTTPS requests — must pass through the proxy, which enforces allowlist rules before forwarding anything.
+The sandbox container has no direct internet access. All outbound traffic — DNS queries and HTTP/HTTPS requests — must pass through the proxy, which enforces allowlist rules before forwarding anything.
 
 ## Host CLI
 
@@ -36,9 +36,9 @@ The `vibepit` binary runs on your host machine and orchestrates everything:
 
 1. **Creates an isolated network** with a random subnet.
 2. **Starts the proxy container** on that network with a static IP.
-3. **Starts the dev container** configured to route all traffic through the proxy.
+3. **Starts the sandbox container** configured to route all traffic through the proxy.
 4. **Generates ephemeral mTLS credentials** so that only the CLI can talk to the proxy's control API.
-5. **Attaches your terminal** to the dev container's shell.
+5. **Attaches your terminal** to the sandbox container's shell.
 
 After setup, the CLI also provides runtime commands — `allow-http`, `allow-dns`, and `monitor` — that communicate with the proxy's control API to modify the allowlist or observe traffic. See the [CLI Reference](../reference/cli.md) for command details.
 
@@ -54,7 +54,7 @@ The random subnet avoids collisions with other Docker networks on the host. In t
 
 The proxy runs on a minimal distroless base image (`gcr.io/distroless/base-debian13`) with no shell, no package manager, and no unnecessary libraries. It runs the `vibepit proxy` binary, which is bind-mounted from the host along with its configuration file.
 
-The proxy container is connected to two networks: the isolated session network (with a static IP so the dev container can find it) and the default bridge network (so it can reach the internet). This dual-homed setup is what makes it the gatekeeper for all outbound traffic.
+The proxy container is connected to two networks: the isolated session network (with a static IP so the sandbox container can find it) and the default bridge network (so it can reach the internet). This dual-homed setup is what makes it the gatekeeper for all outbound traffic.
 
 ### Three services
 
@@ -62,15 +62,15 @@ The proxy runs three services in a single process:
 
 1. **HTTP proxy** (dynamic port) — handles both HTTP and HTTPS (via `CONNECT` tunneling). Every request is checked against the HTTP allowlist, which matches on domain and port. Requests to non-allowed destinations are rejected. A CIDR blocklist prevents connections to private and link-local IP ranges, blocking attempts to reach the Docker host or other local services.
 
-2. **DNS server** (port 53) — receives all DNS queries from the dev container. Queries for allowed domains are forwarded to an upstream resolver (defaults to `9.9.9.9`). Queries for non-allowed domains return `NXDOMAIN`. This prevents DNS-based data exfiltration and ensures the dev container cannot resolve hosts it is not allowed to reach.
+2. **DNS server** (port 53) — receives all DNS queries from the sandbox container. Queries for allowed domains are forwarded to an upstream resolver (defaults to `9.9.9.9`). Queries for non-allowed domains return `NXDOMAIN`. This prevents DNS-based data exfiltration and ensures the sandbox container cannot resolve hosts it is not allowed to reach.
 
 3. **Control API** (dynamic port) — an mTLS-secured HTTP API used by the CLI's `allow-http`, `allow-dns`, and `monitor` commands. The control API port is published to `127.0.0.1` on the host, so only local processes with the correct client certificate can connect. See [Control API](#control-api) below for details on the mTLS setup.
 
 All three services share the same allowlist, which is updated atomically at runtime when you use `allow-http` or `allow-dns`.
 
-## Dev Container
+## Sandbox Container
 
-The dev container is your workspace. It runs an Ubuntu-based image with common development tools, configured with several hardening measures:
+The sandbox container is your workspace. It runs an Ubuntu-based image with common development tools, configured with several hardening measures:
 
 - **Read-only root filesystem** — the container's root filesystem is mounted read-only. A writable `/tmp` (tmpfs) is available for temporary files.
 - **Dropped capabilities** — all Linux capabilities are dropped (`CAP_DROP: ALL`).
@@ -86,13 +86,13 @@ For a complete description of the security controls, see [Security Model](securi
 
 ## Data Flow
 
-All outbound traffic from the dev container follows two paths:
+All outbound traffic from the sandbox container follows two paths:
 
-**DNS queries:** The dev container's DNS is configured to use the proxy container's IP on port 53. When a process inside the container resolves a hostname, the query goes to the proxy's DNS server. If the domain is on the DNS allowlist, the query is forwarded to the upstream resolver (`9.9.9.9` by default). Otherwise, the proxy returns `NXDOMAIN`.
+**DNS queries:** The sandbox container's DNS is configured to use the proxy container's IP on port 53. When a process inside the container resolves a hostname, the query goes to the proxy's DNS server. If the domain is on the DNS allowlist, the query is forwarded to the upstream resolver (`9.9.9.9` by default). Otherwise, the proxy returns `NXDOMAIN`.
 
 **HTTP/HTTPS requests:** The `HTTP_PROXY` and `HTTPS_PROXY` environment variables direct all HTTP traffic through the proxy. For HTTPS, the proxy uses `CONNECT` tunneling — it sees the destination hostname and port but not the encrypted payload. The proxy checks the destination against the HTTP allowlist and the CIDR blocklist before establishing the connection. Blocked requests receive an immediate rejection.
 
-The CIDR blocklist is applied to resolved IP addresses and blocks all private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), and link-local addresses by default. This prevents the dev container from reaching the Docker host, other containers, or local network services, even if a domain resolves to a private IP.
+The CIDR blocklist is applied to resolved IP addresses and blocks all private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), and link-local addresses by default. This prevents the sandbox container from reaching the Docker host, other containers, or local network services, even if a domain resolves to a private IP.
 
 ## Session Lifecycle
 
@@ -103,19 +103,19 @@ A session progresses through these stages:
 1. The CLI generates a session ID and creates an internal Docker network with a random `10.x.x.0/24` subnet.
 2. Ephemeral mTLS credentials (Ed25519 CA, server cert, client cert) are generated. The CA private key is used to sign both certificates and then discarded — it never touches disk.
 3. The proxy container is created on both the session network and the bridge network, with the server certificate and CA cert passed via environment variables.
-4. The dev container is created on the session network only, with proxy environment variables pointing to the proxy's static IP.
+4. The sandbox container is created on the session network only, with proxy environment variables pointing to the proxy's static IP.
 5. Client credentials (CA cert, client cert, client key) are written to `$XDG_RUNTIME_DIR/vibepit/<sessionID>/` so that `allow-http`, `allow-dns`, and `monitor` can authenticate to the control API from separate processes.
-6. The CLI attaches your terminal to the dev container and starts it.
+6. The CLI attaches your terminal to the sandbox container and starts it.
 
 ### Reattach
 
-If you run `vibepit` again in the same project directory while a session is still running, the CLI detects the existing dev container and opens a new shell (`exec`) inside it rather than creating a new session. This means multiple terminal windows can share one session.
+If you run `vibepit` again in the same project directory while a session is still running, the CLI detects the existing sandbox container and opens a new shell (`exec`) inside it rather than creating a new session. This means multiple terminal windows can share one session.
 
 ### Cleanup
 
-When you exit the shell, the dev container's entrypoint exits and the container stops. The CLI then:
+When you exit the shell, the sandbox container's entrypoint exits and the container stops. The CLI then:
 
-1. Removes the dev container.
+1. Removes the sandbox container.
 2. Removes the proxy container.
 3. Removes the session network.
 4. Deletes the credential files from `$XDG_RUNTIME_DIR/vibepit/<sessionID>/`.

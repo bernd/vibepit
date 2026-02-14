@@ -4,7 +4,7 @@ This page describes the threats Vibepit is designed to address, where its securi
 
 ## Primary attacker profile
 
-Vibepit assumes the primary threat is a **compromised or misbehaving AI coding agent** running inside the dev container. The agent has shell access and can execute arbitrary code within the container. It may attempt to exfiltrate data, reach external services, pivot to the host, or persist malicious changes — intentionally or as a side effect of a prompt injection or a compromised dependency.
+Vibepit assumes the primary threat is a **compromised or misbehaving AI coding agent** running inside the sandbox container. The agent has shell access and can execute arbitrary code within the container. It may attempt to exfiltrate data, reach external services, pivot to the host, or persist malicious changes — intentionally or as a side effect of a prompt injection or a compromised dependency.
 
 You are not defending against a passive observer. You are defending against an active process with full user-level access to a Linux environment that will try every tool available to it.
 
@@ -16,27 +16,27 @@ Vibepit defines four trust boundaries, each with a different level of trust:
 
 **Proxy container — trusted, minimal attack surface.** The proxy runs on a distroless base image with no shell or package manager. It enforces network policy and exposes a control API secured by mTLS. The proxy is trusted to faithfully apply allowlist rules and block unauthorized traffic.
 
-**Dev container — untrusted.** This is where the agent runs. Vibepit treats everything inside the dev container as potentially hostile. The agent has user-level shell access and can run any code that the `code` user can execute.
+**Sandbox container — untrusted.** This is where the agent runs. Vibepit treats everything inside the sandbox container as potentially hostile. The agent has user-level shell access and can run any code that the `code` user can execute.
 
-**Network boundary — enforced by proxy.** The only path from the dev container to the internet passes through the proxy. DNS, HTTP, and HTTPS traffic are all subject to allowlist filtering. There is no direct route from the dev container to the host network or the internet.
+**Network boundary — enforced by proxy.** The only path from the sandbox container to the internet passes through the proxy. DNS, HTTP, and HTTPS traffic are all subject to allowlist filtering. There is no direct route from the sandbox container to the host network or the internet.
 
 ## In scope: what Vibepit defends against
 
 ### Network exfiltration
 
-The dev container starts with zero network access. All outbound HTTP/HTTPS connections must pass through the proxy's allowlist, which matches on domain and port. Connections to destinations not on the allowlist are rejected. This prevents the agent from uploading source code, credentials, or other data to arbitrary servers.
+The sandbox container starts with zero network access. All outbound HTTP/HTTPS connections must pass through the proxy's allowlist, which matches on domain and port. Connections to destinations not on the allowlist are rejected. This prevents the agent from uploading source code, credentials, or other data to arbitrary servers.
 
 ### Data exfiltration via DNS
 
-DNS queries from the dev container go to the proxy's DNS server. Only domains on the DNS allowlist receive valid responses; all other queries return `NXDOMAIN`. This blocks DNS tunneling and other techniques that encode data in DNS queries to non-allowlisted domains.
+DNS queries from the sandbox container go to the proxy's DNS server. Only domains on the DNS allowlist receive valid responses; all other queries return `NXDOMAIN`. This blocks DNS tunneling and other techniques that encode data in DNS queries to non-allowlisted domains.
 
 ### Lateral movement to host or other containers
 
-The dev container runs on an internal Docker network with no default gateway to the host. The proxy enforces a CIDR blocklist that rejects connections to all private IP ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), and link-local addresses. Even if the agent tricks a domain into resolving to a private IP, the connection is blocked. This prevents the agent from reaching the Docker host, the container runtime API, or other services on your local network.
+The sandbox container runs on an internal Docker network with no default gateway to the host. The proxy enforces a CIDR blocklist that rejects connections to all private IP ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), and link-local addresses. Even if the agent tricks a domain into resolving to a private IP, the connection is blocked. This prevents the agent from reaching the Docker host, the container runtime API, or other services on your local network.
 
 ### Privilege escalation inside the container
 
-The dev container drops all Linux capabilities, enables `no-new-privileges`, and runs as the unprivileged `code` user. This means the agent cannot use `CAP_NET_RAW` to craft raw packets, `CAP_SYS_ADMIN` to manipulate namespaces, or setuid binaries to gain root. These controls do not make escalation impossible, but they remove the most common paths.
+The sandbox container drops all Linux capabilities, enables `no-new-privileges`, and runs as the unprivileged `code` user. This means the agent cannot use `CAP_NET_RAW` to craft raw packets, `CAP_SYS_ADMIN` to manipulate namespaces, or setuid binaries to gain root. These controls do not make escalation impossible, but they remove the most common paths.
 
 ### Persistent filesystem compromise
 
@@ -46,15 +46,15 @@ The container's root filesystem is mounted read-only. The agent cannot modify sy
 
 ### Container escape via kernel vulnerabilities
 
-The dev container shares the host kernel. A kernel vulnerability that allows escape from the container namespace gives the agent full host access. Vibepit's hardening (dropped capabilities, no-new-privileges, non-root user) reduces the attack surface for kernel exploits, but cannot eliminate this class of vulnerability.
+The sandbox container shares the host kernel. A kernel vulnerability that allows escape from the container namespace gives the agent full host access. Vibepit's hardening (dropped capabilities, no-new-privileges, non-root user) reduces the attack surface for kernel exploits, but cannot eliminate this class of vulnerability.
 
 ### Host compromise
 
-If the container runtime (Docker or Podman) is itself compromised, or if the host is misconfigured (for example, mounting the Docker socket into the dev container), Vibepit's controls can be bypassed entirely. Vibepit assumes the host and container runtime are trustworthy.
+If the container runtime (Docker or Podman) is itself compromised, or if the host is misconfigured (for example, mounting the Docker socket into the sandbox container), Vibepit's controls can be bypassed entirely. Vibepit assumes the host and container runtime are trustworthy.
 
 ### Supply chain attacks in allowlisted dependencies
 
-When you allowlist a domain like `registry.npmjs.org`, Vibepit permits all traffic to that domain. If a package on that registry is compromised, the malicious code runs inside the dev container with all the access that entails. Vibepit filters by network destination, not by payload content.
+When you allowlist a domain like `registry.npmjs.org`, Vibepit permits all traffic to that domain. If a package on that registry is compromised, the malicious code runs inside the sandbox container with all the access that entails. Vibepit filters by network destination, not by payload content.
 
 ### Side-channel attacks
 
