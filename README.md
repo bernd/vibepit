@@ -87,9 +87,10 @@ Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issue
 
 ## AI Disclosure
 
-This project is planned and built with significant help from AI coding agents, including Claude Code.
-AI-generated code is reviewed, tested, and refactored by humans, but given the nature
-of AI-assisted development, bugs and issues are expected.
+Vibepit uses AI coding agents to assist with planning, code, tests, and
+documentation. We review all AI-assisted changes before merge. A change is
+accepted only after tests pass and we verify the behavior. AI output can be
+incorrect, so we remain responsible for all released code and documentation.
 
 ## License
 
