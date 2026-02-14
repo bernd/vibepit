@@ -232,13 +232,6 @@ vibepit update
 
 ---
 
-## `proxy`
-
-Internal command that runs the proxy server inside the proxy container. You do
-not need to call this directly.
-
----
-
 ## Environment variables
 
 The following environment variables are set automatically inside the sandbox
