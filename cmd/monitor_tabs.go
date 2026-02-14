@@ -40,15 +40,34 @@ func (t *tabbedMonitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, te
 		}
 	}
 
+	// Forward WindowSizeMsg to all screens so inactive tabs have correct
+	// viewport dimensions when they become active.
+	if _, ok := msg.(tea.WindowSizeMsg); ok {
+		for i, screen := range t.screens {
+			updated, _ := screen.Update(msg, w)
+			t.screens[i] = updated
+		}
+		return t, nil
+	}
+
 	screen, cmd := t.activeScreen().Update(msg, w)
 	t.screens[t.activeTab] = screen
 	return t, cmd
 }
 
+// tabBarHeight is the number of lines consumed by the tab bar (including its trailing newline).
+const tabBarHeight = 1
+
 func (t *tabbedMonitorScreen) View(w *tui.Window) string {
 	tabBar := t.renderTabBar()
 	content := t.activeScreen().View(w)
-	return tabBar + "\n" + content
+	// The sub-screen produces w.VpHeight() lines but we prepend the tab bar,
+	// so trim trailing empty lines to stay within the expected height.
+	lines := strings.SplitN(content, "\n", w.VpHeight()+1)
+	if len(lines) > w.VpHeight()-tabBarHeight {
+		lines = lines[:w.VpHeight()-tabBarHeight]
+	}
+	return tabBar + "\n" + strings.Join(lines, "\n")
 }
 
 func (t *tabbedMonitorScreen) renderTabBar() string {

@@ -20,9 +20,9 @@ type telemetryScreen struct {
 	pollCursor      uint64
 	events          []proxy.TelemetryEvent
 	metricSummaries []proxy.MetricSummary
-	agents        []string
-	agentFilter   string
-	firstTickSeen bool
+	agents          []string
+	agentFilter     string
+	firstTickSeen   bool
 	disabled        bool
 }
 
@@ -122,10 +122,8 @@ func (s *telemetryScreen) cycleAgentFilter() {
 }
 
 func (s *telemetryScreen) trackAgent(agent string) {
-	for _, a := range s.agents {
-		if a == agent {
-			return
-		}
+	if slices.Contains(s.agents, agent) {
+		return
 	}
 	s.agents = append(s.agents, agent)
 }

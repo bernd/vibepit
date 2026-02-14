@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"cmp"
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 )
@@ -164,6 +166,12 @@ func (b *TelemetryBuffer) Metrics() []MetricSummary {
 	for _, m := range b.metrics {
 		result = append(result, *m)
 	}
+	slices.SortFunc(result, func(a, b MetricSummary) int {
+		if c := cmp.Compare(a.Agent, b.Agent); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 	return result
 }
 
