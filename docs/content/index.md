@@ -10,7 +10,7 @@ hide:
     <h1>Run AI coding agents in isolated containers</h1>
     <p class="vp-landing__lead">
       AI coding agents can be compromised through prompt injection, malicious
-      dependencies, or tool-use exploits. Vibepit gives them a hardened runtime
+      dependencies, tool-use exploits, or rogue skills. Vibepit gives them a hardened runtime
       with filtered networking, runtime allowlist controls, and a monitor UI —
       so a compromised agent cannot phone home or reach your network.
     </p>
