@@ -57,8 +57,8 @@ reach.
 - The `default` preset is always pre-selected. It includes common destinations
   such as package registries and GitHub.
 
-Select the presets you need and press Enter. The choices are saved to a
-`.vibepit.yml` file in the project directory.
+Select the presets you need and press Enter. The choices are saved to
+`.vibepit/network.yaml` in the project directory.
 
 For details on creating and managing presets, see
 [Configure Network Presets](../how-to/configure-presets.md).
