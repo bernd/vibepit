@@ -24,6 +24,7 @@ type telemetryScreen struct {
 	agentFilter     string
 	firstTickSeen   bool
 	disabled        bool
+	heightOffset    int // lines reserved by parent (e.g. tab bar)
 }
 
 func newTelemetryScreen(client *ControlClient) *telemetryScreen {
@@ -65,7 +66,7 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 		}
 
 	case tea.WindowSizeMsg:
-		s.cursor.VpHeight = w.VpHeight() - s.metricsHeaderHeight()
+		s.cursor.VpHeight = w.VpHeight() - s.heightOffset - s.metricsHeaderHeight()
 		s.cursor.EnsureVisible()
 
 	case tui.TickMsg:
@@ -140,16 +141,18 @@ func (s *telemetryScreen) metricsHeaderHeight() int {
 }
 
 func (s *telemetryScreen) View(w *tui.Window) string {
+	height := w.VpHeight() - s.heightOffset
+
 	if s.disabled {
 		msg := lipgloss.NewStyle().Foreground(tui.ColorField).
 			Render("Agent telemetry is disabled. Set agent-telemetry: true in .vibepit/network.yaml to enable.")
-		pad := w.VpHeight() / 2
+		pad := height / 2
 		var lines []string
 		for range pad {
 			lines = append(lines, "")
 		}
 		lines = append(lines, "  "+msg)
-		for len(lines) < w.VpHeight() {
+		for len(lines) < height {
 			lines = append(lines, "")
 		}
 		return strings.Join(lines, "\n")
@@ -162,12 +165,12 @@ func (s *telemetryScreen) View(w *tui.Window) string {
 
 	// Event stream.
 	filtered := s.filteredEvents()
-	vpHeight := w.VpHeight() - len(lines)
+	vpHeight := height - len(lines)
 	end := min(s.cursor.Offset+vpHeight, len(filtered))
 	for i := s.cursor.Offset; i < end; i++ {
 		lines = append(lines, renderTelemetryLine(filtered[i], i == s.cursor.Pos))
 	}
-	for len(lines) < w.VpHeight() {
+	for len(lines) < height {
 		lines = append(lines, "")
 	}
 

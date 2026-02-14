@@ -15,6 +15,8 @@ type tabbedMonitorScreen struct {
 }
 
 func newTabbedMonitorScreen(network *monitorScreen, telemetry *telemetryScreen) *tabbedMonitorScreen {
+	network.heightOffset = tabBarHeight
+	telemetry.heightOffset = tabBarHeight
 	return &tabbedMonitorScreen{
 		tabs:    []string{"Network", "Telemetry"},
 		screens: []tui.Screen{network, telemetry},
@@ -61,13 +63,7 @@ const tabBarHeight = 1
 func (t *tabbedMonitorScreen) View(w *tui.Window) string {
 	tabBar := t.renderTabBar()
 	content := t.activeScreen().View(w)
-	// The sub-screen produces w.VpHeight() lines but we prepend the tab bar,
-	// so trim trailing empty lines to stay within the expected height.
-	lines := strings.SplitN(content, "\n", w.VpHeight()+1)
-	if len(lines) > w.VpHeight()-tabBarHeight {
-		lines = lines[:w.VpHeight()-tabBarHeight]
-	}
-	return tabBar + "\n" + strings.Join(lines, "\n")
+	return tabBar + "\n" + content
 }
 
 func (t *tabbedMonitorScreen) renderTabBar() string {

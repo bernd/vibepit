@@ -39,6 +39,7 @@ type monitorScreen struct {
 	items         []logItem
 	newCount      int
 	firstTickSeen bool
+	heightOffset  int // lines reserved by parent (e.g. tab bar)
 }
 
 func newMonitorScreen(session *SessionInfo, client *ControlClient) *monitorScreen {
@@ -120,7 +121,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 
 	case tea.WindowSizeMsg:
-		s.cursor.VpHeight = w.VpHeight()
+		s.cursor.VpHeight = w.VpHeight() - s.heightOffset
 		if len(s.items) <= s.cursor.Offset+s.cursor.VpHeight {
 			s.newCount = 0
 		}
