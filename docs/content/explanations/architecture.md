@@ -1,6 +1,6 @@
 # Architecture
 
-Vibepit runs three components — a host CLI, a proxy container, and a sandbox container — connected by an isolated Docker network. This page explains how these pieces fit together and why each design choice exists.
+Vibepit runs entirely on your local machine — there is no cloud service, no remote API, and no account required. It orchestrates three components — a host CLI, a proxy container, and a sandbox container — connected by an isolated Docker network. This page explains how these pieces fit together and why each design choice exists.
 
 ## Overview
 
