@@ -148,6 +148,12 @@ vibepit
 ```
 
 Vibepit detects the existing session and opens a new shell inside it instead of
-creating a new one. When you exit all shells **and** the original `vibepit`
-process, the session is cleaned up — containers and the network are removed
-automatically.
+creating a new one.
+
+!!! note "Important: Session lifecycle"
+    The session is tied to the **first** `vibepit` process. When that process
+    exits normally, Vibepit cleans up the session — containers and the network
+    are removed —
+    even if other shells are still open. Additional shells opened with
+    `vibepit` are exec sessions inside the existing container and do not keep
+    the session alive on their own.

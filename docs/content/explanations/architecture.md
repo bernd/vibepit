@@ -15,10 +15,10 @@ When you run `vibepit`, the CLI orchestrates a small cluster of containers on yo
 │  │ CLI       │  containers, manages credentials │
 │  └─────┬─────┘                                  │
 │        │                                        │
-│  ──────┼──── isolated network (10.x.x.0/24) ── │
+│  ──────┼──── isolated network (10.x.x.0/24) ──  │
 │        │                                        │
 │  ┌─────┴─────┐       ┌──────────────┐           │
-│  │  Proxy    │       │  Dev         │           │
+│  │  Proxy    │       │  Sandbox     │           │
 │  │  Container│◄──────│  Container   │           │
 │  │           │       │  (your code) │           │
 │  └─────┬─────┘       └──────────────┘           │

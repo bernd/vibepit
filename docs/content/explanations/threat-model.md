@@ -107,4 +107,4 @@ Vibepit is one layer of defense. To get the most from it:
 - **Keep your container runtime updated.** Docker and Podman regularly patch container escape vulnerabilities. An outdated runtime weakens every isolation control.
 - **Consider VM-level isolation for sensitive workloads.** Running Vibepit inside a VM adds a second isolation boundary that is independent of the container runtime and kernel.
 
-No tool can make running untrusted code safe. Vibepit reduces the risk to a level where the productivity benefits of AI coding agents can outweigh the security cost — provided you understand the boundaries described on this page.
+No tool can make running untrusted code safe. Vibepit reduces the attack surface, but you need to understand the boundaries described on this page.

@@ -62,7 +62,7 @@ sudo mv vibepit /usr/local/bin/</code></pre>
   </article>
   <article class="vp-card">
     <h3><a href="reference/cli/">CLI Reference</a></h3>
-    <p>Review command syntax, flags, and operational behavior.</p>
+    <p>Command syntax, flags, and detailed behavior for every subcommand.</p>
   </article>
   <article class="vp-card">
     <h3><a href="how-to/ai-coding-agents/">AI Coding Agents</a></h3>

@@ -156,11 +156,11 @@ Docker networks or containers that conflict with the new session.
     docker ps -a | grep vibepit
     ```
 
-2. Remove stale networks (only after confirming no other containers depend on
-   them):
+2. Remove the stale Vibepit network by name (listed in the previous command's
+   output):
 
     ```bash
-    docker network prune
+    docker network rm <network-name>
     ```
 
 3. If a specific container is stuck, remove it manually:
