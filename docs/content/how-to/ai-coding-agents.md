@@ -35,7 +35,7 @@ exactly what your agent needs:
 6. Alternatively, allow domains from the command line:
 
     ```bash
-    vibepit allow-http --save api.example.com:443
+    vibepit allow-http api.example.com:443
     ```
 
 7. Repeat until your agent operates without blocked requests.
