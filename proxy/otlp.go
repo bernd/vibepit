@@ -112,6 +112,7 @@ func (r *OTLPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 						Name:       m.Name,
 						Agent:      agent,
 						Value:      dp.value,
+						IsDelta:    dp.isDelta,
 						Attributes: dp.attrs,
 						RawMetric:  rawMetric,
 					})
@@ -126,21 +127,23 @@ func (r *OTLPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 }
 
 type dataPoint struct {
-	value float64
-	attrs map[string]string
+	value   float64
+	attrs   map[string]string
+	isDelta bool
 }
 
 func extractDataPoints(m *metricspb.Metric) []dataPoint {
 	switch d := m.Data.(type) {
 	case *metricspb.Metric_Sum:
-		return numberDataPoints(d.Sum.DataPoints)
+		isDelta := d.Sum.AggregationTemporality == metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA
+		return numberDataPoints(d.Sum.DataPoints, isDelta)
 	case *metricspb.Metric_Gauge:
-		return numberDataPoints(d.Gauge.DataPoints)
+		return numberDataPoints(d.Gauge.DataPoints, false)
 	}
 	return nil
 }
 
-func numberDataPoints(dps []*metricspb.NumberDataPoint) []dataPoint {
+func numberDataPoints(dps []*metricspb.NumberDataPoint, isDelta bool) []dataPoint {
 	result := make([]dataPoint, 0, len(dps))
 	for _, dp := range dps {
 		var val float64
@@ -151,8 +154,9 @@ func numberDataPoints(dps []*metricspb.NumberDataPoint) []dataPoint {
 			val = float64(v.AsInt)
 		}
 		result = append(result, dataPoint{
-			value: val,
-			attrs: flattenAttributes(dp.Attributes),
+			value:   val,
+			attrs:   flattenAttributes(dp.Attributes),
+			isDelta: isDelta,
 		})
 	}
 	return result

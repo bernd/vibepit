@@ -15,6 +15,24 @@ var registry = map[string]MetricFormatter{
 	"codex.":       formatCodex,
 }
 
+var displayNames = map[string]string{
+	"claude_code.": "Claude Code",
+	"codex.":       "Codex",
+}
+
+// DisplayName returns a human-friendly name for the agent based on its metric
+// prefixes. Falls back to the raw agent identifier.
+func DisplayName(agent string, metrics []proxy.MetricSummary) string {
+	for _, m := range metrics {
+		if prefix := detectPrefix(m.Name); prefix != "" {
+			if name, ok := displayNames[prefix]; ok {
+				return name
+			}
+		}
+	}
+	return agent
+}
+
 // FormatAgent formats all metrics for a single agent. Metrics matching a
 // registered prefix use the agent-specific formatter; the rest use generic.
 func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {

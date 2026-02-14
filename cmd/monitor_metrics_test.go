@@ -97,10 +97,12 @@ func TestMetricsScreen_RebuildLines(t *testing.T) {
 	t.Run("groups metrics by agent", func(t *testing.T) {
 		s, _ := makeMetricsSetup(sampleMetrics())
 
-		// First line should be an agent header.
-		assert.True(t, s.lines[0].isAgent)
+		// First line is a spacer, second is an agent header.
+		assert.False(t, s.lines[0].isAgent)
+		assert.Equal(t, "", s.lines[0].text)
+		assert.True(t, s.lines[1].isAgent)
 		// Followed by metric lines (not agent headers).
-		assert.False(t, s.lines[1].isAgent)
+		assert.False(t, s.lines[2].isAgent)
 	})
 
 	t.Run("cursor item count matches lines", func(t *testing.T) {

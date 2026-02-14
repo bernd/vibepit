@@ -36,7 +36,8 @@ func TestFormatAgent_ClaudeCode(t *testing.T) {
 	}
 	lines := FormatAgent("claude-code", metrics)
 
-	t.Run("shows model", func(t *testing.T) {
+	t.Run("shows models", func(t *testing.T) {
+		assert.Contains(t, lines[0], "Models:")
 		assert.Contains(t, lines[0], "claude-haiku-4-5-20251001")
 	})
 	t.Run("shows cost", func(t *testing.T) {
@@ -68,6 +69,24 @@ func TestFormatAgent_ClaudeCode_ZeroValuesSkipped(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 	assert.Contains(t, joined, "Cost")
 	assert.NotContains(t, joined, "Sessions")
+}
+
+func TestDisplayName(t *testing.T) {
+	t.Run("known prefix returns display name", func(t *testing.T) {
+		metrics := []proxy.MetricSummary{
+			{Name: "claude_code.cost.usage", Agent: "claude-code"},
+		}
+		assert.Equal(t, "Claude Code", DisplayName("claude-code", metrics))
+	})
+	t.Run("unknown prefix returns raw agent", func(t *testing.T) {
+		metrics := []proxy.MetricSummary{
+			{Name: "unknown.metric", Agent: "myagent"},
+		}
+		assert.Equal(t, "myagent", DisplayName("myagent", metrics))
+	})
+	t.Run("empty metrics returns raw agent", func(t *testing.T) {
+		assert.Equal(t, "myagent", DisplayName("myagent", nil))
+	})
 }
 
 func TestFormatAgent_Codex_FallsBackToGeneric(t *testing.T) {

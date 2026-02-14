@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/bernd/vibepit/proxy"
@@ -9,18 +10,16 @@ import (
 
 func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	var (
-		model                                            string
 		cost                                             float64
 		tokInput, tokOutput, tokCacheRead, tokCacheWrite float64
 		timeUser, timeCLI                                float64
 		sessions                                         float64
 	)
+	models := map[string]bool{}
 
 	for _, m := range metrics {
-		if model == "" {
-			if v, ok := m.Attributes["model"]; ok {
-				model = v
-			}
+		if v, ok := m.Attributes["model"]; ok && v != "" {
+			models[v] = true
 		}
 		switch m.Name {
 		case "claude_code.cost.usage":
@@ -50,8 +49,13 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 
 	var lines []string
 
-	if model != "" {
-		lines = append(lines, fmt.Sprintf("  Model:        %s", model))
+	if len(models) > 0 {
+		sorted := make([]string, 0, len(models))
+		for m := range models {
+			sorted = append(sorted, m)
+		}
+		slices.Sort(sorted)
+		lines = append(lines, fmt.Sprintf("  Models:       %s", strings.Join(sorted, ", ")))
 	}
 	if cost > 0 {
 		lines = append(lines, fmt.Sprintf("  Cost:         $%.4g", cost))

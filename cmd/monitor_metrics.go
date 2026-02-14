@@ -82,12 +82,17 @@ func (s *metricsScreen) rebuildLines() {
 	}
 
 	s.lines = nil
+	first := true
 	for _, agent := range s.filter.agents {
 		metrics, ok := byAgent[agent]
 		if !ok {
 			continue
 		}
-		s.lines = append(s.lines, metricsLine{isAgent: true, text: agent})
+		if first {
+			s.lines = append(s.lines, metricsLine{text: ""})
+			first = false
+		}
+		s.lines = append(s.lines, metricsLine{isAgent: true, text: telemetry.DisplayName(agent, metrics)})
 		for _, line := range telemetry.FormatAgent(agent, metrics) {
 			s.lines = append(s.lines, metricsLine{text: line})
 		}

@@ -28,17 +28,19 @@ type MetricSummary struct {
 	Name       string            `json:"name"`
 	Agent      string            `json:"agent"`
 	Value      float64           `json:"value"`
+	IsDelta    bool              `json:"is_delta,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 	RawMetric  json.RawMessage   `json:"raw_metric,omitempty"`
 }
 
-// metricKey uniquely identifies a metric series. Only name, agent, and the
-// "type" attribute are used for identity -- other attributes are ignored to
-// keep series count stable and avoid churn from varying resource attributes.
+// metricKey uniquely identifies a metric series by name, agent, and the "type"
+// and "model" attributes. Other attributes are ignored to keep series count
+// stable and avoid churn from varying resource attributes.
 type metricKey struct {
 	name       string
 	agent      string
 	metricType string // value of the "type" attribute, if any
+	model      string // value of the "model" attribute, if any
 }
 
 type TelemetryBuffer struct {
@@ -145,9 +147,13 @@ func (b *TelemetryBuffer) UpdateMetric(m MetricSummary) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	key := metricKey{name: m.Name, agent: m.Agent, metricType: m.Attributes["type"]}
+	key := metricKey{name: m.Name, agent: m.Agent, metricType: m.Attributes["type"], model: m.Attributes["model"]}
 	if existing, ok := b.metrics[key]; ok {
-		existing.Value = m.Value
+		if m.IsDelta {
+			existing.Value += m.Value
+		} else {
+			existing.Value = m.Value
+		}
 		existing.RawMetric = m.RawMetric
 		return
 	}
@@ -171,6 +177,9 @@ func (b *TelemetryBuffer) Metrics() []MetricSummary {
 			return c
 		}
 		if c := cmp.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.Attributes["model"], b.Attributes["model"]); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Attributes["type"], b.Attributes["type"])
