@@ -75,9 +75,3 @@ sudo mv vibepit /usr/local/bin/</code></pre>
     <p>Understand assumptions, boundaries, and defense-in-depth controls.</p>
   </article>
 </section>
-
-!!! warning
-    Vibepit is in alpha. Expect breaking changes.
-
-!!! warning
-    Vibepit adds defense in depth, but container isolation is not equal to VM isolation.
