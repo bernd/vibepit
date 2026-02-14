@@ -204,8 +204,14 @@ referencing a tag like `main-uid-1234-gid-1234`.
 
 **Cause:** Vibepit builds sandbox images for specific UID/GID combinations to
 match file ownership between the host and the container. Pre-built images are
-available for common values (e.g., UID/GID 1000), but if your user has an
-uncommon UID or GID, no pre-built image may exist.
+published for these combinations:
+
+| Tag | Platform |
+|-----|----------|
+| `main-uid-1000-gid-1000` | Linux (default UID/GID) |
+| `main-uid-501-gid-20` | macOS (default UID/GID) |
+
+If your user has a different UID or GID, no pre-built image exists.
 
 **Fix:**
 
