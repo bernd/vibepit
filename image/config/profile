@@ -10,3 +10,9 @@ if [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
 fi
 
 export HOMEBREW_NO_ENV_HINTS=1
+
+# Use the vibepit tmux theme unless the user has their own config.
+if [ -z "$TMUX_CONF" ] && [ ! -f "$HOME/.tmux.conf" ]; then
+	export TMUX_CONF="/etc/vibepit/tmux.conf"
+	alias tmux='tmux -f "$TMUX_CONF"'
+fi
