@@ -71,19 +71,18 @@ RUN groupadd -g $CODE_GID $CODE_GROUP \
     $CODE_USER \
   && chown -R ${CODE_UID}:${CODE_GID} /home/$CODE_USER
 
-# Homebrew on Linux wants write access to /home in non-sudo install mode...
+# Homebrew on Linux needs /home/linuxbrew writable.
 RUN install -d -m 0755 "/usr/local/bin" \
   && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/${CODE_USER}/.local" \
   && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/${CODE_USER}/.local/bin" \
-  && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/${CODE_USER}/.linuxbrew" \
   && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home" \
-  && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/linuxbrew" \
-  && ln -s "/home/${CODE_USER}/.linuxbrew" "/home/linuxbrew/.linuxbrew"
+  && install -d -o ${CODE_UID} -g ${CODE_GID} -m 0755 "/home/linuxbrew"
 
 COPY bin /usr/local/bin
 COPY config/profile /etc/profile.d/999-vibepit.sh
 
-RUN install -d -o root -g root -m 0755 /etc/vibepit
+RUN install -d -o root -g root -m 0755 /etc/vibepit \
+  && install -d -o root -g root -m 0755 /opt/vibepit
 COPY config/bashrc /etc/vibepit/bashrc
 COPY config/tmux.conf /etc/vibepit/tmux.conf
 COPY lib.sh /etc/vibepit/lib.sh
@@ -91,9 +90,10 @@ COPY lib.sh /etc/vibepit/lib.sh
 COPY config/bashrc.tail /tmp/bashrc.tail
 RUN cat /tmp/bashrc.tail >> /home/$CODE_USER/.bashrc && rm -f /tmp/bashrc.tail
 
-RUN mv /home/$CODE_USER /home/.${CODE_USER}.template \
+RUN mv /home/$CODE_USER /opt/vibepit/home-template \
   && install -d 0750 -o $CODE_USER -g $CODE_GROUP /home/$CODE_USER
 
+COPY entrypoint-lib.sh /etc/vibepit/entrypoint-lib.sh
 COPY entrypoint.sh /entrypoint.sh
 
 USER $CODE_UID

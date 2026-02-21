@@ -42,7 +42,7 @@ const (
 
 	ProxyBinaryPath   = "/vibepit"
 	ProxyConfigPath   = "/config.json"
-	HomeMountPath     = "/home/code"
+	HomeMountPath     = "/home"
 	ContainerHostname = "vibes"
 
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"

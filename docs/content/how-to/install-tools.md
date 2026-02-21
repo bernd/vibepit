@@ -19,8 +19,8 @@ brew --version
 ```
 
 Homebrew is installed into the persistent home volume at
-`/home/code/.linuxbrew`, so it only needs to install once. Subsequent sessions
-reuse the existing installation.
+`/home/linuxbrew/.linuxbrew`, so it only needs to install once. Subsequent
+sessions reuse the existing installation.
 
 !!! note
     The `homebrew` and `vcs-github` presets are included in the `default`
