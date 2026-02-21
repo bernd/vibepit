@@ -202,16 +202,11 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	merged.HostGateway = "host-gateway"
 
 	// Generate random ports for proxy services, avoiding user's host ports.
-	excluded := make(map[int]bool, len(merged.AllowHostPorts))
-	for _, p := range merged.AllowHostPorts {
-		excluded[p] = true
-	}
-	proxyPort, err := config.RandomProxyPort(excluded)
+	proxyPort, err := config.RandomProxyPort(merged.AllowHostPorts)
 	if err != nil {
 		return fmt.Errorf("proxy port: %w", err)
 	}
-	excluded[proxyPort] = true
-	controlAPIPort, err := config.RandomProxyPort(excluded)
+	controlAPIPort, err := config.RandomProxyPort(append(merged.AllowHostPorts, proxyPort))
 	if err != nil {
 		return fmt.Errorf("control API port: %w", err)
 	}

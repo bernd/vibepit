@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/adrg/xdg"
@@ -54,7 +55,7 @@ type MergedConfig struct {
 
 // RandomProxyPort returns a random port in the ephemeral range (49152-65535)
 // that is not in the excluded set.
-func RandomProxyPort(excluded map[int]bool) (int, error) {
+func RandomProxyPort(excluded []int) (int, error) {
 	const lo, hi = 49152, 65535
 	rangeSize := hi - lo + 1
 	for range 100 {
@@ -63,7 +64,7 @@ func RandomProxyPort(excluded map[int]bool) (int, error) {
 			return 0, err
 		}
 		port := lo + int(binary.BigEndian.Uint16(b[:]))%rangeSize
-		if !excluded[port] {
+		if !slices.Contains(excluded, port) {
 			return port, nil
 		}
 	}
