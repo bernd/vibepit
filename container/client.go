@@ -625,6 +625,7 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		"https_proxy=" + proxyURL,
 		"NO_PROXY=localhost,127.0.0.1",
 		"no_proxy=localhost,127.0.0.1",
+		fmt.Sprintf("JAVA_TOOL_OPTIONS=-Dhttps.proxyHost=%[1]s -Dhttps.proxyPort=%[2]d -Dhttp.proxyHost=%[1]s -Dhttp.proxyPort=%[2]d", cfg.ProxyIP, cfg.ProxyPort),
 	}
 	if cfg.ColorTerm != "" {
 		env = append(env, fmt.Sprintf("COLORTERM=%s", cfg.ColorTerm))
