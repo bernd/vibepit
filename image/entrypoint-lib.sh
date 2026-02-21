@@ -1,5 +1,24 @@
 #!/bin/bash
 
+# _mountpoint_children lists the names of direct children of a directory that
+# are mount points or contain mount points, by inspecting /proc/self/mountinfo.
+# This is used to avoid moving bind-mounted project directories during home
+# volume migration.
+_mountpoint_children() {
+	local base="${1%/}/"
+	if [ ! -f /proc/self/mountinfo ]; then
+		return 0
+	fi
+	awk -v prefix="$base" '{
+		mp = $5
+		if (substr(mp, 1, length(prefix)) == prefix) {
+			rest = substr(mp, length(prefix) + 1)
+			sub(/\/.*/, "", rest)
+			if (rest != "") print rest
+		}
+	}' /proc/self/mountinfo | sort -u
+}
+
 # migrate_home_volume relocates files from an old-style volume layout (where the
 # volume was mounted at /home/code) to the new layout (volume mounted at /home).
 # After the mount point change, old user files appear at the volume root and need
@@ -34,10 +53,15 @@ migrate_home_volume() {
 		tmpname=".migrate-$$"
 		mkdir "$base/$tmpname"
 		cd "$base"
+		# Build exclusion pattern: temp dir, lockfile, and any mount points.
+		local exclude_pat="$tmpname|.vibepit-migrate-lock"
+		local mp
+		while IFS= read -r mp; do
+			[ -n "$mp" ] && exclude_pat="$exclude_pat|$mp"
+		done < <(_mountpoint_children "$base")
 		# extglob must be enabled before bash parses the !(pattern) glob.
 		# -O enables shell options before the command string is parsed.
-		# Exclude only the exact temp dir and the lockfile.
-		bash -O extglob -O dotglob -c 'mv -- !("$1"|.vibepit-migrate-lock) "$2/"' _ "$tmpname" "$base/$tmpname"
+		bash -O extglob -O dotglob -c 'mv -- !('"$exclude_pat"') "$1/"' _ "$base/$tmpname"
 		mv "$base/$tmpname" "$base/code"
 
 		# Relocate linuxbrew from old path to new path.

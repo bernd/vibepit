@@ -103,6 +103,26 @@ teardown() {
 	[ "$(cat "$TEST_DIR/code/.migrate-notes")" = "userdata" ]
 }
 
+@test "migration skips mount point children" {
+	date > "$TEST_DIR/.vibepit-initialized"
+	echo "rc" > "$TEST_DIR/.bashrc"
+	mkdir -p "$TEST_DIR/jane/src"
+	echo "project" > "$TEST_DIR/jane/src/main.go"
+
+	# Simulate /home/jane being a mount point child.
+	_mountpoint_children() { echo "jane"; }
+	export -f _mountpoint_children
+
+	migrate_home_volume "$TEST_DIR"
+
+	# jane/ must remain in place (not moved into code/).
+	[ -f "$TEST_DIR/jane/src/main.go" ]
+	[ ! -d "$TEST_DIR/code/jane" ]
+	# Regular files should still be migrated.
+	[ -f "$TEST_DIR/code/.bashrc" ]
+	[ -f "$TEST_DIR/code/.vibepit-initialized" ]
+}
+
 @test "no temp directory or lockfile remains after migration" {
 	date > "$TEST_DIR/.vibepit-initialized"
 	echo "rc" > "$TEST_DIR/.bashrc"
