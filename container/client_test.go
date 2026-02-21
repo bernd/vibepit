@@ -24,8 +24,8 @@ func TestNextIP(t *testing.T) {
 	}
 }
 
-func TestDevContainerConfigEnvBuild(t *testing.T) {
-	cfg := DevContainerConfig{
+func TestSandboxContainerConfigEnvBuild(t *testing.T) {
+	cfg := SandboxContainerConfig{
 		Image:      "vibepit:latest",
 		ProjectDir: "/home/user/project",
 		WorkDir:    "/home/user/project",

@@ -276,7 +276,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
-	sandboxContainer, err := client.CreateDevContainer(ctx, ctr.DevContainerConfig{
+	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
 		Image:      image,
 		ProjectDir: projectRoot,
 		WorkDir:    projectRoot,

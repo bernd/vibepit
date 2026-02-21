@@ -593,8 +593,8 @@ func firstHostPort(bindings []nat.PortBinding) string {
 	return ""
 }
 
-// DevContainerConfig holds the parameters for the sandboxed sandbox container.
-type DevContainerConfig struct {
+// SandboxContainerConfig holds the parameters for the sandboxed sandbox container.
+type SandboxContainerConfig struct {
 	Image      string
 	ProjectDir string
 	WorkDir    string
@@ -610,9 +610,9 @@ type DevContainerConfig struct {
 	User       string
 }
 
-// CreateDevContainer creates the sandboxed development container
+// CreateSandboxContainer creates the sandboxed development container
 // with proxy environment variables and a read-only root filesystem.
-func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig) (string, error) {
+func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContainerConfig) (string, error) {
 	proxyURL := fmt.Sprintf("http://%s:%d", cfg.ProxyIP, cfg.ProxyPort)
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
