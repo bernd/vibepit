@@ -33,7 +33,7 @@ func TestDevContainerConfigEnvBuild(t *testing.T) {
 		VolumeName: "vibepit-vol",
 		NetworkID:  "net123",
 		ProxyIP:    "172.28.0.2",
-		Name:       "vibepit-dev",
+		Name:       "vibepit-sandbox",
 		Term:       "xterm-256color",
 		ColorTerm:  "truecolor",
 		UID:        1000,

@@ -37,8 +37,8 @@ const (
 	LabelProjectDir = "vibepit.project.dir"
 	LabelSessionID  = "vibepit.session-id"
 
-	RoleProxy = "proxy"
-	RoleDev   = "dev"
+	RoleProxy   = "proxy"
+	RoleSandbox = "sandbox"
 
 	ProxyBinaryPath   = "/vibepit"
 	ProxyConfigPath   = "/config.json"
@@ -194,13 +194,13 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	return nil
 }
 
-// FindRunningSession returns the ID of an already-running dev container for
+// FindRunningSession returns the ID of an already-running sandbox container for
 // the given project directory, or empty string if none is found.
 func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (string, error) {
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
 		Filters: filters.NewArgs(
 			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
-			filters.Arg("label", LabelRole+"="+RoleDev),
+			filters.Arg("label", LabelRole+"="+RoleSandbox),
 		),
 	})
 	if err != nil {
@@ -593,7 +593,7 @@ func firstHostPort(bindings []nat.PortBinding) string {
 	return ""
 }
 
-// DevContainerConfig holds the parameters for the sandboxed dev container.
+// DevContainerConfig holds the parameters for the sandboxed sandbox container.
 type DevContainerConfig struct {
 	Image      string
 	ProjectDir string
@@ -654,7 +654,7 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 			Hostname: ContainerHostname,
 			Labels: map[string]string{
 				LabelVibepit:    "true",
-				LabelRole:       RoleDev,
+				LabelRole:       RoleSandbox,
 				LabelUID:        fmt.Sprintf("%d", cfg.UID),
 				LabelUser:       cfg.User,
 				LabelVolume:     cfg.VolumeName,
@@ -682,7 +682,7 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 		cfg.Name,
 	)
 	if err != nil {
-		return "", fmt.Errorf("create dev container: %w", err)
+		return "", fmt.Errorf("create sandbox container: %w", err)
 	}
 	return resp.ID, nil
 }

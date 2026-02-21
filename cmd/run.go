@@ -229,7 +229,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	defer func() {
 		tui.Status("Removing", "network %s", networkName)
-		client.RemoveNetwork(ctx, netInfo.ID)
+		if err := client.RemoveNetwork(ctx, netInfo.ID); err != nil {
+			tui.Error("%v", err)
+		}
 	}()
 
 	// Generate ephemeral mTLS credentials for the control API.
@@ -278,8 +280,8 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		term = "xterm-256color"
 	}
 
-	tui.Status("Creating", "dev container in %s", projectRoot)
-	devContainerID, err := client.CreateDevContainer(ctx, ctr.DevContainerConfig{
+	tui.Status("Creating", "sandbox container in %s", projectRoot)
+	sandboxContainer, err := client.CreateDevContainer(ctx, ctr.DevContainerConfig{
 		Image:      image,
 		ProjectDir: projectRoot,
 		WorkDir:    projectRoot,
@@ -295,15 +297,15 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		User:       u.Username,
 	})
 	if err != nil {
-		return fmt.Errorf("dev container: %w", err)
+		return fmt.Errorf("sandbox container: %w", err)
 	}
 	defer func() {
-		tui.Status("Stopping", "dev container")
-		client.StopAndRemove(ctx, devContainerID)
+		tui.Status("Stopping", "sandbox container")
+		client.StopAndRemove(ctx, sandboxContainer)
 	}()
 
-	tui.Status("Starting", "dev container")
+	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	return client.AttachAndStartSession(ctx, devContainerID)
+	return client.AttachAndStartSession(ctx, sandboxContainer)
 }

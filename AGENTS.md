@@ -2,7 +2,7 @@
 
 Vibepit runs development agents inside isolated Docker/Podman containers with
 network isolation via a filtering proxy. A single `vibepit` command launches a
-proxy container and a dev container on an isolated network, with a persistent
+proxy container and a sandbox container on an isolated network, with a persistent
 home volume, the project directory mounted in, and a security-hardened runtime
 (read-only root filesystem, dropped capabilities, no-new-privileges).
 
