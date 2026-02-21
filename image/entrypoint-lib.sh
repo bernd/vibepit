@@ -33,6 +33,9 @@ migrate_home_volume() {
 		return 0
 	fi
 
+	# vp_status is defined in lib.sh, sourced by the entrypoint before this file.
+	type vp_status &>/dev/null && vp_status "Migrating home volume layout..."
+
 	# Serialize concurrent migrations on the shared home volume.
 	local lockfile="$base/.vibepit-migrate-lock"
 	(
@@ -71,4 +74,6 @@ migrate_home_volume() {
 		fi
 	) 9>"$lockfile"
 	rm -f "$lockfile"
+
+	type vp_status &>/dev/null && vp_status "Migration complete." || true
 }
