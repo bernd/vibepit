@@ -304,6 +304,7 @@
     - "repo.maven.org:443"
     - "central.maven.org:443"
     - "repo1.maven.org:443"
+    - "repo.maven.apache.org:443"
     - "jcenter.bintray.com:443"
     - "gradle.org:443"
     - "www.gradle.org:443"
