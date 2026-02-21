@@ -643,6 +643,20 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		}
 		binds = append(binds, fakeConfigDir+":"+vibepitConfigDir+":ro")
 	}
+	// Maven doesn't honor any HTTP_PROXY variables, so we have to create a temporary Maven settings.xml and
+	// configure it globally via MAVEN_ARGS.
+	{
+		mavenConfigDir := filepath.Join(cfg.RuntimeDir, "maven")
+		if err := os.MkdirAll(mavenConfigDir, 0700); err != nil {
+			return "", fmt.Errorf("create maven config dir: %w", err)
+		}
+		mavenSettings := filepath.Join(mavenConfigDir, "settings.xml")
+		if err := os.WriteFile(mavenSettings, config.MavenSettings(cfg.ProxyIP, cfg.ProxyPort), 0o600); err != nil {
+			return "", fmt.Errorf("write maven settings: %w", err)
+		}
+		binds = append(binds, mavenSettings+":/etc/vibepit/maven-settings.xml:ro")
+		env = append(env, `MAVEN_ARGS=--global-settings=/etc/vibepit/maven-settings.xml`)
+	}
 	if _, err := os.Stat("/etc/localtime"); err == nil {
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")
 	}
