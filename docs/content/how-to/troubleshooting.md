@@ -201,7 +201,7 @@ typically incorrect indentation or a misplaced key.
 ## Sandbox Image Not Found
 
 **Symptoms:** `vibepit run` or `vibepit update` fails with an image pull error
-referencing a tag like `main-uid-1234-gid-1234`.
+referencing a tag like `r1-uid-1234-gid-1234`.
 
 **Cause:** Vibepit builds sandbox images for specific UID/GID combinations to
 match file ownership between the host and the container. Pre-built images are
@@ -209,8 +209,8 @@ published for these combinations:
 
 | Tag | Platform |
 |-----|----------|
-| `main-uid-1000-gid-1000` | Linux (default UID/GID) |
-| `main-uid-501-gid-20` | macOS (default UID/GID) |
+| `r1-uid-1000-gid-1000` | Linux (default UID/GID) |
+| `r1-uid-501-gid-20` | macOS (default UID/GID) |
 
 If your user has a different UID or GID, no pre-built image exists.
 

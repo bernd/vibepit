@@ -13,6 +13,9 @@ env:
   REGISTRY: ghcr.io
   # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
+  # Bump on backwards-incompatible image changes (r1, r2, ...).
+  # Also update imageRevision in cmd/run.go.
+  IMAGE_REVISION: r1
 
 jobs:
   build:
@@ -86,7 +89,7 @@ jobs:
             CODE_UID=${{ matrix.edition.uid }}
             CODE_GID=${{ matrix.edition.gid }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-uid-${{ matrix.edition.uid }}-gid-${{ matrix.edition.gid }}"
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_REVISION }}-uid-${{ matrix.edition.uid }}-gid-${{ matrix.edition.gid }}"
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
