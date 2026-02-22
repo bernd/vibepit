@@ -354,6 +354,7 @@ func renderEventDetails(e proxy.TelemetryEvent) []string {
 		shown["duration_ms"] = true
 		shown["tool_parameters"] = true
 		shown["arguments"] = true
+		shown["output"] = true
 	case "api_request", "codex.api_request":
 		shown["model"] = true
 		shown["duration_ms"] = true
