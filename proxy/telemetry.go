@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -204,98 +203,8 @@ func (b *TelemetryBuffer) updateMaxMetricLocked(m MetricSummary) {
 // deriveEventMetrics creates derived metric summaries from event attributes.
 // Caller must hold b.mu.
 func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
-	durationStr := e.Attrs["duration_ms"]
-	duration, _ := strconv.ParseFloat(durationStr, 64)
-
-	// Per-event-type count and duration (for all events with duration_ms).
-	if durationStr != "" {
-		b.updateMetricLocked(MetricSummary{
-			Name: "event_type.count", Agent: e.Agent, Value: 1, IsDelta: true,
-			Attributes: map[string]string{"type": e.EventName},
-		})
-		b.updateMetricLocked(MetricSummary{
-			Name: "event_type.duration", Agent: e.Agent, Value: duration, IsDelta: true,
-			Attributes: map[string]string{"type": e.EventName},
-		})
-	}
-
-	switch e.EventName {
-	case "api_request", "codex.api_request":
-		model := e.Attrs["model"]
-		if model == "" {
-			return
-		}
-		b.updateMetricLocked(MetricSummary{
-			Name: "api.count", Agent: e.Agent, Value: 1, IsDelta: true,
-			Attributes: map[string]string{"model": model},
-		})
-		if durationStr != "" {
-			b.updateMetricLocked(MetricSummary{
-				Name: "api.duration", Agent: e.Agent, Value: duration, IsDelta: true,
-				Attributes: map[string]string{"model": model},
-			})
-		}
-
-	case "tool_result", "codex.tool_result":
-		toolName := e.Attrs["tool_name"]
-		if toolName == "" {
-			return
-		}
-		b.updateMetricLocked(MetricSummary{
-			Name: "tool.count", Agent: e.Agent, Value: 1, IsDelta: true,
-			Attributes: map[string]string{"type": toolName},
-		})
-		if durationStr != "" {
-			b.updateMetricLocked(MetricSummary{
-				Name: "tool.duration", Agent: e.Agent, Value: duration, IsDelta: true,
-				Attributes: map[string]string{"type": toolName},
-			})
-		}
-		if sizeStr := e.Attrs["tool_result_size_bytes"]; sizeStr != "" {
-			size, _ := strconv.ParseFloat(sizeStr, 64)
-			b.updateMetricLocked(MetricSummary{
-				Name: "tool.result_size", Agent: e.Agent, Value: size, IsDelta: true,
-				Attributes: map[string]string{"type": toolName},
-			})
-			b.updateMaxMetricLocked(MetricSummary{
-				Name: "tool.result_size_max", Agent: e.Agent, Value: size,
-				Attributes: map[string]string{"type": toolName},
-			})
-		}
-
-	case "codex.sse_event":
-		if e.Attrs["event.kind"] != "response.completed" {
-			return
-		}
-		model := e.Attrs["model"]
-		var tokInput, tokOutput, tokCached float64
-		for _, tok := range []struct {
-			attr, metric string
-			dest         *float64
-		}{
-			{"input_token_count", "codex.token.input", &tokInput},
-			{"output_token_count", "codex.token.output", &tokOutput},
-			{"cached_token_count", "codex.token.cached", &tokCached},
-			{"reasoning_token_count", "codex.token.reasoning", nil},
-		} {
-			if valStr := e.Attrs[tok.attr]; valStr != "" {
-				val, _ := strconv.ParseFloat(valStr, 64)
-				b.updateMetricLocked(MetricSummary{
-					Name: tok.metric, Agent: e.Agent, Value: val, IsDelta: true,
-					Attributes: map[string]string{"model": model},
-				})
-				if tok.dest != nil {
-					*tok.dest = val
-				}
-			}
-		}
-		if cost := tokenCost(model, tokInput, tokOutput, tokCached); cost > 0 {
-			b.updateMetricLocked(MetricSummary{
-				Name: "codex.cost.usage", Agent: e.Agent, Value: cost, IsDelta: true,
-				Attributes: map[string]string{"model": model},
-			})
-		}
-	}
+	b.deriveClaudeCodeMetrics(e)
+	b.deriveCodexMetrics(e)
 }
 
 func truncate(s string, maxBytes int) string {
