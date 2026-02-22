@@ -58,14 +58,35 @@ var noiseKeys = map[string]bool{
 	"event.name":         true,
 	"app.version":        true,
 	"prompt.id":          true,
+	"auth_mode":          true,
+	"conversation.id":    true,
+	"originator":         true,
+	"slug":               true,
+	"user.account_id":    true,
 }
 
 func (s *telemetryScreen) filteredEvents() []proxy.TelemetryEvent {
 	var filtered []proxy.TelemetryEvent
 	for _, e := range s.events {
+		if e.EventName == "" {
+			continue
+		}
 		// Hide accepted tool_decisions — they're noise.
 		if e.EventName == "tool_decision" && e.Attrs["decision"] == "accept" {
 			continue
+		}
+		if e.EventName == "codex.tool_decision" && e.Attrs["decision"] == "approved" {
+			continue
+		}
+		// Hide codex.sse_event streaming deltas — only keep response.completed
+		// that actually carry token counts.
+		if e.EventName == "codex.sse_event" {
+			if e.Attrs["event.kind"] != "response.completed" {
+				continue
+			}
+			if e.Attrs["input_token_count"] == "" && e.Attrs["output_token_count"] == "" {
+				continue
+			}
 		}
 		if s.filter.active != "" && e.Agent != s.filter.active {
 			continue
@@ -225,24 +246,28 @@ func renderEventLine(e proxy.TelemetryEvent) string {
 	prefix := "[" + ts + "] " + agent + " "
 
 	switch e.EventName {
-	case "tool_result":
+	case "tool_result", "codex.tool_result":
 		name := cyan.Render(fmt.Sprintf("%-*s", colName, stripControl(e.Attrs["tool_name"])))
 		var status string
 		if v := e.Attrs["success"]; v == "true" {
 			status = cyan.Render("\u2713")
-		} else {
+		} else if v == "false" {
 			status = errColor.Render("\u2717")
+		} else {
+			status = " "
 		}
 		dur := field.Render(fmt.Sprintf("%*s", colDur, e.Attrs["duration_ms"]+"ms"))
 		line := prefix + name + " " + status + " " + dur
 		if desc := toolDescription(e.Attrs["tool_parameters"]); desc != "" {
+			line += "  " + stripControl(desc)
+		} else if desc := toolDescription(e.Attrs["arguments"]); desc != "" {
 			line += "  " + stripControl(desc)
 		} else if size := e.Attrs["tool_result_size_bytes"]; size != "" {
 			line += "  " + field.Render(formatBytes(size))
 		}
 		return line
 
-	case "api_request":
+	case "api_request", "codex.api_request":
 		model := telemetry.ShortModelName(e.Attrs["model"])
 		name := cyan.Render(fmt.Sprintf("%-*s", colName, model))
 		dur := field.Render(fmt.Sprintf("%*s", colDur, e.Attrs["duration_ms"]+"ms"))
@@ -264,13 +289,41 @@ func renderEventLine(e proxy.TelemetryEvent) string {
 		}
 		return line
 
-	case "tool_decision":
+	case "tool_decision", "codex.tool_decision":
 		toolName := stripControl(e.Attrs["tool_name"])
 		source := stripControl(e.Attrs["source"])
 		line := prefix + errColor.Render("\u2717") + " " + cyan.Render(toolName) + " rejected"
 		if source != "" {
 			line += " (" + source + ")"
 		}
+		return line
+
+	case "codex.sse_event":
+		// Only response.completed reaches here (others filtered out).
+		model := telemetry.ShortModelName(e.Attrs["model"])
+		name := cyan.Render(fmt.Sprintf("%-*s", colName, model))
+		var tokParts []string
+		if v := e.Attrs["input_token_count"]; v != "" && v != "0" {
+			tokParts = append(tokParts, v+"\u2191")
+		}
+		if v := e.Attrs["output_token_count"]; v != "" && v != "0" {
+			tokParts = append(tokParts, v+"\u2193")
+		}
+		if v := e.Attrs["cached_token_count"]; v != "" && v != "0" {
+			tokParts = append(tokParts, v+" cached")
+		}
+		if v := e.Attrs["reasoning_token_count"]; v != "" && v != "0" {
+			tokParts = append(tokParts, v+" reasoning")
+		}
+		line := prefix + name + "   "
+		if len(tokParts) > 0 {
+			line += field.Render(strings.Join(tokParts, "  "))
+		}
+		return line
+
+	case "codex.user_prompt":
+		prompt := stripControl(e.Attrs["prompt"])
+		line := prefix + cyan.Render("prompt") + "  " + prompt
 		return line
 
 	default:
@@ -295,31 +348,47 @@ func renderEventDetails(e proxy.TelemetryEvent) []string {
 	// Keys already shown in the compact line, per event type.
 	shown := map[string]bool{}
 	switch e.EventName {
-	case "tool_result":
+	case "tool_result", "codex.tool_result":
 		shown["tool_name"] = true
 		shown["success"] = true
 		shown["duration_ms"] = true
 		shown["tool_parameters"] = true
-	case "api_request":
+		shown["arguments"] = true
+	case "api_request", "codex.api_request":
 		shown["model"] = true
 		shown["duration_ms"] = true
 		shown["cost_usd"] = true
 		shown["input_tokens"] = true
 		shown["output_tokens"] = true
-	case "tool_decision":
+	case "tool_decision", "codex.tool_decision":
 		shown["tool_name"] = true
 		shown["decision"] = true
 		shown["source"] = true
+	case "codex.sse_event":
+		shown["model"] = true
+		shown["event.kind"] = true
+		shown["input_token_count"] = true
+		shown["output_token_count"] = true
+		shown["cached_token_count"] = true
+		shown["reasoning_token_count"] = true
+	case "codex.user_prompt":
+		shown["prompt"] = true
+		shown["prompt_length"] = true
+		shown["model"] = true
 	}
 
 	dim := lipgloss.NewStyle().Foreground(tui.ColorField)
 	var lines []string
 
-	// For tool_result, expand tool_parameters JSON into individual fields.
-	if e.EventName == "tool_result" {
-		if params, ok := e.Attrs["tool_parameters"]; ok && params != "" {
+	// For tool_result, expand tool_parameters/arguments JSON into individual fields.
+	if e.EventName == "tool_result" || e.EventName == "codex.tool_result" {
+		paramsJSON := e.Attrs["tool_parameters"]
+		if paramsJSON == "" {
+			paramsJSON = e.Attrs["arguments"]
+		}
+		if paramsJSON != "" {
 			var parsed map[string]any
-			if err := json.Unmarshal([]byte(params), &parsed); err == nil {
+			if err := json.Unmarshal([]byte(paramsJSON), &parsed); err == nil {
 				paramKeys := make([]string, 0, len(parsed))
 				for k := range parsed {
 					paramKeys = append(paramKeys, k)

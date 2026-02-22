@@ -220,7 +220,7 @@ func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
 	}
 
 	switch e.EventName {
-	case "api_request":
+	case "api_request", "codex.api_request":
 		model := e.Attrs["model"]
 		if model == "" {
 			return
@@ -236,7 +236,7 @@ func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
 			})
 		}
 
-	case "tool_result":
+	case "tool_result", "codex.tool_result":
 		toolName := e.Attrs["tool_name"]
 		if toolName == "" {
 			return
@@ -261,6 +261,28 @@ func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
 				Name: "tool.result_size_max", Agent: e.Agent, Value: size,
 				Attributes: map[string]string{"type": toolName},
 			})
+		}
+
+	case "codex.sse_event":
+		if e.Attrs["event.kind"] != "response.completed" {
+			return
+		}
+		model := e.Attrs["model"]
+		for _, tok := range []struct {
+			attr, metric string
+		}{
+			{"input_token_count", "codex.token.input"},
+			{"output_token_count", "codex.token.output"},
+			{"cached_token_count", "codex.token.cached"},
+			{"reasoning_token_count", "codex.token.reasoning"},
+		} {
+			if valStr := e.Attrs[tok.attr]; valStr != "" {
+				val, _ := strconv.ParseFloat(valStr, 64)
+				b.updateMetricLocked(MetricSummary{
+					Name: tok.metric, Agent: e.Agent, Value: val, IsDelta: true,
+					Attributes: map[string]string{"model": model},
+				})
+			}
 		}
 	}
 }

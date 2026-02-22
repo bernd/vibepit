@@ -98,10 +98,15 @@ func TestDisplayName(t *testing.T) {
 	})
 }
 
-func TestFormatAgent_Codex_FallsBackToGeneric(t *testing.T) {
+func TestFormatAgent_Codex_UsesCodexFormatter(t *testing.T) {
 	metrics := []proxy.MetricSummary{
-		{Name: "codex.api_request", Agent: "codex", Value: 10},
+		{Name: "codex.token.input", Agent: "codex", Value: 1000, Attributes: map[string]string{"model": "o3"}},
+		{Name: "codex.token.output", Agent: "codex", Value: 500, Attributes: map[string]string{"model": "o3"}},
+		{Name: "api.count", Agent: "codex", Value: 5, Attributes: map[string]string{"model": "o3"}},
+		{Name: "api.duration", Agent: "codex", Value: 10000, Attributes: map[string]string{"model": "o3"}},
 	}
 	lines := FormatAgent("codex", metrics)
-	assert.Contains(t, lines, "  codex.api_request: 10")
+	joined := strings.Join(lines, "\n")
+	assert.Contains(t, joined, "Requests: 5")
+	assert.Contains(t, joined, "1000 in")
 }
