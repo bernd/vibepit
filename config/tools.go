@@ -18,3 +18,13 @@ const mavenSettingsTemplate = `<settings>
 func MavenSettings(host string, port int) []byte {
 	return []byte(fmt.Sprintf(mavenSettingsTemplate, host, port))
 }
+
+const codexConfigTemplate = `[otel]
+exporter = { otlp-http = { endpoint = "http://%s:%d/v1/logs", protocol = "binary" } }
+metrics_exporter = { otlp-http = { endpoint = "http://%s:%d/v1/metrics", protocol = "binary" } }
+log_user_prompt = true
+`
+
+func CodexConfig(host string, port int) []byte {
+	return []byte(fmt.Sprintf(codexConfigTemplate, host, port, host, port))
+}

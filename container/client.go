@@ -679,6 +679,17 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		binds = append(binds, mavenSettings+":/etc/vibepit/maven-settings.xml:ro")
 		env = append(env, `MAVEN_ARGS=--global-settings=/etc/vibepit/maven-settings.xml`)
 	}
+	if cfg.OTLPPort > 0 {
+		codexConfigDir := filepath.Join(cfg.RuntimeDir, "codex")
+		if err := os.MkdirAll(codexConfigDir, 0700); err != nil {
+			return "", fmt.Errorf("create codex config dir: %w", err)
+		}
+		codexConfig := filepath.Join(codexConfigDir, "config.toml")
+		if err := os.WriteFile(codexConfig, config.CodexConfig(cfg.ProxyIP, cfg.OTLPPort), 0o600); err != nil {
+			return "", fmt.Errorf("write codex config: %w", err)
+		}
+		binds = append(binds, codexConfig+":/etc/codex/config.toml:ro")
+	}
 	if _, err := os.Stat("/etc/localtime"); err == nil {
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")
 	}
