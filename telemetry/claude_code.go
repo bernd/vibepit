@@ -154,6 +154,7 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	if len(apiCount) > 0 {
 		models := sortedKeys(apiCount)
 		nameW := maxLen(models)
+		countW := countWidth(apiCount)
 		lines = append(lines, "")
 		lines = append(lines, "  Models")
 		for _, model := range models {
@@ -163,7 +164,7 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 			if c, ok := modelCost[model]; ok {
 				costStr = fmt.Sprintf("   $%.4f", c)
 			}
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f req   avg %5.0fms%s", nameW, model, count, avgMs, costStr))
+			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f req   avg %5.0fms%s", nameW, model, countW, count, avgMs, costStr))
 		}
 	}
 
@@ -202,11 +203,12 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	if len(eventCount) > 0 {
 		types := sortedKeys(eventCount)
 		nameW := maxLen(types)
+		countW := countWidth(eventCount)
 		lines = append(lines, "  Latency")
 		for _, typ := range types {
 			count := eventCount[typ]
 			avgMs := eventDuration[typ] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f calls   avg %5.0fms", nameW, typ, count, avgMs))
+			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms", nameW, typ, countW, count, avgMs))
 		}
 	}
 
@@ -214,14 +216,15 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	if len(toolCount) > 0 {
 		tools := sortedKeys(toolCount)
 		nameW := maxLen(tools)
+		countW := countWidth(toolCount)
 		lines = append(lines, "  Tools")
 		for _, tool := range tools {
 			count := toolCount[tool]
 			avgMs := toolDuration[tool] / count
 			avgSize := toolSize[tool] / count
 			maxSize := toolSizeMax[tool]
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f calls   avg %5.0fms   avg %5.0fB / max %5.0fB",
-				nameW, tool, count, avgMs, avgSize, maxSize))
+			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms   avg %5.0fB / max %5.0fB",
+				nameW, tool, countW, count, avgMs, avgSize, maxSize))
 		}
 	}
 
@@ -245,6 +248,19 @@ func sortedKeys(m map[string]float64) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// countWidth returns the minimum field width needed to display the largest
+// count value, with a floor of 3 to keep small tables tidy.
+func countWidth(m map[string]float64) int {
+	w := 3
+	for _, v := range m {
+		n := len(fmt.Sprintf("%.0f", v))
+		if n > w {
+			w = n
+		}
+	}
+	return w
 }
 
 // ShortModelName extracts a short display name from a full model identifier.

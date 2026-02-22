@@ -131,6 +131,7 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 	if len(apiCount) > 0 {
 		models := sortedKeys(apiCount)
 		nameW := maxLen(models)
+		countW := countWidth(apiCount)
 		lines = append(lines, "")
 		lines = append(lines, "  Models")
 		for _, model := range models {
@@ -143,7 +144,7 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 					costStr += fmt.Sprintf(" (priced as %s)", source)
 				}
 			}
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f req   avg %5.0fms%s", nameW, model, count, avgMs, costStr))
+			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f req   avg %5.0fms%s", nameW, model, countW, count, avgMs, costStr))
 		}
 	}
 
@@ -182,11 +183,12 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 	if len(eventCount) > 0 {
 		types := sortedKeys(eventCount)
 		nameW := maxLen(types)
+		countW := countWidth(eventCount)
 		lines = append(lines, "  Latency")
 		for _, typ := range types {
 			count := eventCount[typ]
 			avgMs := eventDuration[typ] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f calls   avg %5.0fms", nameW, typ, count, avgMs))
+			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms", nameW, typ, countW, count, avgMs))
 		}
 	}
 
@@ -194,11 +196,12 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 	if len(toolCount) > 0 {
 		tools := sortedKeys(toolCount)
 		nameW := maxLen(tools)
+		countW := countWidth(toolCount)
 		lines = append(lines, "  Tools")
 		for _, tool := range tools {
 			count := toolCount[tool]
 			avgMs := toolDuration[tool] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f calls   avg %5.0fms", nameW, tool, count, avgMs))
+			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms", nameW, tool, countW, count, avgMs))
 		}
 	}
 
