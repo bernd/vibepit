@@ -29,21 +29,23 @@ import (
 )
 
 const (
-	LabelVibepit    = "vibepit"
-	LabelRole       = "vibepit.role"
-	LabelUID        = "vibepit.uid"
-	LabelUser       = "vibepit.user"
-	LabelVolume     = "vibepit.volume"
-	LabelProjectDir = "vibepit.project.dir"
-	LabelSessionID  = "vibepit.session-id"
+	LabelVibepit         = "vibepit"
+	LabelRole            = "vibepit.role"
+	LabelUID             = "vibepit.uid"
+	LabelUser            = "vibepit.user"
+	LabelVolumeHome      = "vibepit.volume.home"
+	LabelVolumeLinuxbrew = "vibepit.volume.linuxbrew"
+	LabelProjectDir      = "vibepit.project.dir"
+	LabelSessionID       = "vibepit.session-id"
 
 	RoleProxy   = "proxy"
 	RoleSandbox = "sandbox"
 
-	ProxyBinaryPath   = "/vibepit"
-	ProxyConfigPath   = "/config.json"
-	HomeMountPath     = "/home"
-	ContainerHostname = "vibes"
+	ProxyBinaryPath    = "/vibepit"
+	ProxyConfigPath    = "/config.json"
+	HomeMountPath      = "/home/code"
+	LinuxbrewMountPath = "/home/linuxbrew"
+	ContainerHostname  = "vibes"
 
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
 	LabelControlPort = "vibepit.control-port"
@@ -595,19 +597,20 @@ func firstHostPort(bindings []nat.PortBinding) string {
 
 // SandboxContainerConfig holds the parameters for the sandboxed sandbox container.
 type SandboxContainerConfig struct {
-	Image      string
-	ProjectDir string
-	WorkDir    string
-	RuntimeDir string
-	VolumeName string
-	NetworkID  string
-	ProxyIP    string
-	ProxyPort  int
-	Name       string
-	Term       string
-	ColorTerm  string
-	UID        int
-	User       string
+	Image               string
+	ProjectDir          string
+	WorkDir             string
+	RuntimeDir          string
+	HomeVolumeName      string
+	LinuxbrewVolumeName string
+	NetworkID           string
+	ProxyIP             string
+	ProxyPort           int
+	Name                string
+	Term                string
+	ColorTerm           string
+	UID                 int
+	User                string
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -632,7 +635,8 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 	}
 
 	binds := []string{
-		cfg.VolumeName + ":" + HomeMountPath,
+		cfg.HomeVolumeName + ":" + HomeMountPath,
+		cfg.LinuxbrewVolumeName + ":" + LinuxbrewMountPath,
 		cfg.ProjectDir + ":" + cfg.ProjectDir,
 	}
 	// Hide the project's .vibepit directory in the sandbox.
@@ -668,12 +672,13 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 			Env:      env,
 			Hostname: ContainerHostname,
 			Labels: map[string]string{
-				LabelVibepit:    "true",
-				LabelRole:       RoleSandbox,
-				LabelUID:        fmt.Sprintf("%d", cfg.UID),
-				LabelUser:       cfg.User,
-				LabelVolume:     cfg.VolumeName,
-				LabelProjectDir: cfg.ProjectDir,
+				LabelVibepit:         "true",
+				LabelRole:            RoleSandbox,
+				LabelUID:             fmt.Sprintf("%d", cfg.UID),
+				LabelUser:            cfg.User,
+				LabelVolumeHome:      cfg.HomeVolumeName,
+				LabelVolumeLinuxbrew: cfg.LinuxbrewVolumeName,
+				LabelProjectDir:      cfg.ProjectDir,
 			},
 			Tty:        true,
 			OpenStdin:  true,

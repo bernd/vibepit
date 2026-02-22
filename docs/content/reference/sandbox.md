@@ -8,6 +8,8 @@ description: Reference for the Vibepit sandbox container including mounts, envir
 
 The sandbox runs as the `code` user. The home directory is `/home/code`, backed
 by a persistent Docker volume (`vibepit-home`) that survives across sessions.
+Homebrew is stored in a second persistent volume (`vibepit-linuxbrew`) mounted
+at `/home/linuxbrew`.
 
 The UID and GID of the `code` user match your host user, so file ownership is
 consistent between the host and the container.
@@ -18,6 +20,7 @@ consistent between the host and the container.
 |------|------|----------|----------|
 | Your project directory (original absolute path) | Bind mount | Yes | Yes (host filesystem) |
 | `/home/code` | Docker volume | Yes | Yes (across sessions) |
+| `/home/linuxbrew` | Docker volume | Yes | Yes (across sessions) |
 | `/tmp` | tmpfs | Yes | No (cleared on container stop) |
 | `/` (everything else) | Container image | No (read-only) | No |
 

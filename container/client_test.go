@@ -26,18 +26,19 @@ func TestNextIP(t *testing.T) {
 
 func TestSandboxContainerConfigEnvBuild(t *testing.T) {
 	cfg := SandboxContainerConfig{
-		Image:      "vibepit:latest",
-		ProjectDir: "/home/user/project",
-		WorkDir:    "/home/user/project",
-		RuntimeDir: "/run/user/1000/vibepit/abc123",
-		VolumeName: "vibepit-vol",
-		NetworkID:  "net123",
-		ProxyIP:    "172.28.0.2",
-		Name:       "vibepit-sandbox",
-		Term:       "xterm-256color",
-		ColorTerm:  "truecolor",
-		UID:        1000,
-		User:       "testuser",
+		Image:               "vibepit:latest",
+		ProjectDir:          "/home/user/project",
+		WorkDir:             "/home/user/project",
+		RuntimeDir:          "/run/user/1000/vibepit/abc123",
+		HomeVolumeName:      "vibepit-vol",
+		LinuxbrewVolumeName: "vibepit-linuxbrew-vol",
+		NetworkID:           "net123",
+		ProxyIP:             "172.28.0.2",
+		Name:                "vibepit-sandbox",
+		Term:                "xterm-256color",
+		ColorTerm:           "truecolor",
+		UID:                 1000,
+		User:                "testuser",
 	}
 	if cfg.Image != "vibepit:latest" {
 		t.Error("unexpected image")
@@ -47,6 +48,9 @@ func TestSandboxContainerConfigEnvBuild(t *testing.T) {
 	}
 	if cfg.ColorTerm != "truecolor" {
 		t.Error("unexpected COLORTERM")
+	}
+	if cfg.LinuxbrewVolumeName != "vibepit-linuxbrew-vol" {
+		t.Error("unexpected linuxbrew volume")
 	}
 }
 

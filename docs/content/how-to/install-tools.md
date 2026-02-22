@@ -18,7 +18,7 @@ any `brew` command inside the sandbox to trigger the installation:
 brew --version
 ```
 
-Homebrew is installed into the persistent home volume at
+Homebrew is installed into a dedicated persistent volume at
 `/home/linuxbrew/.linuxbrew`, so it only needs to install once. Subsequent
 sessions reuse the existing installation.
 
@@ -45,7 +45,7 @@ brew install ruby
 brew install rust
 ```
 
-Installed packages persist in the home volume and are available in future
+Installed packages persist in the linuxbrew volume and are available in future
 sessions without reinstalling.
 
 ## Network access for package managers
@@ -65,9 +65,10 @@ available presets.
 
 ## What persists between sessions
 
-Homebrew and all installed packages live in the persistent home volume
-(`/home/code`), so they survive across sessions. Your project directory is
-bind-mounted from the host and is always up to date.
+Homebrew and all installed packages live in the persistent linuxbrew volume
+(`vibepit-linuxbrew`, mounted at `/home/linuxbrew`), while shell state and dotfiles
+live in the persistent home volume (`vibepit-home`, mounted at `/home/code`).
+Your project directory is bind-mounted from the host and is always up to date.
 
 For the full list of mounts and what persists, see the
 [Sandbox Environment](../reference/sandbox.md) reference.

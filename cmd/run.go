@@ -24,11 +24,12 @@ import (
 const (
 	// imageRevision is bumped on backwards-incompatible image changes (r1, r2, ...).
 	// Also update IMAGE_REVISION in .github/workflows/docker-publish.yml.
-	imageRevision      = "r1"
-	defaultImagePrefix = "ghcr.io/bernd/vibepit:" + imageRevision
-	localImage         = "vibepit:latest"
-	volumeName         = "vibepit-home"
-	networkNamePrefix  = "vibepit-net-"
+	imageRevision       = "r1"
+	defaultImagePrefix  = "ghcr.io/bernd/vibepit:" + imageRevision
+	localImage          = "vibepit:latest"
+	homeVolumeName      = "vibepit-home"
+	linuxbrewVolumeName = "vibepit-linuxbrew"
+	networkNamePrefix   = "vibepit-net-"
 )
 
 const (
@@ -161,8 +162,11 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	uid, _ := strconv.Atoi(u.Uid)
 
-	if err := client.EnsureVolume(ctx, volumeName, uid, u.Username); err != nil {
-		return fmt.Errorf("volume: %w", err)
+	if err := client.EnsureVolume(ctx, homeVolumeName, uid, u.Username); err != nil {
+		return fmt.Errorf("home volume: %w", err)
+	}
+	if err := client.EnsureVolume(ctx, linuxbrewVolumeName, uid, u.Username); err != nil {
+		return fmt.Errorf("linuxbrew volume: %w", err)
 	}
 
 	selfBinary, err := os.Executable()
@@ -280,19 +284,20 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
 	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
-		Image:      image,
-		ProjectDir: projectRoot,
-		WorkDir:    projectRoot,
-		RuntimeDir: sessionDir,
-		VolumeName: volumeName,
-		NetworkID:  netInfo.ID,
-		ProxyIP:    proxyIP,
-		ProxyPort:  proxyPort,
-		Name:       "vibepit-sandbox-" + sessionID,
-		Term:       term,
-		ColorTerm:  os.Getenv("COLORTERM"),
-		UID:        uid,
-		User:       u.Username,
+		Image:               image,
+		ProjectDir:          projectRoot,
+		WorkDir:             projectRoot,
+		RuntimeDir:          sessionDir,
+		HomeVolumeName:      homeVolumeName,
+		LinuxbrewVolumeName: linuxbrewVolumeName,
+		NetworkID:           netInfo.ID,
+		ProxyIP:             proxyIP,
+		ProxyPort:           proxyPort,
+		Name:                "vibepit-sandbox-" + sessionID,
+		Term:                term,
+		ColorTerm:           os.Getenv("COLORTERM"),
+		UID:                 uid,
+		User:                u.Username,
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)

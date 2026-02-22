@@ -1,79 +1,48 @@
 #!/bin/bash
 
-# _mountpoint_children lists the names of direct children of a directory that
-# are mount points or contain mount points, by inspecting /proc/self/mountinfo.
-# This is used to avoid moving bind-mounted project directories during home
-# volume migration.
-_mountpoint_children() {
-	local base="${1%/}/"
-	if [ ! -f /proc/self/mountinfo ]; then
-		return 0
-	fi
-	awk -v prefix="$base" '{
-		mp = $5
-		if (substr(mp, 1, length(prefix)) == prefix) {
-			rest = substr(mp, length(prefix) + 1)
-			sub(/\/.*/, "", rest)
-			if (rest != "") print rest
-		}
-	}' /proc/self/mountinfo | sort -u
-}
-
-# migrate_home_volume relocates files from an old-style volume layout (where the
-# volume was mounted at /home/code) to the new layout (volume mounted at /home).
-# After the mount point change, old user files appear at the volume root and need
-# to move into a "code" subdirectory.
+# migrate_linuxbrew_volume moves legacy Homebrew data from
+# <code_home>/.linuxbrew to <linuxbrew_home>/.linuxbrew.
 #
-# Usage: migrate_home_volume <base_dir>
-#   base_dir: the volume mount point (e.g. /home)
-migrate_home_volume() {
-	local base="$1"
+# Usage: migrate_linuxbrew_volume [code_home] [linuxbrew_home]
+#   code_home: legacy code home (default: /home/code)
+#   linuxbrew_home: linuxbrew home root (default: /home/linuxbrew)
+migrate_linuxbrew_volume() {
+	local code_home="${1:-/home/code}"
+	local linuxbrew_home="${2:-/home/linuxbrew}"
+	local src="$code_home/.linuxbrew"
+	local dst="$linuxbrew_home/.linuxbrew"
+	local staging="${dst}.migrating"
+	local lockfile="$linuxbrew_home/.vibepit-linuxbrew-migrate-lock"
+	local rc
 
-	if [ ! -f "$base/.vibepit-initialized" ] && [ ! -f "$base/.bashrc" ]; then
+	if [ ! -d "$src" ] || [ -e "$dst" ]; then
 		return 0
 	fi
 
-	# vp_status is defined in lib.sh, sourced by the entrypoint before this file.
-	type vp_status &>/dev/null && vp_status "Migrating home volume layout..."
+	mkdir -p "$linuxbrew_home"
 
-	# Serialize concurrent migrations on the shared home volume.
-	local lockfile="$base/.vibepit-migrate-lock"
+	type vp_status &>/dev/null && vp_status "Migrating Homebrew to $dst..."
 	(
 		flock 9
 
-		# Re-check after acquiring the lock; another process may have
-		# completed the migration already.
-		if [ ! -f "$base/.vibepit-initialized" ] && [ ! -f "$base/.bashrc" ]; then
+		# Re-check after lock acquisition.
+		if [ ! -d "$src" ] || [ -e "$dst" ]; then
 			exit 0
 		fi
 
-		# If a rename fails mid-migration (I/O error, full disk), files may be
-		# split between $base/ and $base/.migrate-$$/, and the re-check on
-		# next start would skip migration. Recovery: manually move contents of
-		# any leftover .migrate-*/ directory into $base/code/. This is
-		# unlikely since all renames are within the same filesystem.
-		set -e
-		tmpname=".migrate-$$"
-		mkdir "$base/$tmpname"
-		cd "$base"
-		# Build exclusion pattern: temp dir, lockfile, and any mount points.
-		local exclude_pat="$tmpname|.vibepit-migrate-lock"
-		local mp
-		while IFS= read -r mp; do
-			[ -n "$mp" ] && exclude_pat="$exclude_pat|$mp"
-		done < <(_mountpoint_children "$base")
-		# extglob must be enabled before bash parses the !(pattern) glob.
-		# -O enables shell options before the command string is parsed.
-		bash -O extglob -O dotglob -c 'mv -- !('"$exclude_pat"') "$1/"' _ "$base/$tmpname"
-		mv "$base/$tmpname" "$base/code"
+		# Ensure stale staging data from a prior interrupted migration does not block retry.
+		rm -rf "$staging"
 
-		# Relocate linuxbrew from old path to new path.
-		if [ -d "$base/code/.linuxbrew" ]; then
-			mkdir -p "$base/linuxbrew"
-			mv "$base/code/.linuxbrew" "$base/linuxbrew/.linuxbrew"
-		fi
+		# Use staged copy+atomic rename to avoid partial destination state on interruption.
+		cp -a "$src" "$staging"
+		mv "$staging" "$dst"
+		rm -rf "$src"
 	) 9>"$lockfile"
+	rc=$?
 	rm -f "$lockfile"
+	if [ "$rc" -ne 0 ]; then
+		return "$rc"
+	fi
 
-	type vp_status &>/dev/null && vp_status "Migration complete." || true
+	type vp_status &>/dev/null && vp_status "Homebrew migration complete." || true
 }
