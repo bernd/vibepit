@@ -16,7 +16,7 @@ const mavenSettingsTemplate = `<settings>
 `
 
 func MavenSettings(host string, port int) []byte {
-	return []byte(fmt.Sprintf(mavenSettingsTemplate, host, port))
+	return fmt.Appendf(nil, mavenSettingsTemplate, host, port)
 }
 
 const codexConfigTemplate = `[otel]
@@ -26,5 +26,5 @@ log_user_prompt = true
 `
 
 func CodexConfig(host string, port int) []byte {
-	return []byte(fmt.Sprintf(codexConfigTemplate, host, port, host, port))
+	return fmt.Appendf(nil, codexConfigTemplate, host, port, host, port)
 }

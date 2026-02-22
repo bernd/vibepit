@@ -79,10 +79,10 @@ func TestPricingSource(t *testing.T) {
 
 func TestSplitVersionSuffix(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
-		wantBase     string
-		wantSuffix   string
+		name       string
+		input      string
+		wantBase   string
+		wantSuffix string
 	}{
 		{"no version", "o3", "o3", ""},
 		{"simple version", "gpt-5.3", "gpt-5.3", ""},
@@ -101,9 +101,9 @@ func TestSplitVersionSuffix(t *testing.T) {
 
 func TestDecrementVersion(t *testing.T) {
 	tests := []struct {
-		input   string
-		want    string
-		wantOK  bool
+		input  string
+		want   string
+		wantOK bool
 	}{
 		{"gpt-5.3", "gpt-5.2", true},
 		{"gpt-5.1", "gpt-5.0", true},

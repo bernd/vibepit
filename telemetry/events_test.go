@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -20,11 +21,11 @@ func makeEvent(agent, name string, attrs map[string]string) proxy.TelemetryEvent
 }
 
 func spansText(spans []EventSpan) string {
-	var s string
+	var s strings.Builder
 	for _, span := range spans {
-		s += span.Text
+		s.WriteString(span.Text)
 	}
-	return s
+	return s.String()
 }
 
 func TestStripControl(t *testing.T) {
@@ -237,8 +238,8 @@ func TestRenderEventLine(t *testing.T) {
 	t.Run("tool_result with size fallback", func(t *testing.T) {
 		e := makeEvent("claude-code", "tool_result", map[string]string{
 			"tool_name":              "Read",
-			"success":               "true",
-			"duration_ms":           "10",
+			"success":                "true",
+			"duration_ms":            "10",
 			"tool_result_size_bytes": "2048",
 		})
 		spans := RenderEventLine(e)

@@ -263,4 +263,3 @@ func TestTelemetryScreen_CursorCountIncludesDetails(t *testing.T) {
 
 	assert.Greater(t, s.cursor.ItemCount, collapsedCount)
 }
-
