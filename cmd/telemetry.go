@@ -19,12 +19,10 @@ func TelemetryCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "events",
-				Value: true,
 				Usage: "Stream telemetry events",
 			},
 			&cli.BoolFlag{
 				Name:  "metrics",
-				Value: true,
 				Usage: "Stream metric snapshots",
 			},
 			&cli.BoolFlag{
@@ -40,6 +38,10 @@ func TelemetryCommand() *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			showEvents := cmd.Bool("events")
 			showMetrics := cmd.Bool("metrics")
+			if !showEvents && !showMetrics {
+				showEvents = true
+				showMetrics = true
+			}
 			raw := cmd.Bool("raw")
 			agent := cmd.String("agent")
 
