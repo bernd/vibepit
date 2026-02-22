@@ -307,13 +307,17 @@ func TestMonitorScreen_Footer(t *testing.T) {
 
 func TestMonitorScreen_NewCount(t *testing.T) {
 	t.Run("increments when cursor not at end", func(t *testing.T) {
-		s, _ := makeTestSetup(5)
+		s, w := makeTestSetup(5)
+		// Shrink viewport so items exceed visible area.
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 6})
 		s.cursor.Pos = 2 // not at end (4)
-		s.items = append(s.items, logItem{
-			entry: proxy.LogEntry{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
-		})
-		s.cursor.ItemCount = len(s.items)
-		s.newCount += 1
+
+		s.Update(logsPollResultMsg{
+			entries: []proxy.LogEntry{
+				{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
+			},
+		}, w)
+
 		assert.Equal(t, 1, s.newCount)
 		assert.Equal(t, 2, s.cursor.Pos)
 	})
