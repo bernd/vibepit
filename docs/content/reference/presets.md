@@ -60,6 +60,24 @@ ab.chatgpt.com:443
 auth.openai.com:443
 ```
 
+### `github-copilot`
+
+GitHub Copilot services.
+
+```
+**.business.githubcopilot.com:443
+**.enterprise.githubcopilot.com:443
+```
+
+### `aws-bedrock`
+
+AWS Bedrock Endpoints.
+
+```
+bedrock.*.amazonaws.com:443
+bedrock-runtime.*.amazonaws.com:443
+```
+
 ### `vcs-github`
 
 GitHub.

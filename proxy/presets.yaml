@@ -34,6 +34,20 @@
     - "ab.chatgpt.com:443"
     - "auth.openai.com:443"
 
+- name: "github-copilot"
+  group: "Infrastructure"
+  description: "GitHub Copilot services"
+  domains:
+    - "**.business.githubcopilot.com:443"
+    - "**.enterprise.githubcopilot.com:443"
+
+- name: "aws-bedrock"
+  group: "Infrastructure"
+  description: "AWS Bedrock Endpoints"
+  domains:
+    - "bedrock.*.amazonaws.com:443"
+    - "bedrock-runtime.*.amazonaws.com:443"
+
 - name: "vcs-github"
   group: "Infrastructure"
   description: "GitHub"
