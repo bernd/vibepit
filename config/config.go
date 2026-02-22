@@ -100,21 +100,29 @@ func loadFile(path string, target any) error {
 
 // Merge combines global config, project config, CLI flags, and expanded presets
 // into a single flat config. Duplicates are removed while preserving order.
-func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
+func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, error) {
 	allowHTTP := dedup(c.Global.AllowHTTP, c.Project.AllowHTTP, cliAllow)
 
 	// Expand presets from both project config and CLI flags.
 	reg := proxy.NewPresetRegistry()
 	allowHTTP = dedup(allowHTTP, reg.Expand(append(c.Project.Presets, cliPresets...)))
 
+	if err := proxy.ValidateHTTPEntries(allowHTTP); err != nil {
+		return MergedConfig{}, fmt.Errorf("allow-http: %w", err)
+	}
+
 	allowDNS := dedup(c.Global.AllowDNS, c.Project.AllowDNS)
+
+	if err := proxy.ValidateDNSEntries(allowDNS); err != nil {
+		return MergedConfig{}, fmt.Errorf("allow-dns: %w", err)
+	}
 
 	return MergedConfig{
 		AllowHTTP:      allowHTTP,
 		AllowDNS:       allowDNS,
 		BlockCIDR:      c.Global.BlockCIDR,
 		AllowHostPorts: c.Project.AllowHostPorts,
-	}
+	}, nil
 }
 
 // dedup merges multiple string slices, removing duplicates while preserving order.

@@ -39,7 +39,8 @@ allow-http:
 		cfg, err := Load(globalFile, projectFile)
 		require.NoError(t, err)
 
-		merged := cfg.Merge(nil, nil)
+		merged, err := cfg.Merge(nil, nil)
+		require.NoError(t, err)
 
 		for _, want := range []string{"github.com:443", "api.anthropic.com:443", "proxy.golang.org:443", "sum.golang.org:443"} {
 			assert.Contains(t, merged.AllowHTTP, want)
@@ -50,7 +51,8 @@ allow-http:
 
 	t.Run("CLI overrides add to merged config", func(t *testing.T) {
 		cfg := &Config{}
-		merged := cfg.Merge([]string{"extra.com:443"}, []string{"pkg-node"})
+		merged, err := cfg.Merge([]string{"extra.com:443"}, []string{"pkg-node"})
+		require.NoError(t, err)
 
 		assert.Contains(t, merged.AllowHTTP, "extra.com:443")
 		assert.Contains(t, merged.AllowHTTP, "registry.npmjs.org:443")
@@ -71,7 +73,8 @@ allow-host-ports:
 		cfg, err := Load("/nonexistent/global.yaml", projectFile)
 		require.NoError(t, err)
 
-		merged := cfg.Merge(nil, nil)
+		merged, err := cfg.Merge(nil, nil)
+		require.NoError(t, err)
 		assert.Equal(t, []int{9200, 5432}, merged.AllowHostPorts)
 	})
 
@@ -89,7 +92,8 @@ allow-host-ports:
 	t.Run("missing files are not errors", func(t *testing.T) {
 		cfg, err := Load("/nonexistent/global.yaml", "/nonexistent/project.yaml")
 		require.NoError(t, err)
-		merged := cfg.Merge(nil, nil)
+		merged, err := cfg.Merge(nil, nil)
+		require.NoError(t, err)
 		assert.Empty(t, merged.AllowHTTP)
 	})
 }
@@ -189,5 +193,41 @@ func TestAppendAllowDNS(t *testing.T) {
 		}
 		assert.Equal(t, 1, count, "internal.example.com should appear exactly once")
 		assert.Contains(t, cfg.AllowDNS, "svc.local")
+	})
+}
+
+func TestMergeValidation(t *testing.T) {
+	t.Run("invalid allow-http entry fails merge", func(t *testing.T) {
+		cfg := &Config{
+			Project: ProjectConfig{
+				AllowHTTP: []string{"github.com:443", "bad:entry:here"},
+			},
+		}
+		_, err := cfg.Merge(nil, nil)
+		assert.Error(t, err)
+	})
+	t.Run("invalid allow-dns entry fails merge", func(t *testing.T) {
+		cfg := &Config{
+			Project: ProjectConfig{
+				AllowDNS: []string{"github.com:443"},
+			},
+		}
+		_, err := cfg.Merge(nil, nil)
+		assert.Error(t, err)
+	})
+	t.Run("invalid CLI allow entry fails merge", func(t *testing.T) {
+		cfg := &Config{}
+		_, err := cfg.Merge([]string{"a*.example.com:443"}, nil)
+		assert.Error(t, err)
+	})
+	t.Run("valid entries succeed", func(t *testing.T) {
+		cfg := &Config{
+			Project: ProjectConfig{
+				AllowHTTP: []string{"github.com:443"},
+				AllowDNS:  []string{"example.com"},
+			},
+		}
+		_, err := cfg.Merge(nil, nil)
+		assert.NoError(t, err)
 	})
 }

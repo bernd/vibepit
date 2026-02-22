@@ -132,13 +132,19 @@ that `example.com` and `*.example.com` are separate entries — allowing
     vibepit allow-http api.example.com:443
     ```
 
-2. If you need to allow all subdomains, use a wildcard:
+2. If you need to allow all subdomains (one level), use a single-label wildcard:
 
     ```bash
     vibepit allow-http "*.example.com:443"
     ```
 
-3. Double-check your existing rules. A common mistake is allowing the apex
+3. If the service uses multi-level subdomains, use `**`:
+
+    ```bash
+    vibepit allow-http "**.example.com:443"
+    ```
+
+4. Double-check your existing rules. A common mistake is allowing the apex
    domain when the request targets a subdomain, or vice versa.
 
 ---

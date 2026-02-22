@@ -54,8 +54,14 @@ func NewServer(configPath string) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	allowlist := NewHTTPAllowlist(s.config.AllowHTTP)
-	dnsAllowlist := NewDNSAllowlist(s.config.AllowDNS)
+	allowlist, err := NewHTTPAllowlist(s.config.AllowHTTP)
+	if err != nil {
+		return fmt.Errorf("allow-http: %w", err)
+	}
+	dnsAllowlist, err := NewDNSAllowlist(s.config.AllowDNS)
+	if err != nil {
+		return fmt.Errorf("allow-dns: %w", err)
+	}
 	cidr := NewCIDRBlocker(s.config.BlockCIDR)
 	log := NewLogBuffer(LogBufferCapacity)
 

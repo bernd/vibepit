@@ -158,7 +158,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	merged := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
+	merged, err := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 
 	uid, _ := strconv.Atoi(u.Uid)
 

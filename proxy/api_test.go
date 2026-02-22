@@ -21,8 +21,10 @@ func TestControlAPI(t *testing.T) {
 		"allow-dns":  []string{"c.com"},
 	}
 
-	allowlist := NewHTTPAllowlist([]string{"a.com:443", "b.com:443"})
-	dnsAllowlist := NewDNSAllowlist([]string{"c.com"})
+	allowlist, err := NewHTTPAllowlist([]string{"a.com:443", "b.com:443"})
+	require.NoError(t, err)
+	dnsAllowlist, err := NewDNSAllowlist([]string{"c.com"})
+	require.NoError(t, err)
 	api := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist)
 
 	t.Run("GET /logs returns entries", func(t *testing.T) {

@@ -380,8 +380,10 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
 		require.NoError(t, os.WriteFile(projectPath, []byte("presets:\n  - default\n"), 0o644))
 
-		httpAllowlist := proxy.NewHTTPAllowlist(nil)
-		dnsAllowlist := proxy.NewDNSAllowlist(nil)
+		httpAllowlist, err := proxy.NewHTTPAllowlist(nil)
+		require.NoError(t, err)
+		dnsAllowlist, err := proxy.NewDNSAllowlist(nil)
+		require.NoError(t, err)
 		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist)
 		client := testControlClient(t, api)
 		screen := newMonitorScreen(&SessionInfo{

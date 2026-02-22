@@ -105,9 +105,16 @@ vibepit allow-http [flags] <domain:port-pattern>...
 
 ### Wildcard semantics
 
-A leading `*.` matches any subdomain but **not** the apex domain itself.
-For example, `*.example.com:443` allows `api.example.com:443` and
-`cdn.example.com:443`, but does not allow `example.com:443`.
+`*` matches exactly one DNS label. `**` matches one or more labels. Both can
+appear in any position but at most one `**` per pattern.
+
+| Pattern | Matches | Does not match |
+|---|---|---|
+| `*.example.com:443` | `api.example.com` | `example.com`, `a.b.example.com` |
+| `**.example.com:443` | `api.example.com`, `a.b.example.com` | `example.com` |
+| `bedrock.*.amazonaws.com:443` | `bedrock.us-east-1.amazonaws.com` | `bedrock.a.b.amazonaws.com` |
+
+Ports must be an exact number or `*` for any port.
 
 ### Examples
 
@@ -115,7 +122,7 @@ For example, `*.example.com:443` allows `api.example.com:443` and
 # Allow a single domain
 vibepit allow-http api.example.com:443
 
-# Allow all subdomains of a domain
+# Allow all subdomains (one level) of a domain
 vibepit allow-http '*.example.com:443'
 
 # Allow multiple entries without saving to config
@@ -151,9 +158,13 @@ vibepit allow-dns [flags] <domain-pattern>...
 
 ### Wildcard semantics
 
-A leading `*.` matches any subdomain but **not** the apex domain itself.
-For example, `*.example.com` allows DNS resolution for `api.example.com` and
-`cdn.example.com`, but does not allow `example.com`.
+`*` matches exactly one DNS label. `**` matches one or more labels. Both can
+appear in any position but at most one `**` per pattern.
+
+| Pattern | Matches | Does not match |
+|---|---|---|
+| `*.example.com` | `api.example.com` | `example.com`, `a.b.example.com` |
+| `**.example.com` | `api.example.com`, `a.b.example.com` | `example.com` |
 
 ### Examples
 
