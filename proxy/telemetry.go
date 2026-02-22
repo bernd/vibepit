@@ -268,13 +268,15 @@ func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
 			return
 		}
 		model := e.Attrs["model"]
+		var tokInput, tokOutput, tokCached float64
 		for _, tok := range []struct {
 			attr, metric string
+			dest         *float64
 		}{
-			{"input_token_count", "codex.token.input"},
-			{"output_token_count", "codex.token.output"},
-			{"cached_token_count", "codex.token.cached"},
-			{"reasoning_token_count", "codex.token.reasoning"},
+			{"input_token_count", "codex.token.input", &tokInput},
+			{"output_token_count", "codex.token.output", &tokOutput},
+			{"cached_token_count", "codex.token.cached", &tokCached},
+			{"reasoning_token_count", "codex.token.reasoning", nil},
 		} {
 			if valStr := e.Attrs[tok.attr]; valStr != "" {
 				val, _ := strconv.ParseFloat(valStr, 64)
@@ -282,7 +284,16 @@ func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
 					Name: tok.metric, Agent: e.Agent, Value: val, IsDelta: true,
 					Attributes: map[string]string{"model": model},
 				})
+				if tok.dest != nil {
+					*tok.dest = val
+				}
 			}
+		}
+		if cost := tokenCost(model, tokInput, tokOutput, tokCached); cost > 0 {
+			b.updateMetricLocked(MetricSummary{
+				Name: "codex.cost.usage", Agent: e.Agent, Value: cost, IsDelta: true,
+				Attributes: map[string]string{"model": model},
+			})
 		}
 	}
 }

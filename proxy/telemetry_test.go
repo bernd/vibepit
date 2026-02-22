@@ -250,6 +250,11 @@ func TestDeriveEventMetrics_CodexSSEEvent(t *testing.T) {
 	assert.Equal(t, 500.0, byName["codex.token.output{model=o3}"])
 	assert.Equal(t, 800.0, byName["codex.token.cached{model=o3}"])
 	assert.Equal(t, 200.0, byName["codex.token.reasoning{model=o3}"])
+
+	// Cost should be derived from token counts and pricing data.
+	costVal, hasCost := byName["codex.cost.usage{model=o3}"]
+	assert.True(t, hasCost, "codex.cost.usage metric should be derived")
+	assert.Greater(t, costVal, 0.0)
 }
 
 func TestDeriveEventMetrics_CodexSSEEvent_IgnoresNonCompleted(t *testing.T) {

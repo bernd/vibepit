@@ -8,12 +8,14 @@ import (
 )
 
 func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
+	var cost float64
 	var tokInput, tokOutput, tokCached, tokReasoning float64
 
 	type modelTokens struct {
 		input, output, cached, reasoning float64
 	}
 	modelTok := map[string]*modelTokens{}
+	modelCost := map[string]float64{}
 
 	apiCount := map[string]float64{}
 	apiDuration := map[string]float64{}
@@ -29,6 +31,11 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 		typ := m.Attributes["type"]
 
 		switch m.Name {
+		case "codex.cost.usage":
+			cost += m.Value
+			if model != "" {
+				modelCost[model] += m.Value
+			}
 		case "codex.token.input":
 			tokInput += m.Value
 			if model != "" {
@@ -86,13 +93,20 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 
 	var lines []string
 
-	// KPI line.
+	// KPI line: cost and requests.
 	totalRequests := 0.0
 	for _, c := range apiCount {
 		totalRequests += c
 	}
+	var kpiParts []string
+	if cost > 0 {
+		kpiParts = append(kpiParts, fmt.Sprintf("Cost: $%.4f", cost))
+	}
 	if totalRequests > 0 {
-		lines = append(lines, fmt.Sprintf("  Requests: %.0f", totalRequests))
+		kpiParts = append(kpiParts, fmt.Sprintf("Requests: %.0f", totalRequests))
+	}
+	if len(kpiParts) > 0 {
+		lines = append(lines, "  "+strings.Join(kpiParts, "   "))
 	}
 
 	// Tokens line.
@@ -122,12 +136,25 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 		for _, model := range models {
 			count := apiCount[model]
 			avgMs := apiDuration[model] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f req   avg %5.0fms", nameW, model, count, avgMs))
+			costStr := ""
+			if c, ok := modelCost[model]; ok {
+				costStr = fmt.Sprintf("   $%.4f", c)
+				if source, ok := proxy.PricingSource(model); ok && source != model {
+					costStr += fmt.Sprintf(" (priced as %s)", source)
+				}
+			}
+			lines = append(lines, fmt.Sprintf("    %-*s  %3.0f req   avg %5.0fms%s", nameW, model, count, avgMs, costStr))
 		}
 	}
 
 	// Efficiency section.
 	if len(modelTok) > 0 {
+		lines = append(lines, "  Efficiency")
+
+		if cost > 0 && totalRequests > 0 {
+			lines = append(lines, fmt.Sprintf("    Cost/request: $%.4f", cost/totalRequests))
+		}
+
 		var cacheParts []string
 		models := sortedKeys(apiCount)
 		if len(models) == 0 {
@@ -147,7 +174,6 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 			}
 		}
 		if len(cacheParts) > 0 {
-			lines = append(lines, "  Efficiency")
 			lines = append(lines, "    Cache hit: "+strings.Join(cacheParts, "  "))
 		}
 	}
