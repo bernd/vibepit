@@ -70,19 +70,12 @@ func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {
 	slices.Sort(prefixes)
 
 	var lines []string
-	if len(prefixes) == 1 {
-		// Single agent formatter: pass all metrics so it can access derived
-		// metrics (api.count, tool.count, etc.) alongside its own prefix.
-		fn := registry[prefixes[0]]
-		lines = append(lines, fn(agent, metrics)...)
-	} else {
-		for _, prefix := range prefixes {
-			fn := registry[prefix]
-			lines = append(lines, fn(agent, matched[prefix])...)
-		}
-		if len(unmatched) > 0 {
-			lines = append(lines, formatGeneric(agent, unmatched)...)
-		}
+	for _, prefix := range prefixes {
+		fn := registry[prefix]
+		lines = append(lines, fn(agent, matched[prefix])...)
+	}
+	if len(unmatched) > 0 {
+		lines = append(lines, formatGeneric(agent, unmatched)...)
 	}
 	return lines
 }

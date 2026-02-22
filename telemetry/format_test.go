@@ -32,8 +32,8 @@ func TestFormatAgent_ClaudeCode(t *testing.T) {
 		{Name: "claude_code.token.usage", Agent: "claude-code", Value: 4606, Attributes: map[string]string{"type": "cacheCreation", "model": "claude-haiku-4-5-20251001"}},
 		{Name: "claude_code.active_time.total", Agent: "claude-code", Value: 29.0, Attributes: map[string]string{"type": "user"}},
 		{Name: "claude_code.active_time.total", Agent: "claude-code", Value: 12.7, Attributes: map[string]string{"type": "cli"}},
-		{Name: "api.count", Agent: "claude-code", Value: 5, IsDelta: true, Attributes: map[string]string{"model": "claude-haiku-4-5-20251001"}},
-		{Name: "api.duration", Agent: "claude-code", Value: 3500, IsDelta: true, Attributes: map[string]string{"model": "claude-haiku-4-5-20251001"}},
+		{Name: "claude_code.api.count", Agent: "claude-code", Value: 5, IsDelta: true, Attributes: map[string]string{"model": "claude-haiku-4-5-20251001"}},
+		{Name: "claude_code.api.duration", Agent: "claude-code", Value: 3500, IsDelta: true, Attributes: map[string]string{"model": "claude-haiku-4-5-20251001"}},
 	}
 	lines := FormatAgent("claude-code", metrics)
 	joined := strings.Join(lines, "\n")
@@ -102,8 +102,8 @@ func TestFormatAgent_Codex_UsesCodexFormatter(t *testing.T) {
 	metrics := []proxy.MetricSummary{
 		{Name: "codex.token.input", Agent: "codex", Value: 1000, Attributes: map[string]string{"model": "o3"}},
 		{Name: "codex.token.output", Agent: "codex", Value: 500, Attributes: map[string]string{"model": "o3"}},
-		{Name: "api.count", Agent: "codex", Value: 5, Attributes: map[string]string{"model": "o3"}},
-		{Name: "api.duration", Agent: "codex", Value: 10000, Attributes: map[string]string{"model": "o3"}},
+		{Name: "codex.api.count", Agent: "codex", Value: 5, Attributes: map[string]string{"model": "o3"}},
+		{Name: "codex.api.duration", Agent: "codex", Value: 10000, Attributes: map[string]string{"model": "o3"}},
 	}
 	lines := FormatAgent("codex", metrics)
 	joined := strings.Join(lines, "\n")
