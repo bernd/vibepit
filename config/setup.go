@@ -79,7 +79,7 @@ func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []s
 // writeConfigHeader writes the shared file header comment block.
 func writeConfigHeader(sb *strings.Builder) {
 	sb.WriteString("# Vibepit network config for this project.\n")
-	sb.WriteString("# All internet access from the dev container is filtered through\n")
+	sb.WriteString("# All internet access from the sandbox container is filtered through\n")
 	sb.WriteString("# a proxy that only allows domains listed here.\n")
 	sb.WriteString("#\n")
 	sb.WriteString("# Docs: https://github.com/bernd/vibepit\n\n")

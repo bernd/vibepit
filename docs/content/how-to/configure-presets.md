@@ -73,14 +73,15 @@ These entries use the same wildcard syntax as the CLI commands:
 allow-http:
   - api.example.com:443
   - "*.cdn.example.com:443"
-  - staging.example.com:80*
+  - "**.example.com:443"
 
 allow-dns:
   - "*.internal.example.com"
 ```
 
-A `*.` prefix matches any subdomain but not the apex domain. Port patterns
-support digits and `*` as a wildcard. See the
+`*` matches exactly one subdomain label, `**` matches one or more labels, and
+neither matches the apex domain. Ports must be an exact number or `*` for any
+port. See the
 [Monitor and Allowlist](allowlist-and-monitor.md) guide for full wildcard
 details.
 

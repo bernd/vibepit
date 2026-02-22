@@ -82,7 +82,7 @@ The sandbox container is your workspace. It runs an Ubuntu-based image with comm
 - **Non-root user** — processes run as the `code` user, matched to your host UID.
 - **Init process** — an init process (tini) runs as PID 1 to handle signal forwarding and zombie reaping.
 
-The container has your project directory bind-mounted (read-write) and a persistent `vibepit-home` volume mounted at `/home/code`. This volume survives across sessions, preserving installed tools, shell history, and configuration. The project's `.vibepit` configuration directory is hidden inside the sandbox to prevent the agent from modifying its own allowlist rules.
+The container has your project directory bind-mounted (read-write), a persistent `vibepit-home` volume mounted at `/home/code`, and a persistent `vibepit-linuxbrew` volume mounted at `/home/linuxbrew`. These volumes survive across sessions, preserving shell state and installed Homebrew tools. The project's `.vibepit` configuration directory is hidden inside the sandbox to prevent the agent from modifying its own allowlist rules.
 
 Environment variables `HTTP_PROXY` and `HTTPS_PROXY` are set to point at the proxy container's static IP. DNS is configured through the container runtime's DNS settings to use the proxy's DNS server on port 53. Together, these ensure all outbound traffic is routed through the proxy without any additional configuration.
 

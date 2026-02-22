@@ -17,7 +17,7 @@ type testStubScreen struct{}
 func (s *testStubScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) { return s, nil }
 func (s *testStubScreen) View(w *tui.Window) string                               { return "" }
 func (s *testStubScreen) FooterKeys(w *tui.Window) []tui.FooterKey                { return nil }
-func (s *testStubScreen) FooterStatus(w *tui.Window) string                        { return "" }
+func (s *testStubScreen) FooterStatus(w *tui.Window) string                       { return "" }
 
 func makeSessions(n int) []ctr.ProxySession {
 	var sessions []ctr.ProxySession
@@ -111,7 +111,14 @@ func TestSessionScreen_Selection(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 		s.Pos = 2
-		screen, _ := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+		screen, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+		assert.Equal(t, s, screen, "screen should not switch until async callback returns")
+		require.NotNil(t, cmd)
+		require.Nil(t, gotInfo, "onSelect callback should run asynchronously via tea.Cmd")
+
+		msg := cmd()
+		screen, nextCmd := s.Update(msg, w)
+		assert.Nil(t, nextCmd)
 		require.NotNil(t, gotInfo, "onSelect callback should have been called")
 		assert.Equal(t, "/home/user/project2", gotInfo.ProjectDir)
 		assert.Equal(t, "session2-abcdef12", gotInfo.SessionID)
@@ -154,8 +161,17 @@ func TestSessionScreen_OnSelectError(t *testing.T) {
 
 	s.Pos = 0
 	newScreen, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
-	// Should stay on session screen
+	// Should stay on session screen while async callback is pending
 	assert.Equal(t, s, newScreen)
-	// Should have a command that will deliver the error
-	assert.NotNil(t, cmd)
+	require.NotNil(t, cmd)
+
+	// Process async select result
+	newScreen, cmd = s.Update(cmd(), w)
+	assert.Equal(t, s, newScreen)
+	require.NotNil(t, cmd, "callback error command should be bubbled up")
+
+	// Process callback error message
+	s.Update(cmd(), w)
+	require.Error(t, w.Err())
+	assert.Contains(t, w.Err().Error(), "connect failed")
 }

@@ -2,13 +2,13 @@
 
 Vibepit runs development agents inside isolated Docker/Podman containers with
 network isolation via a filtering proxy. A single `vibepit` command launches a
-proxy container and a dev container on an isolated network, with a persistent
+proxy container and a sandbox container on an isolated network, with a persistent
 home volume, the project directory mounted in, and a security-hardened runtime
 (read-only root filesystem, dropped capabilities, no-new-privileges).
 
 ## Prerequisites
 
-- Go installed locally (project currently uses Go 1.25.x in CI/dev).
+- Go installed locally (project currently uses Go 1.26.x in CI/dev).
 - Docker or Podman installed and running (host development only).
 - Your user can access the container runtime socket (host development only).
 - For release tasks: `gh` CLI authenticated and a valid git tag.
@@ -36,7 +36,7 @@ verification.
 go run .                     # default command: run
 go run . -L                  # use local image instead of published one
 go run . -a example.com:443  # allow additional domain:port
-go run . -p github           # enable additional network preset
+go run . -p vcs-github       # enable additional network preset
 go run . --reconfigure       # re-run interactive setup
 ```
 
@@ -46,6 +46,8 @@ Use Make targets for reproducible build/test workflows:
 make build             # build vibepit binary for current platform
 make test              # run unit tests
 make test-integration  # run integration tests (60s timeout)
+make test-bats         # run BATS tests for image/entrypoint scripts
+make clean             # remove binary and dist/ artifacts
 ```
 
 ## CLI Command Reference
@@ -112,14 +114,24 @@ and runtime detection helpers.
 Bubble Tea-based terminal UI primitives for window framing, header/cursor, and
 screen abstraction.
 
+### Embedded proxy binary (`embed/`)
+
+Used during release builds to embed the Linux arm64 proxy binary for macOS
+runtime compatibility via Go embed.
+
 ### Container image (`image/`)
 
 - `image/Dockerfile` -- Ubuntu base + dev tools, non-root `code` user
   (`CODE_UID`/`CODE_GID` build args).
 - `image/entrypoint.sh` -- initializes home template and starts shell.
-- `image/config/profile` -- shell profile (including `cdp` alias).
-- `image/bin/*` -- runtime installers (`brew`, `claude`, `ccusage`,
-  `yoloclaude`) run by users inside container, not during image build.
+- `image/entrypoint-lib.sh` -- shared shell library sourced by `entrypoint.sh`.
+- `image/lib.sh` -- additional shell library.
+- `image/config/` -- shell and tool configs: `profile`, `bashrc`,
+  `bashrc.tail`, `tmux.conf`.
+- `image/bin/*` -- runtime installers (`brew`, `claude`, `ccusage`, `cxusage`,
+  `yoloclaude`) and a `skills` helper script, run by users inside container,
+  not during image build.
+- `image/tests/` -- BATS tests for entrypoint scripts (run via `make test-bats`).
 
 Runtime installers persist in the home volume and are intentionally not baked
 into the base image.
@@ -146,6 +158,7 @@ Run the smallest set that proves correctness for your change:
 | Docs-only changes | Lint/spell check if applicable |
 | Go logic in one package | `make test` (or targeted `go test` for that package during iteration, then `make test`) |
 | Proxy/network/container behavior | `make test` + `make test-integration` |
+| Entrypoint/shell script changes | `make test-bats` |
 | CLI flags/command wiring | Validate with command/unit tests; run `go run . --help` only when runtime access is available |
 | Release/build pipeline changes | `make release-build` (and release flow checks as needed) |
 
@@ -161,12 +174,25 @@ Run the smallest set that proves correctness for your change:
 
 ## CI and Release Notes
 
-CI publishes multi-arch images (`amd64`, `arm64`) to
-`ghcr.io/bernd/vibepit:main` via `.github/workflows/docker-publish.yml` when
-files under `image/` change on `main`.
+Three CI workflows under `.github/workflows/`:
+
+- `docker-publish.yml` -- publishes multi-arch images (`amd64`, `arm64`) to
+  `ghcr.io/bernd/vibepit` when files under `image/` change on `main`. Images
+  are tagged by revision and uid/gid (e.g. `:r1-uid-1000-gid-1000` for Linux,
+  `:r1-uid-501-gid-20` for macOS).
+- `build.yml` -- runs on PRs, pushes to `main`, and version tags. Runs
+  `make test`, `make test-integration`, `make test-bats`, `make release-build`,
+  and on tags: `make release-archive release-publish`.
+- `pages.yml` -- deploys MkDocs documentation to GitHub Pages when docs content
+  or config changes on `main`.
 
 Releases are driven by Make targets:
 - `make release-build` builds Linux and macOS artifacts and embeds the Linux
   arm64 proxy binary for macOS runtime compatibility.
 - `make release-archive` creates tarballs and checksums.
 - `make release-publish` creates a draft prerelease on GitHub.
+
+## Documentation (`docs/`)
+
+MkDocs-based documentation site with content under `docs/content/`. Build and
+serve locally with `make docs-install && make docs-serve`.

@@ -34,6 +34,26 @@
     - "ab.chatgpt.com:443"
     - "auth.openai.com:443"
 
+- name: "github-copilot"
+  group: "Infrastructure"
+  description: "GitHub Copilot services"
+  domains:
+    - "**.business.githubcopilot.com:443"
+    - "**.enterprise.githubcopilot.com:443"
+
+- name: "aws-bedrock"
+  group: "Infrastructure"
+  description: "AWS Bedrock Endpoints"
+  domains:
+    - "bedrock.*.amazonaws.com:443"
+    - "bedrock-runtime.*.amazonaws.com:443"
+
+- name: "amp"
+  group: "Infrastructure"
+  description: "Amp Endpoints"
+  domains:
+    - "ampcode.com:443"
+
 - name: "vcs-github"
   group: "Infrastructure"
   description: "GitHub"
@@ -101,8 +121,8 @@
     - "dot.net:443"
     - "visualstudio.com:443"
     - "dev.azure.com:443"
-    - "*.amazonaws.com:443"
-    - "*.api.aws:443"
+    - "**.amazonaws.com:443"
+    - "**.api.aws:443"
     - "oracle.com:443"
     - "www.oracle.com:443"
     - "java.com:443"
@@ -163,10 +183,10 @@
     - "www.statsig.com:443"
     - "api.statsig.com:443"
     - "sentry.io:443"
-    - "*.sentry.io:443"
+    - "**.sentry.io:443"
     - "http-intake.logs.datadoghq.com:443"
-    - "*.datadoghq.com:443"
-    - "*.datadoghq.eu:443"
+    - "**.datadoghq.com:443"
+    - "**.datadoghq.eu:443"
 
 - name: "cdn"
   group: "Infrastructure"
@@ -304,6 +324,7 @@
     - "repo.maven.org:443"
     - "central.maven.org:443"
     - "repo1.maven.org:443"
+    - "repo.maven.apache.org:443"
     - "jcenter.bintray.com:443"
     - "gradle.org:443"
     - "www.gradle.org:443"

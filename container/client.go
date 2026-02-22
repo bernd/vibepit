@@ -29,21 +29,23 @@ import (
 )
 
 const (
-	LabelVibepit    = "vibepit"
-	LabelRole       = "vibepit.role"
-	LabelUID        = "vibepit.uid"
-	LabelUser       = "vibepit.user"
-	LabelVolume     = "vibepit.volume"
-	LabelProjectDir = "vibepit.project.dir"
-	LabelSessionID  = "vibepit.session-id"
+	LabelVibepit         = "vibepit"
+	LabelRole            = "vibepit.role"
+	LabelUID             = "vibepit.uid"
+	LabelUser            = "vibepit.user"
+	LabelVolumeHome      = "vibepit.volume.home"
+	LabelVolumeLinuxbrew = "vibepit.volume.linuxbrew"
+	LabelProjectDir      = "vibepit.project.dir"
+	LabelSessionID       = "vibepit.session-id"
 
-	RoleProxy = "proxy"
-	RoleDev   = "dev"
+	RoleProxy   = "proxy"
+	RoleSandbox = "sandbox"
 
-	ProxyBinaryPath   = "/vibepit"
-	ProxyConfigPath   = "/config.json"
-	HomeMountPath     = "/home/code"
-	ContainerHostname = "vibes"
+	ProxyBinaryPath    = "/vibepit"
+	ProxyConfigPath    = "/config.json"
+	HomeMountPath      = "/home/code"
+	LinuxbrewMountPath = "/home/linuxbrew"
+	ContainerHostname  = "vibes"
 
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
 	LabelControlPort = "vibepit.control-port"
@@ -194,13 +196,13 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	return nil
 }
 
-// FindRunningSession returns the ID of an already-running dev container for
+// FindRunningSession returns the ID of an already-running sandbox container for
 // the given project directory, or empty string if none is found.
 func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (string, error) {
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
 		Filters: filters.NewArgs(
 			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
-			filters.Arg("label", LabelRole+"="+RoleDev),
+			filters.Arg("label", LabelRole+"="+RoleSandbox),
 		),
 	})
 	if err != nil {
@@ -593,27 +595,28 @@ func firstHostPort(bindings []nat.PortBinding) string {
 	return ""
 }
 
-// DevContainerConfig holds the parameters for the sandboxed dev container.
-type DevContainerConfig struct {
-	Image      string
-	ProjectDir string
-	WorkDir    string
-	RuntimeDir string
-	VolumeName string
-	NetworkID  string
-	ProxyIP    string
-	ProxyPort  int
-	OTLPPort   int // 0 means telemetry disabled
-	Name       string
-	Term       string
-	ColorTerm  string
-	UID        int
-	User       string
+// SandboxContainerConfig holds the parameters for the sandboxed sandbox container.
+type SandboxContainerConfig struct {
+	Image               string
+	ProjectDir          string
+	WorkDir             string
+	RuntimeDir          string
+	HomeVolumeName      string
+	LinuxbrewVolumeName string
+	NetworkID           string
+	ProxyIP             string
+	ProxyPort           int
+	OTLPPort            int // 0 means telemetry disabled
+	Name                string
+	Term                string
+	ColorTerm           string
+	UID                 int
+	User                string
 }
 
-// CreateDevContainer creates the sandboxed development container
+// CreateSandboxContainer creates the sandboxed development container
 // with proxy environment variables and a read-only root filesystem.
-func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig) (string, error) {
+func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContainerConfig) (string, error) {
 	proxyURL := fmt.Sprintf("http://%s:%d", cfg.ProxyIP, cfg.ProxyPort)
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
@@ -626,6 +629,7 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 		"https_proxy=" + proxyURL,
 		fmt.Sprintf("NO_PROXY=localhost,127.0.0.1,%s", cfg.ProxyIP),
 		fmt.Sprintf("no_proxy=localhost,127.0.0.1,%s", cfg.ProxyIP),
+		fmt.Sprintf("JAVA_TOOL_OPTIONS=-Dhttps.proxyHost=%[1]s -Dhttps.proxyPort=%[2]d -Dhttp.proxyHost=%[1]s -Dhttp.proxyPort=%[2]d", cfg.ProxyIP, cfg.ProxyPort),
 	}
 	if cfg.ColorTerm != "" {
 		env = append(env, fmt.Sprintf("COLORTERM=%s", cfg.ColorTerm))
@@ -641,7 +645,8 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 	}
 
 	binds := []string{
-		cfg.VolumeName + ":" + HomeMountPath,
+		cfg.HomeVolumeName + ":" + HomeMountPath,
+		cfg.LinuxbrewVolumeName + ":" + LinuxbrewMountPath,
 		cfg.ProjectDir + ":" + cfg.ProjectDir,
 	}
 	// Hide the project's .vibepit directory in the sandbox.
@@ -653,6 +658,20 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 		}
 		binds = append(binds, fakeConfigDir+":"+vibepitConfigDir+":ro")
 	}
+	// Maven doesn't honor any HTTP_PROXY variables, so we have to create a temporary Maven settings.xml and
+	// configure it globally via MAVEN_ARGS.
+	{
+		mavenConfigDir := filepath.Join(cfg.RuntimeDir, "maven")
+		if err := os.MkdirAll(mavenConfigDir, 0700); err != nil {
+			return "", fmt.Errorf("create maven config dir: %w", err)
+		}
+		mavenSettings := filepath.Join(mavenConfigDir, "settings.xml")
+		if err := os.WriteFile(mavenSettings, config.MavenSettings(cfg.ProxyIP, cfg.ProxyPort), 0o600); err != nil {
+			return "", fmt.Errorf("write maven settings: %w", err)
+		}
+		binds = append(binds, mavenSettings+":/etc/vibepit/maven-settings.xml:ro")
+		env = append(env, `MAVEN_ARGS=--global-settings=/etc/vibepit/maven-settings.xml`)
+	}
 	if _, err := os.Stat("/etc/localtime"); err == nil {
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")
 	}
@@ -663,12 +682,13 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 			Env:      env,
 			Hostname: ContainerHostname,
 			Labels: map[string]string{
-				LabelVibepit:    "true",
-				LabelRole:       RoleDev,
-				LabelUID:        fmt.Sprintf("%d", cfg.UID),
-				LabelUser:       cfg.User,
-				LabelVolume:     cfg.VolumeName,
-				LabelProjectDir: cfg.ProjectDir,
+				LabelVibepit:         "true",
+				LabelRole:            RoleSandbox,
+				LabelUID:             fmt.Sprintf("%d", cfg.UID),
+				LabelUser:            cfg.User,
+				LabelVolumeHome:      cfg.HomeVolumeName,
+				LabelVolumeLinuxbrew: cfg.LinuxbrewVolumeName,
+				LabelProjectDir:      cfg.ProjectDir,
 			},
 			Tty:        true,
 			OpenStdin:  true,
@@ -692,7 +712,7 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 		cfg.Name,
 	)
 	if err != nil {
-		return "", fmt.Errorf("create dev container: %w", err)
+		return "", fmt.Errorf("create sandbox container: %w", err)
 	}
 	return resp.ID, nil
 }

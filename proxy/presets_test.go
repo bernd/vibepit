@@ -87,6 +87,33 @@ func TestPresetRegistry(t *testing.T) {
 		}
 	})
 
+	t.Run("all preset domains pass validation", func(t *testing.T) {
+		allNames := make([]string, 0, len(reg.All()))
+		for _, p := range reg.All() {
+			if len(p.Domains) > 0 {
+				allNames = append(allNames, p.Name)
+			}
+		}
+		domains := reg.Expand(allNames)
+		_, err := NewHTTPAllowlist(domains)
+		require.NoError(t, err, "expanded preset domains must pass validation")
+	})
+
+	t.Run("multi-level presets use double-star", func(t *testing.T) {
+		mustUseDoubleStar := map[string][]string{
+			"cloud":      {"**.amazonaws.com:443", "**.api.aws:443"},
+			"monitoring": {"**.sentry.io:443", "**.datadoghq.com:443", "**.datadoghq.eu:443"},
+		}
+		for presetName, expected := range mustUseDoubleStar {
+			p, ok := reg.Get(presetName)
+			require.True(t, ok, "preset %q must exist", presetName)
+			for _, want := range expected {
+				assert.Contains(t, p.Domains, want,
+					"preset %q must contain %q (not single-star variant)", presetName, want)
+			}
+		}
+	})
+
 	t.Run("non-pkg presets have no matchers", func(t *testing.T) {
 		noMatchers := []string{
 			"default", "anthropic", "openai", "vcs-github", "vcs-other",

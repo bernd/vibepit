@@ -17,6 +17,9 @@ test:
 test-integration:
 	go test -tags=integration -timeout 60s ./...
 
+test-bats:
+	bats image/tests
+
 release-build:
 	@# Build linux/arm64 proxy binary for darwin embed
 	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o dist/vibepit-linux-arm64 .

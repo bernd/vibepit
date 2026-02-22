@@ -22,10 +22,14 @@ import (
 )
 
 const (
-	defaultImagePrefix = "ghcr.io/bernd/vibepit:main"
-	localImage         = "vibepit:latest"
-	volumeName         = "vibepit-home"
-	networkNamePrefix  = "vibepit-net-"
+	// imageRevision is bumped on backwards-incompatible image changes (r1, r2, ...).
+	// Also update IMAGE_REVISION in .github/workflows/docker-publish.yml.
+	imageRevision       = "r1"
+	defaultImagePrefix  = "ghcr.io/bernd/vibepit:" + imageRevision
+	localImage          = "vibepit:latest"
+	homeVolumeName      = "vibepit-home"
+	linuxbrewVolumeName = "vibepit-linuxbrew"
+	networkNamePrefix   = "vibepit-net-"
 )
 
 const (
@@ -154,12 +158,18 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	merged := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
+	merged, err := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 
 	uid, _ := strconv.Atoi(u.Uid)
 
-	if err := client.EnsureVolume(ctx, volumeName, uid, u.Username); err != nil {
-		return fmt.Errorf("volume: %w", err)
+	if err := client.EnsureVolume(ctx, homeVolumeName, uid, u.Username); err != nil {
+		return fmt.Errorf("home volume: %w", err)
+	}
+	if err := client.EnsureVolume(ctx, linuxbrewVolumeName, uid, u.Username); err != nil {
+		return fmt.Errorf("linuxbrew volume: %w", err)
 	}
 
 	selfBinary, err := os.Executable()
@@ -202,23 +212,17 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	merged.HostGateway = "host-gateway"
 
 	// Generate random ports for proxy services, avoiding user's host ports.
-	excluded := make(map[int]bool, len(merged.AllowHostPorts))
-	for _, p := range merged.AllowHostPorts {
-		excluded[p] = true
-	}
-	proxyPort, err := config.RandomProxyPort(excluded)
+	proxyPort, err := config.RandomProxyPort(merged.AllowHostPorts)
 	if err != nil {
 		return fmt.Errorf("proxy port: %w", err)
 	}
-	excluded[proxyPort] = true
-	controlAPIPort, err := config.RandomProxyPort(excluded)
+	controlAPIPort, err := config.RandomProxyPort(append(merged.AllowHostPorts, proxyPort))
 	if err != nil {
 		return fmt.Errorf("control API port: %w", err)
 	}
 	var otlpPort int
 	if merged.AgentTelemetry {
-		excluded[controlAPIPort] = true
-		otlpPort, err = config.RandomProxyPort(excluded)
+		otlpPort, err = config.RandomProxyPort(append(merged.AllowHostPorts, proxyPort, controlAPIPort))
 		if err != nil {
 			return fmt.Errorf("OTLP port: %w", err)
 		}
@@ -239,7 +243,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	defer func() {
 		tui.Status("Removing", "network %s", networkName)
-		client.RemoveNetwork(ctx, netInfo.ID)
+		if err := client.RemoveNetwork(ctx, netInfo.ID); err != nil {
+			tui.Error("%v", err)
+		}
 	}()
 
 	// Generate ephemeral mTLS credentials for the control API.
@@ -288,33 +294,34 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		term = "xterm-256color"
 	}
 
-	tui.Status("Creating", "dev container in %s", projectRoot)
-	devContainerID, err := client.CreateDevContainer(ctx, ctr.DevContainerConfig{
-		Image:      image,
-		ProjectDir: projectRoot,
-		WorkDir:    projectRoot,
-		RuntimeDir: sessionDir,
-		VolumeName: volumeName,
-		NetworkID:  netInfo.ID,
-		ProxyIP:    proxyIP,
-		ProxyPort:  proxyPort,
-		OTLPPort:   otlpPort,
-		Name:       "vibepit-sandbox-" + sessionID,
-		Term:       term,
-		ColorTerm:  os.Getenv("COLORTERM"),
-		UID:        uid,
-		User:       u.Username,
+	tui.Status("Creating", "sandbox container in %s", projectRoot)
+	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
+		Image:               image,
+		ProjectDir:          projectRoot,
+		WorkDir:             projectRoot,
+		RuntimeDir:          sessionDir,
+		HomeVolumeName:      homeVolumeName,
+		LinuxbrewVolumeName: linuxbrewVolumeName,
+		NetworkID:           netInfo.ID,
+		ProxyIP:             proxyIP,
+		ProxyPort:           proxyPort,
+		OTLPPort:            otlpPort,
+		Name:                "vibepit-sandbox-" + sessionID,
+		Term:                term,
+		ColorTerm:           os.Getenv("COLORTERM"),
+		UID:                 uid,
+		User:                u.Username,
 	})
 	if err != nil {
-		return fmt.Errorf("dev container: %w", err)
+		return fmt.Errorf("sandbox container: %w", err)
 	}
 	defer func() {
-		tui.Status("Stopping", "dev container")
-		client.StopAndRemove(ctx, devContainerID)
+		tui.Status("Stopping", "sandbox container")
+		client.StopAndRemove(ctx, sandboxContainer)
 	}()
 
-	tui.Status("Starting", "dev container")
+	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	return client.AttachAndStartSession(ctx, devContainerID)
+	return client.AttachAndStartSession(ctx, sandboxContainer)
 }

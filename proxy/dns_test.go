@@ -11,7 +11,8 @@ import (
 )
 
 func TestDNSServer(t *testing.T) {
-	al := NewDNSAllowlist([]string{"allowed.example.com", "dnsonly.example.com"})
+	al, err := NewDNSAllowlist([]string{"allowed.example.com", "dnsonly.example.com"})
+	require.NoError(t, err)
 	blocker := NewCIDRBlocker(nil)
 	log := NewLogBuffer(100)
 
@@ -69,7 +70,8 @@ func TestDNSServer(t *testing.T) {
 }
 
 func TestDNSHostVibepit(t *testing.T) {
-	al := NewDNSAllowlist(nil)
+	al, err := NewDNSAllowlist(nil)
+	require.NoError(t, err)
 	blocker := NewCIDRBlocker(nil)
 	log := NewLogBuffer(100)
 

@@ -77,8 +77,8 @@ When the sandbox starts, Vibepit:
    reachable.
 3. Starts a **sandbox container** on the same network. The container runs with a
    read-only root filesystem, dropped capabilities, and `no-new-privileges`. Your
-   project directory is bind-mounted in, and a persistent home volume preserves
-   installed tools between sessions.
+   project directory is bind-mounted in, and persistent home/linuxbrew volumes
+   preserve shell state and installed tools between sessions.
 
 For a deeper look, see [Architecture](../explanations/architecture.md).
 

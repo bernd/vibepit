@@ -11,7 +11,10 @@ time with `vibepit run --reconfigure`. Some package-manager presets are
 auto-detected from project files and pre-selected automatically.
 
 Each preset entry below lists its name, description, auto-detection trigger (if
-any), and the full set of allowed domains.
+any), and the full set of allowed domains. Domain patterns use `*` to match
+exactly one DNS label and `**` to match one or more labels. For example,
+`**.amazonaws.com:443` matches `s3.us-east-1.amazonaws.com` while
+`*.gcr.io:443` matches only a single subdomain like `us.gcr.io`.
 
 ---
 
@@ -55,6 +58,32 @@ OpenAI services.
 chatgpt.com:443
 ab.chatgpt.com:443
 auth.openai.com:443
+```
+
+### `github-copilot`
+
+GitHub Copilot services.
+
+```
+**.business.githubcopilot.com:443
+**.enterprise.githubcopilot.com:443
+```
+
+### `amp`
+
+Amp Endpoints.
+
+```
+ampcode.com:443
+```
+
+### `aws-bedrock`
+
+AWS Bedrock Endpoints.
+
+```
+bedrock.*.amazonaws.com:443
+bedrock-runtime.*.amazonaws.com:443
 ```
 
 ### `vcs-github`
@@ -131,8 +160,8 @@ dotnet.microsoft.com:443
 dot.net:443
 visualstudio.com:443
 dev.azure.com:443
-*.amazonaws.com:443
-*.api.aws:443
+**.amazonaws.com:443
+**.api.aws:443
 oracle.com:443
 www.oracle.com:443
 java.com:443
@@ -199,10 +228,10 @@ statsig.com:443
 www.statsig.com:443
 api.statsig.com:443
 sentry.io:443
-*.sentry.io:443
+**.sentry.io:443
 http-intake.logs.datadoghq.com:443
-*.datadoghq.com:443
-*.datadoghq.eu:443
+**.datadoghq.com:443
+**.datadoghq.eu:443
 ```
 
 ### `cdn`
@@ -356,6 +385,7 @@ maven.org:443
 repo.maven.org:443
 central.maven.org:443
 repo1.maven.org:443
+repo.maven.apache.org:443
 jcenter.bintray.com:443
 gradle.org:443
 www.gradle.org:443

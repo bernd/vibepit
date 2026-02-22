@@ -57,26 +57,25 @@ vibepit allow-http api.example.com:443 registry.npmjs.org:443
 
 ### Wildcard domains
 
-A `*.` prefix matches any subdomain but **not** the apex domain itself:
+`*` matches exactly one subdomain label. `**` matches one or more labels:
 
 | Pattern | Matches | Does not match |
 |---|---|---|
-| `*.example.com:443` | `api.example.com:443`, `cdn.example.com:443` | `example.com:443` |
+| `*.example.com:443` | `api.example.com:443` | `example.com:443`, `a.b.example.com:443` |
+| `**.example.com:443` | `api.example.com:443`, `a.b.example.com:443` | `example.com:443` |
+| `bedrock.*.amazonaws.com:443` | `bedrock.us-east-1.amazonaws.com:443` | `bedrock.a.b.amazonaws.com:443` |
 
 To allow both the apex and all subdomains, add two entries:
 
 ```bash
-vibepit allow-http example.com:443 "*.example.com:443"
+vibepit allow-http example.com:443 "**.example.com:443"
 ```
 
 ### Port patterns
 
-The port segment supports digits and the `*` wildcard:
-
 | Pattern | Effect |
 |---|---|
 | `443` | Matches port 443 only |
-| `80*` | Matches ports 80, 800, 8080, etc. |
 | `*` | Matches any port |
 
 ## Add DNS allowlist entries
@@ -95,7 +94,8 @@ vibepit allow-dns internal.example.com api.example.com
 ```
 
 Wildcard semantics are identical to HTTP entries: `*.example.com` matches
-subdomains only, not the apex domain.
+exactly one subdomain label, `**.example.com` matches one or more labels.
+Neither matches the apex domain.
 
 ## Skip saving to config
 

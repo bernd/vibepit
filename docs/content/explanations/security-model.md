@@ -54,7 +54,7 @@ The proxy runs a DNS server on port 53, configured as the sole resolver for sand
 Allowlist rules support two forms:
 
 - **Exact match**: `example.com` matches only `example.com`.
-- **Wildcard**: `*.example.com` matches any subdomain of `example.com` (such as `api.example.com` or `cdn.assets.example.com`) but does **not** match the apex domain `example.com` itself.
+- **Wildcard**: `*.example.com` matches exactly one subdomain label (such as `api.example.com`) but does **not** match the apex domain `example.com` or deeper subdomains like `a.b.example.com`. Use `**.example.com` to match one or more subdomain levels.
 
 You can add DNS rules at startup via configuration or at runtime using the `allow-dns` command. Rules are additive and applied atomically using lock-free concurrency, so updates do not block in-flight queries.
 
@@ -65,7 +65,7 @@ The proxy filters all HTTP and HTTPS traffic using a `domain:port` allowlist. HT
 Each rule specifies a domain pattern and a port pattern:
 
 - **Domain matching** follows the same exact and wildcard semantics as DNS filtering.
-- **Port patterns** support digits and `*` globs. For example, `443` matches only port 443, while `8*` matches any port starting with 8 (80, 8080, 8443, etc.).
+- **Port patterns** accept an exact port number or `*` for any port.
 
 A request must match both the domain and port components of at least one rule to be allowed. Rules are purely additive: you can add them at startup or at runtime with the `allow-http` command, but you cannot remove them during a session.
 

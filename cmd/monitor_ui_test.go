@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bernd/vibepit/config"
@@ -15,6 +18,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 	s := newMonitorScreen(&SessionInfo{
@@ -298,13 +307,17 @@ func TestMonitorScreen_Footer(t *testing.T) {
 
 func TestMonitorScreen_NewCount(t *testing.T) {
 	t.Run("increments when cursor not at end", func(t *testing.T) {
-		s, _ := makeTestSetup(5)
+		s, w := makeTestSetup(5)
+		// Shrink viewport so items exceed visible area.
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 6})
 		s.cursor.Pos = 2 // not at end (4)
-		s.items = append(s.items, logItem{
-			entry: proxy.LogEntry{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
-		})
-		s.cursor.ItemCount = len(s.items)
-		s.newCount += 1
+
+		s.Update(logsPollResultMsg{
+			entries: []proxy.LogEntry{
+				{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
+			},
+		}, w)
+
 		assert.Equal(t, 1, s.newCount)
 		assert.Equal(t, 2, s.cursor.Pos)
 	})
@@ -319,6 +332,50 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 	})
 }
 
+func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
+	requests := 0
+	client := &ControlClient{
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests++
+				assert.Equal(t, "/logs", req.URL.Path)
+				assert.Equal(t, "after=0", req.URL.RawQuery)
+				body := `[{"id":11,"domain":"api.openai.com","port":"443","action":"block","source":"proxy"}]`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+		baseURL: "https://proxy.local",
+	}
+
+	s := newMonitorScreen(&SessionInfo{
+		SessionID:  "test123456",
+		ProjectDir: "/home/user/project",
+	}, client)
+	header := &tui.HeaderInfo{ProjectDir: "/home/user/project", SessionID: "test123456"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	_, cmd := s.Update(tui.TickMsg{}, w)
+	require.NotNil(t, cmd, "tick should return async poll command")
+	assert.Len(t, s.items, 0, "Update should not fetch logs synchronously")
+	assert.True(t, s.pollInFlight)
+
+	_, secondCmd := s.Update(tui.TickMsg{}, w)
+	assert.Nil(t, secondCmd, "should not start another poll while one is in-flight")
+
+	_, followCmd := s.Update(cmd(), w)
+	assert.Nil(t, followCmd)
+	assert.False(t, s.pollInFlight)
+	require.Len(t, s.items, 1)
+	assert.Equal(t, uint64(11), s.pollCursor)
+	assert.Equal(t, 1, requests)
+}
+
 func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 	makeScreen := func(t *testing.T) (*monitorScreen, *proxy.HTTPAllowlist, *proxy.DNSAllowlist, string) {
 		t.Helper()
@@ -327,8 +384,10 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
 		require.NoError(t, os.WriteFile(projectPath, []byte("presets:\n  - default\n"), 0o644))
 
-		httpAllowlist := proxy.NewHTTPAllowlist(nil)
-		dnsAllowlist := proxy.NewDNSAllowlist(nil)
+		httpAllowlist, err := proxy.NewHTTPAllowlist(nil)
+		require.NoError(t, err)
+		dnsAllowlist, err := proxy.NewDNSAllowlist(nil)
+		require.NoError(t, err)
 		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist, nil)
 		client := testControlClient(t, api)
 		screen := newMonitorScreen(&SessionInfo{

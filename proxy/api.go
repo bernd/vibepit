@@ -75,11 +75,10 @@ func (a *ControlAPI) handleAllowHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := ValidateHTTPEntries(entries); err != nil {
+	if err := a.httpAllowlist.Add(entries); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	a.httpAllowlist.Add(entries)
 	writeJSON(w, map[string]any{"added": entries})
 }
 
@@ -89,11 +88,10 @@ func (a *ControlAPI) handleAllowDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := ValidateDNSEntries(entries); err != nil {
+	if err := a.dnsAllowlist.Add(entries); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	a.dnsAllowlist.Add(entries)
 	writeJSON(w, map[string]any{"added": entries})
 }
 

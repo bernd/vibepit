@@ -1,87 +1,105 @@
 # BubbleTea Code Review
 
-Reviewed: 2026-02-01
+Reviewed: 2026-02-22  
+Supersedes: 2026-02-01 review in this same file
 
 ## Architecture Overview
 
-The TUI follows a `Window` -> `Screen` delegation pattern. `Window`
-(`tui/window.go`) is the top-level `tea.Model` that owns the shared frame
-(header, footer, tick, flash/error) and delegates content to a polymorphic
-`Screen` interface. Three screens implement this: `monitorScreen`,
-`sessionScreen`, and `presetScreen`. A shared `Cursor` struct handles
-vim-style navigation.
+The TUI follows a `Window` -> `Screen` delegation model. `Window`
+(`tui/window.go`) is the top-level `tea.Model` and owns shared state (header,
+footer, tick, flash/error, dimensions). Concrete screens (`monitorScreen`,
+`sessionScreen`, `presetScreen`) implement `tui.Screen`, and `tui.Cursor`
+provides shared list navigation behavior.
 
-## Issues
+## Current Findings
 
-### 1. Styles created in View/render functions (Medium)
+### 1. Blocking network I/O in `Update()` (Resolved)
 
-Lipgloss styles are created via `lipgloss.NewStyle()` inside View and render
-functions, allocating new style objects on every render cycle.
+Status: fixed on 2026-02-22.
 
-Locations:
-- `tui/window.go:138-148` -- `renderFooter()`
-- `tui/header.go:122-168` -- `renderCompactHeader()`, `RenderHeader()`
-- `config/setup_ui.go:313-421` -- `View()` and all `render*Line()` methods
-- `cmd/monitor_ui.go:175-246` -- `FooterStatus()`, `renderLogLine()`
-- `cmd/session_ui.go:98-127` -- `View()`, `renderSessionLine()`
+`monitorScreen` now polls via a command and handles results as messages:
 
-Extract these to package-level `var` declarations. The per-character style in
-`applyGradient()` is an acceptable exception since colors are computed
-dynamically.
+- `cmd/monitor_ui.go:105` -- `pollLogsCmd(...)` performs `LogsAfter` in `tea.Cmd`
+- `cmd/monitor_ui.go:159` -- `logsPollResultMsg` applies fetched entries
+- `cmd/monitor_ui.go:189` -- `TickMsg` returns `pollLogsCmd` instead of calling network I/O inline
 
-### 2. `buildVisibleLines()` called repeatedly per cycle (Low-Medium)
+### 2. Synchronous `onSelect` work in key handling path (Resolved)
 
-In `config/setup_ui.go`, `buildVisibleLines()` is called in `Update()` (line
-208), `View()` (line 317), and `FooterKeys()` (line 427). During a single
-render cycle the list is rebuilt 2-3 times. Cache the result and invalidate
-when expand/collapse/check state changes.
+Status: fixed on 2026-02-22.
 
-### 3. `time.Now()` called in View path (Low)
+`sessionScreen` now executes `onSelect` asynchronously:
 
-- `tui/window.go:147` -- flash expiry check in `renderFooter()`. Redundant
-  since `Update` already expires flashes on tick.
-- `cmd/session_ui.go:104` -- uptime formatting. More justifiable but still an
-  impurity.
+- `cmd/session_ui.go:70` -- `enter` returns a command that runs `s.onSelect(...)`
+- `cmd/session_ui.go:90` -- `sessionSelectResultMsg` updates screen/header after command completion
 
-### 4. `onSelect` callback does synchronous work (Low)
+### 3. Styles are still created during render (Informational)
 
-In `cmd/monitor.go:37-40`, `NewControlClient(info)` runs synchronously inside
-`sessionScreen.Update()` when the user presses Enter. If the connection is
-slow the UI freezes. Wrap in a `tea.Cmd` that returns the new screen via a
-message.
+`lipgloss.NewStyle()` is still allocated in render paths:
 
-### 5. No `key.Matches` / `help.KeyMap` usage (Low)
+- `tui/window.go:136`
+- `tui/header.go:137`
+- `config/setup_ui.go:313`
+- `cmd/monitor_ui.go:216`
+- `cmd/session_ui.go:113`
 
-All key handling uses `msg.String()` string comparisons. The codebase has its
-own `FooterKeys` system which serves a similar purpose, so this is stylistic
-rather than a bug.
+This is a performance/style improvement opportunity, not a correctness bug.
 
-### 6. Pointer receiver on Window (Info)
+### 4. `buildVisibleLines()` is rebuilt multiple times per cycle (Informational)
 
-`Window` uses `*Window` for `Update()`, departing from the standard value-
-receiver pattern. This is intentional -- `Window` acts as shared context
-mutated by screens via setter methods. Correct for this architecture.
+`presetScreen` still reconstructs the visible list in several paths:
 
-## Passing Checks
+- `config/setup_ui.go:208` -- `Update()`
+- `config/setup_ui.go:317` -- `View()`
+- `config/setup_ui.go:407` -- `FooterKeys()`
 
-- No blocking I/O in Update (one minor exception in `onSelect`)
-- Commands used correctly (`tea.Batch`, `tea.Tick`, `tea.Quit`)
-- WindowSizeMsg handled in all three screens
-- Init returns `tea.Batch(doTick(), tea.WindowSize())`
-- View functions are mostly pure
-- Screen transitions send synthetic WindowSizeMsg to new screens
-- Cursor/scroll logic keeps viewport consistent
-- No Huh `.Run()` calls
+Caching and invalidation could reduce repeated work on large preset sets.
+
+### 5. `time.Now()` in view-related path (Informational)
+
+- `tui/window.go:145` -- flash visibility check in footer rendering
+- `cmd/session_ui.go:119` -- uptime timestamp for each render
+
+This is acceptable today, but it does make rendering time-dependent.
+
+### 6. `key.Matches`/`help.KeyMap` still not used (Informational)
+
+Key handling is still based on `msg.String()` checks, and the project uses
+custom footer hints instead of `help.KeyMap`. This remains a style decision,
+not a bug.
+
+## Revalidation of Previous Findings (2026-02-01)
+
+| Previous finding | 2026-02-22 status | Notes |
+|---|---|---|
+| Styles created in render functions | Still valid | Informational only |
+| `buildVisibleLines()` rebuilt repeatedly | Still valid | Informational only |
+| `time.Now()` in view path | Still valid | Informational only |
+| `onSelect` synchronous work | Fixed | Converted to async cmd/message flow |
+| No `key.Matches` / `help.KeyMap` | Still true | Explicitly style-only |
+| Pointer receiver on `Window` | Not an issue | Intentional architecture choice |
+
+Also revalidated: blocking `LogsAfter` call in `Update()` is now fixed via
+`pollLogsCmd`.
+
+## Checklist Status
+
+- No blocking I/O in `Update()`: Pass
+- Commands used for async operations: Pass
+- `WindowSizeMsg` handled in all screens: Pass
+- `Init()` returns initial commands: Pass (`tui/window.go:80`)
+- Screen transitions preserve sizing: Pass (`tui/window.go:110`)
+- Cursor/viewport consistency: Pass
+- No blocking Huh `.Run()` integration: Pass (none present)
 
 ## Summary Table
 
-| Category                    | Status |
-|-----------------------------|--------|
-| No blocking I/O in Update   | Pass (minor `onSelect` exception) |
-| Commands for async ops      | Pass |
-| Model immutability          | Pass (pointer Window is intentional) |
-| WindowSizeMsg handled       | Pass |
-| Styles defined once         | Fail -- styles created in render functions |
-| View purity                 | Pass (minor `time.Now()` calls) |
-| Key bindings with help.KeyMap | Not used (custom footer system) |
-| Component composition       | Pass |
+| Category | Status |
+|---|---|
+| No blocking I/O in `Update()` | Pass |
+| Commands for async operations | Pass |
+| Model/state architecture | Pass |
+| `WindowSizeMsg` handling | Pass |
+| Styles defined once | Improvement needed (Informational) |
+| View purity | Mostly pass (Informational `time.Now()`) |
+| Key map/help integration | Custom approach (Informational) |
+| Component composition | Pass |

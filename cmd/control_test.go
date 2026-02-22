@@ -22,7 +22,11 @@ func TestControlClient_Logs(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock, Source: proxy.SourceDNS})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL, nil)
 	client := testControlClient(t, api)
 
 	t.Run("returns all entries", func(t *testing.T) {
@@ -36,7 +40,11 @@ func TestControlClient_Logs(t *testing.T) {
 	})
 
 	t.Run("returns empty slice when no logs", func(t *testing.T) {
-		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
+		httpAL2, err := proxy.NewHTTPAllowlist(nil)
+		require.NoError(t, err)
+		dnsAL2, err := proxy.NewDNSAllowlist(nil)
+		require.NoError(t, err)
+		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAL2, dnsAL2, nil)
 		c := testControlClient(t, emptyAPI)
 
 		entries, err := c.Logs()
@@ -51,7 +59,11 @@ func TestControlClient_LogsAfter(t *testing.T) {
 		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 	}
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL, nil)
 	client := testControlClient(t, api)
 
 	t.Run("returns last 25 entries for initial request", func(t *testing.T) {
@@ -84,7 +96,11 @@ func TestControlClient_Stats(t *testing.T) {
 	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionBlock})
 	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock})
 
-	api := proxy.NewControlAPI(log, nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL, nil)
 	client := testControlClient(t, api)
 
 	stats, err := client.Stats()
@@ -100,7 +116,11 @@ func TestControlClient_Config(t *testing.T) {
 		BlockCIDR: []string{"10.0.0.0/8"},
 	}
 
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), nil)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, httpAL, dnsAL, nil)
 	client := testControlClient(t, api)
 
 	cfg, err := client.Config()
@@ -111,8 +131,11 @@ func TestControlClient_Config(t *testing.T) {
 }
 
 func TestControlClient_AllowHTTP(t *testing.T) {
-	allowlist := proxy.NewHTTPAllowlist([]string{"existing.com:443"})
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist, proxy.NewDNSAllowlist(nil), nil)
+	allowlist, err := proxy.NewHTTPAllowlist([]string{"existing.com:443"})
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist, dnsAL, nil)
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
@@ -135,8 +158,11 @@ func TestControlClient_AllowHTTP(t *testing.T) {
 }
 
 func TestControlClient_AllowDNS(t *testing.T) {
-	dnsAllowlist := proxy.NewDNSAllowlist([]string{"existing.com"})
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), dnsAllowlist, nil)
+	dnsAllowlist, err := proxy.NewDNSAllowlist([]string{"existing.com"})
+	require.NoError(t, err)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAL, dnsAllowlist, nil)
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
@@ -165,7 +191,11 @@ func TestControlClient_TelemetryEventsAfter(t *testing.T) {
 	telBuf.AddEvent(proxy.TelemetryEvent{Agent: "claude-code", EventName: "api_request"})
 	telBuf.AddEvent(proxy.TelemetryEvent{Agent: "codex", EventName: "tool_result"})
 
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), telBuf)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAL, dnsAL, telBuf)
 	client := testControlClient(t, api)
 
 	t.Run("returns last events for initial request", func(t *testing.T) {
@@ -186,7 +216,11 @@ func TestControlClient_TelemetryMetrics(t *testing.T) {
 	telBuf := proxy.NewTelemetryBuffer(100)
 	telBuf.UpdateMetric(proxy.MetricSummary{Name: "tokens", Agent: "claude-code", Value: 42})
 
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewHTTPAllowlist(nil), proxy.NewDNSAllowlist(nil), telBuf)
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAL, dnsAL, telBuf)
 	client := testControlClient(t, api)
 
 	metrics, err := client.TelemetryMetrics(false)
@@ -198,8 +232,11 @@ func TestControlClient_TelemetryMetrics(t *testing.T) {
 
 func TestControlClient_ServerError(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
-	allowlist := proxy.NewHTTPAllowlist(nil)
-	api := proxy.NewControlAPI(log, nil, allowlist, proxy.NewDNSAllowlist(nil), nil)
+	allowlist, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := proxy.NewControlAPI(log, nil, allowlist, dnsAL, nil)
 	client := testControlClient(t, api)
 
 	t.Run("GET non-existent path returns error", func(t *testing.T) {

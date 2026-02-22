@@ -43,6 +43,13 @@ type sessionScreen struct {
 // sessionErrorMsg is sent when the onSelect callback fails.
 type sessionErrorMsg struct{ err error }
 
+// sessionSelectResultMsg is returned when async session selection work completes.
+type sessionSelectResultMsg struct {
+	selected *SessionInfo
+	screen   tui.Screen
+	cmd      tea.Cmd
+}
+
 func newSessionScreen(sessions []ctr.ProxySession, onSelect func(*SessionInfo) (tui.Screen, tea.Cmd)) *sessionScreen {
 	return &sessionScreen{
 		Cursor:   tui.Cursor{ItemCount: len(sessions)},
@@ -57,17 +64,17 @@ func (s *sessionScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		switch msg.String() {
 		case "enter":
 			if s.Pos >= 0 && s.Pos < len(s.sessions) {
-				s.selected = sessionInfoFromProxy(s.sessions[s.Pos])
+				selected := sessionInfoFromProxy(s.sessions[s.Pos])
+				s.selected = selected
 				if s.onSelect != nil {
-					screen, cmd := s.onSelect(s.selected)
-					if screen != nil {
-						w.SetHeader(&tui.HeaderInfo{
-							ProjectDir: s.selected.ProjectDir,
-							SessionID:  s.selected.SessionID,
-						})
-						return screen, cmd
+					return s, func() tea.Msg {
+						screen, cmd := s.onSelect(selected)
+						return sessionSelectResultMsg{
+							selected: selected,
+							screen:   screen,
+							cmd:      cmd,
+						}
 					}
-					return s, cmd
 				}
 				return s, tea.Quit
 			}
@@ -79,6 +86,19 @@ func (s *sessionScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 	case sessionErrorMsg:
 		w.SetError(msg.err)
+
+	case sessionSelectResultMsg:
+		if msg.selected != nil {
+			s.selected = msg.selected
+		}
+		if msg.screen != nil {
+			w.SetHeader(&tui.HeaderInfo{
+				ProjectDir: s.selected.ProjectDir,
+				SessionID:  s.selected.SessionID,
+			})
+			return msg.screen, msg.cmd
+		}
+		return s, msg.cmd
 
 	case tea.WindowSizeMsg:
 		s.VpHeight = w.VpHeight()
