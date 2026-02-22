@@ -49,11 +49,15 @@ func (t *tabbedMonitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, te
 	// Forward WindowSizeMsg to all screens so inactive tabs have correct
 	// viewport dimensions when they become active.
 	if _, ok := msg.(tea.WindowSizeMsg); ok {
+		var cmds []tea.Cmd
 		for i, screen := range t.screens {
-			updated, _ := screen.Update(msg, w)
+			updated, cmd := screen.Update(msg, w)
 			t.screens[i] = updated
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
-		return t, nil
+		return t, tea.Batch(cmds...)
 	}
 
 	screen, cmd := t.activeScreen().Update(msg, w)
