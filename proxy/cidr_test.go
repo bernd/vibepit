@@ -3,6 +3,9 @@ package proxy
 import (
 	"net"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCIDRBlocker(t *testing.T) {
@@ -31,13 +34,8 @@ func TestCIDRBlocker(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ip := net.ParseIP(tt.ip)
-			if ip == nil {
-				t.Fatalf("invalid test IP: %s", tt.ip)
-			}
-			got := blocker.IsBlocked(ip)
-			if got != tt.want {
-				t.Errorf("IsBlocked(%s) = %v, want %v", tt.ip, got, tt.want)
-			}
+			require.NotNil(t, ip, "invalid test IP: %s", tt.ip)
+			assert.Equal(t, tt.want, blocker.IsBlocked(ip), "IsBlocked(%s)", tt.ip)
 		})
 	}
 }
@@ -59,10 +57,7 @@ func TestCIDRBlockerCustomRanges(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ip := net.ParseIP(tt.ip)
-			got := blocker.IsBlocked(ip)
-			if got != tt.want {
-				t.Errorf("IsBlocked(%s) = %v, want %v", tt.ip, got, tt.want)
-			}
+			assert.Equal(t, tt.want, blocker.IsBlocked(ip), "IsBlocked(%s)", tt.ip)
 		})
 	}
 }

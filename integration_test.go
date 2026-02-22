@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +15,8 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/proxy"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func mustParseURL(raw string) *url.URL {
@@ -30,9 +31,7 @@ func controlAPIPostJSON(t *testing.T, client *http.Client, url string, body stri
 	t.Helper()
 
 	resp, err := client.Post(url, "application/json", bytes.NewBufferString(body))
-	if err != nil {
-		t.Fatalf("control API POST request: %v", err)
-	}
+	require.NoError(t, err, "control API POST request")
 	return resp
 }
 
@@ -41,9 +40,7 @@ func mustGetFreePort(t *testing.T) int {
 
 	for i := 0; i < 10; i++ {
 		tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("allocate free TCP port: %v", err)
-		}
+		require.NoError(t, err, "allocate free TCP port")
 		port := tcpLn.Addr().(*net.TCPAddr).Port
 		_ = tcpLn.Close()
 
@@ -64,9 +61,7 @@ func mustGetFreePort(t *testing.T) int {
 func TestProxyServerIntegration(t *testing.T) {
 	// Generate ephemeral mTLS credentials for the control API.
 	creds, err := proxy.GenerateMTLSCredentials(10 * time.Minute)
-	if err != nil {
-		t.Fatalf("GenerateMTLSCredentials: %v", err)
-	}
+	require.NoError(t, err, "GenerateMTLSCredentials")
 
 	// Set the env vars required by LoadServerTLSConfigFromEnv.
 	t.Setenv(proxy.EnvProxyTLSKey, string(creds.ServerKeyPEM()))
@@ -92,9 +87,7 @@ func TestProxyServerIntegration(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	srv, err := proxy.NewServer(tmpFile.Name())
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
+	require.NoError(t, err, "NewServer")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -104,50 +97,32 @@ func TestProxyServerIntegration(t *testing.T) {
 
 	// Build an mTLS client for the control API.
 	clientTLS, err := creds.ClientTLSConfig()
-	if err != nil {
-		t.Fatalf("ClientTLSConfig: %v", err)
-	}
+	require.NoError(t, err, "ClientTLSConfig")
 	tlsClient := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: clientTLS},
 	}
 
 	resp, err := tlsClient.Get(fmt.Sprintf("https://127.0.0.1:%d/config", controlPort))
-	if err != nil {
-		t.Fatalf("control API request: %v", err)
-	}
+	require.NoError(t, err, "control API request")
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		t.Errorf("control API status = %d, want 200", resp.StatusCode)
-	}
+	assert.Equal(t, 200, resp.StatusCode, "control API status")
 
 	allowHTTPResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-http", controlPort), `{"entries":["added-http.example:80"]}`)
 	defer allowHTTPResp.Body.Close()
-	if allowHTTPResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(allowHTTPResp.Body)
-		t.Errorf("control API allow-http status = %d, want 200 (body: %s)", allowHTTPResp.StatusCode, string(body))
-	}
+	assert.Equal(t, http.StatusOK, allowHTTPResp.StatusCode, "control API allow-http status")
 
 	allowHTTPBadResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-http", controlPort), `{"entries":["added-http.example"]}`)
 	defer allowHTTPBadResp.Body.Close()
-	if allowHTTPBadResp.StatusCode != http.StatusBadRequest {
-		body, _ := io.ReadAll(allowHTTPBadResp.Body)
-		t.Errorf("control API allow-http malformed status = %d, want 400 (body: %s)", allowHTTPBadResp.StatusCode, string(body))
-	}
+	assert.Equal(t, http.StatusBadRequest, allowHTTPBadResp.StatusCode, "control API allow-http malformed status")
 
 	allowDNSResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-dns", controlPort), `{"entries":["internal.example.com"]}`)
 	defer allowDNSResp.Body.Close()
-	if allowDNSResp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(allowDNSResp.Body)
-		t.Errorf("control API allow-dns status = %d, want 200 (body: %s)", allowDNSResp.StatusCode, string(body))
-	}
+	assert.Equal(t, http.StatusOK, allowDNSResp.StatusCode, "control API allow-dns status")
 
 	allowDNSBadResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-dns", controlPort), `{"entries":["internal.example.com:443"]}`)
 	defer allowDNSBadResp.Body.Close()
-	if allowDNSBadResp.StatusCode != http.StatusBadRequest {
-		body, _ := io.ReadAll(allowDNSBadResp.Body)
-		t.Errorf("control API allow-dns malformed status = %d, want 400 (body: %s)", allowDNSBadResp.StatusCode, string(body))
-	}
+	assert.Equal(t, http.StatusBadRequest, allowDNSBadResp.StatusCode, "control API allow-dns malformed status")
 
 	// Use the HTTP proxy to verify blocked requests.
 	proxyClient := &http.Client{
@@ -157,12 +132,8 @@ func TestProxyServerIntegration(t *testing.T) {
 	}
 
 	blockedResp, err := proxyClient.Get("http://evil.com/")
-	if err != nil {
-		t.Fatalf("blocked request: %v", err)
-	}
+	require.NoError(t, err, "blocked request")
 	defer blockedResp.Body.Close()
 
-	if blockedResp.StatusCode != http.StatusForbidden {
-		t.Errorf("blocked status = %d, want 403", blockedResp.StatusCode)
-	}
+	assert.Equal(t, http.StatusForbidden, blockedResp.StatusCode, "blocked status")
 }

@@ -3,6 +3,8 @@ package container
 import (
 	"net"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNextIP(t *testing.T) {
@@ -16,9 +18,6 @@ func TestNextIP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got := nextIP(net.ParseIP(tt.input))
-		if got.String() != tt.expected {
-			t.Errorf("nextIP(%s) = %s, want %s", tt.input, got, tt.expected)
-		}
+		assert.Equal(t, tt.expected, got.String(), "nextIP(%s)", tt.input)
 	}
 }
-
