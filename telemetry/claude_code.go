@@ -24,15 +24,10 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	}
 	modelTok := map[string]*modelTokens{}
 
-	// Derived: api.count {model}, api.duration {model}.
 	apiCount := map[string]float64{}
 	apiDuration := map[string]float64{}
-
-	// Derived: event_type.count {type}, event_type.duration {type}.
 	eventCount := map[string]float64{}
 	eventDuration := map[string]float64{}
-
-	// Derived: tool.count {type}, tool.duration {type}, tool.result_size {type}, tool.result_size_max {type}.
 	toolCount := map[string]float64{}
 	toolDuration := map[string]float64{}
 	toolSize := map[string]float64{}
@@ -83,21 +78,21 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 			case "cli":
 				timeCLI += m.Value
 			}
-		case "api.count":
+		case "claude_code.api.count":
 			apiCount[model] += m.Value
-		case "api.duration":
+		case "claude_code.api.duration":
 			apiDuration[model] += m.Value
-		case "event_type.count":
+		case "claude_code.event_type.count":
 			eventCount[typ] += m.Value
-		case "event_type.duration":
+		case "claude_code.event_type.duration":
 			eventDuration[typ] += m.Value
-		case "tool.count":
+		case "claude_code.tool.count":
 			toolCount[typ] += m.Value
-		case "tool.duration":
+		case "claude_code.tool.duration":
 			toolDuration[typ] += m.Value
-		case "tool.result_size":
+		case "claude_code.tool.result_size":
 			toolSize[typ] += m.Value
-		case "tool.result_size_max":
+		case "claude_code.tool.result_size_max":
 			if m.Value > toolSizeMax[typ] {
 				toolSizeMax[typ] = m.Value
 			}
@@ -151,22 +146,7 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	}
 
 	// Models section.
-	if len(apiCount) > 0 {
-		models := sortedKeys(apiCount)
-		nameW := maxLen(models)
-		countW := countWidth(apiCount)
-		lines = append(lines, "")
-		lines = append(lines, "  Models")
-		for _, model := range models {
-			count := apiCount[model]
-			avgMs := apiDuration[model] / count
-			costStr := ""
-			if c, ok := modelCost[model]; ok {
-				costStr = fmt.Sprintf("   $%.4f", c)
-			}
-			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f req   avg %5.0fms%s", nameW, model, countW, count, avgMs, costStr))
-		}
-	}
+	lines = append(lines, renderModelsSection(apiCount, apiDuration, modelCost, nil)...)
 
 	// Efficiency section.
 	if totalRequests > 0 {
@@ -200,33 +180,10 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 	}
 
 	// Latency section (event types).
-	if len(eventCount) > 0 {
-		types := sortedKeys(eventCount)
-		nameW := maxLen(types)
-		countW := countWidth(eventCount)
-		lines = append(lines, "  Latency")
-		for _, typ := range types {
-			count := eventCount[typ]
-			avgMs := eventDuration[typ] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms", nameW, typ, countW, count, avgMs))
-		}
-	}
+	lines = append(lines, renderLatencySection(eventCount, eventDuration)...)
 
 	// Tools section.
-	if len(toolCount) > 0 {
-		tools := sortedKeys(toolCount)
-		nameW := maxLen(tools)
-		countW := countWidth(toolCount)
-		lines = append(lines, "  Tools")
-		for _, tool := range tools {
-			count := toolCount[tool]
-			avgMs := toolDuration[tool] / count
-			avgSize := toolSize[tool] / count
-			maxSize := toolSizeMax[tool]
-			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms   avg %5.0fB / max %5.0fB",
-				nameW, tool, countW, count, avgMs, avgSize, maxSize))
-		}
-	}
+	lines = append(lines, renderToolsSection(toolCount, toolDuration, toolSize, toolSizeMax)...)
 
 	return lines
 }

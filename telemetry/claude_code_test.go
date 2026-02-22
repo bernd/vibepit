@@ -10,10 +10,10 @@ import (
 
 func TestFormatClaudeCode_ModelsSection(t *testing.T) {
 	metrics := []proxy.MetricSummary{
-		{Name: "api.count", Agent: "cc", Value: 12, Attributes: map[string]string{"model": "claude-opus-4-6"}},
-		{Name: "api.duration", Agent: "cc", Value: 47208, Attributes: map[string]string{"model": "claude-opus-4-6"}},
-		{Name: "api.count", Agent: "cc", Value: 22, Attributes: map[string]string{"model": "claude-haiku-4-5"}},
-		{Name: "api.duration", Agent: "cc", Value: 17534, Attributes: map[string]string{"model": "claude-haiku-4-5"}},
+		{Name: "claude_code.api.count", Agent: "cc", Value: 12, Attributes: map[string]string{"model": "claude-opus-4-6"}},
+		{Name: "claude_code.api.duration", Agent: "cc", Value: 47208, Attributes: map[string]string{"model": "claude-opus-4-6"}},
+		{Name: "claude_code.api.count", Agent: "cc", Value: 22, Attributes: map[string]string{"model": "claude-haiku-4-5"}},
+		{Name: "claude_code.api.duration", Agent: "cc", Value: 17534, Attributes: map[string]string{"model": "claude-haiku-4-5"}},
 		{Name: "claude_code.cost.usage", Agent: "cc", Value: 0.3421, Attributes: map[string]string{"model": "claude-opus-4-6"}},
 		{Name: "claude_code.cost.usage", Agent: "cc", Value: 0.0111, Attributes: map[string]string{"model": "claude-haiku-4-5"}},
 	}
@@ -31,10 +31,10 @@ func TestFormatClaudeCode_ModelsSection(t *testing.T) {
 
 func TestFormatClaudeCode_ToolsSection(t *testing.T) {
 	metrics := []proxy.MetricSummary{
-		{Name: "tool.count", Agent: "cc", Value: 5, Attributes: map[string]string{"type": "Bash"}},
-		{Name: "tool.duration", Agent: "cc", Value: 600, Attributes: map[string]string{"type": "Bash"}},
-		{Name: "tool.result_size", Agent: "cc", Value: 1000, Attributes: map[string]string{"type": "Bash"}},
-		{Name: "tool.result_size_max", Agent: "cc", Value: 510, Attributes: map[string]string{"type": "Bash"}},
+		{Name: "claude_code.tool.count", Agent: "cc", Value: 5, Attributes: map[string]string{"type": "Bash"}},
+		{Name: "claude_code.tool.duration", Agent: "cc", Value: 600, Attributes: map[string]string{"type": "Bash"}},
+		{Name: "claude_code.tool.result_size", Agent: "cc", Value: 1000, Attributes: map[string]string{"type": "Bash"}},
+		{Name: "claude_code.tool.result_size_max", Agent: "cc", Value: 510, Attributes: map[string]string{"type": "Bash"}},
 	}
 	lines := formatClaudeCode("cc", metrics)
 	joined := strings.Join(lines, "\n")
@@ -52,7 +52,7 @@ func TestFormatClaudeCode_EfficiencySection(t *testing.T) {
 		{Name: "claude_code.token.usage", Agent: "cc", Value: 100, Attributes: map[string]string{"type": "input", "model": "claude-opus-4-6"}},
 		{Name: "claude_code.token.usage", Agent: "cc", Value: 2000, Attributes: map[string]string{"type": "output", "model": "claude-opus-4-6"}},
 		{Name: "claude_code.token.usage", Agent: "cc", Value: 9900, Attributes: map[string]string{"type": "cacheRead", "model": "claude-opus-4-6"}},
-		{Name: "api.count", Agent: "cc", Value: 10, Attributes: map[string]string{"model": "claude-opus-4-6"}},
+		{Name: "claude_code.api.count", Agent: "cc", Value: 10, Attributes: map[string]string{"model": "claude-opus-4-6"}},
 	}
 	lines := formatClaudeCode("cc", metrics)
 	joined := strings.Join(lines, "\n")
@@ -66,8 +66,8 @@ func TestFormatClaudeCode_EfficiencySection(t *testing.T) {
 
 func TestFormatClaudeCode_LatencySection(t *testing.T) {
 	metrics := []proxy.MetricSummary{
-		{Name: "event_type.count", Agent: "cc", Value: 34, Attributes: map[string]string{"type": "api_request"}},
-		{Name: "event_type.duration", Agent: "cc", Value: 68000, Attributes: map[string]string{"type": "api_request"}},
+		{Name: "claude_code.event_type.count", Agent: "cc", Value: 34, Attributes: map[string]string{"type": "api_request"}},
+		{Name: "claude_code.event_type.duration", Agent: "cc", Value: 68000, Attributes: map[string]string{"type": "api_request"}},
 	}
 	lines := formatClaudeCode("cc", metrics)
 	joined := strings.Join(lines, "\n")
