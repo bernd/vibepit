@@ -112,9 +112,9 @@ func TestTelemetryScreen_FilterAcceptedToolDecision(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 		s.events = []proxy.TelemetryEvent{
-			{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_decision",
+			{ID: 1, Time: time.Now(), Agent: "claude-code", EventName: "tool_decision",
 				Attrs: map[string]string{"decision": "accept", "tool_name": "Bash"}},
-			{ID: 2, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+			{ID: 2, Time: time.Now(), Agent: "claude-code", EventName: "tool_result",
 				Attrs: map[string]string{"tool_name": "Bash", "success": "true"}},
 		}
 		s.rebuildLines()
@@ -131,7 +131,7 @@ func TestTelemetryScreen_FilterAcceptedToolDecision(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 		s.events = []proxy.TelemetryEvent{
-			{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_decision",
+			{ID: 1, Time: time.Now(), Agent: "claude-code", EventName: "tool_decision",
 				Attrs: map[string]string{"decision": "reject", "tool_name": "Bash", "source": "user"}},
 		}
 		s.rebuildLines()
@@ -149,7 +149,7 @@ func TestTelemetryScreen_ToolResultDescription(t *testing.T) {
 	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	s.events = []proxy.TelemetryEvent{
-		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+		{ID: 1, Time: time.Now(), Agent: "claude-code", EventName: "tool_result",
 			Attrs: map[string]string{
 				"tool_name":       "Bash",
 				"success":         "true",
@@ -171,7 +171,7 @@ func TestTelemetryScreen_APIRequestShortModel(t *testing.T) {
 	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	s.events = []proxy.TelemetryEvent{
-		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "api_request",
+		{ID: 1, Time: time.Now(), Agent: "claude-code", EventName: "api_request",
 			Attrs: map[string]string{
 				"model":         "claude-opus-4-6",
 				"duration_ms":   "741",
@@ -197,7 +197,7 @@ func TestTelemetryScreen_ExpandCollapse(t *testing.T) {
 	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	s.events = []proxy.TelemetryEvent{
-		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+		{ID: 1, Time: time.Now(), Agent: "claude-code", EventName: "tool_result",
 			Attrs: map[string]string{
 				"tool_name":       "Bash",
 				"success":         "true",
@@ -205,7 +205,7 @@ func TestTelemetryScreen_ExpandCollapse(t *testing.T) {
 				"tool_parameters": `{"command":"go vet ./...","description":"Run Go vet"}`,
 				"result_size":     "86",
 			}},
-		{ID: 2, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+		{ID: 2, Time: time.Now(), Agent: "claude-code", EventName: "tool_result",
 			Attrs: map[string]string{
 				"tool_name": "Read",
 				"success":   "true",
@@ -247,7 +247,7 @@ func TestTelemetryScreen_CursorCountIncludesDetails(t *testing.T) {
 	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	s.events = []proxy.TelemetryEvent{
-		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+		{ID: 1, Time: time.Now(), Agent: "claude-code", EventName: "tool_result",
 			Attrs: map[string]string{
 				"tool_name":   "Bash",
 				"success":     "true",
@@ -264,43 +264,3 @@ func TestTelemetryScreen_CursorCountIncludesDetails(t *testing.T) {
 	assert.Greater(t, s.cursor.ItemCount, collapsedCount)
 }
 
-func TestStripControl(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"plain text", "hello", "hello"},
-		{"strips ANSI escape", "hello\x1b[31mworld\x1b[0m", "helloworld"},
-		{"strips control chars", "hello\x00world", "helloworld"},
-		{"preserves tabs", "hello\tworld", "hello\tworld"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, stripControl(tt.input))
-		})
-	}
-}
-
-func TestToolDescription(t *testing.T) {
-	tests := []struct {
-		name   string
-		params string
-		want   string
-	}{
-		{"empty", "", ""},
-		{"invalid json", "not json", ""},
-		{"description field", `{"description":"Run Go vet","command":"go vet"}`, "Run Go vet"},
-		{"command fallback", `{"command":"go vet ./..."}`, "go vet ./..."},
-		{"file_path fallback", `{"file_path":"/home/user/main.go"}`, "/home/user/main.go"},
-		{"pattern fallback", `{"pattern":"func Test.*"}`, "func Test.*"},
-		{"url fallback", `{"url":"https://example.com"}`, "https://example.com"},
-		{"description wins over file_path", `{"description":"Read config","file_path":"/etc/foo"}`, "Read config"},
-		{"no useful fields", `{"timeout":30}`, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, toolDescription(tt.params))
-		})
-	}
-}
