@@ -36,6 +36,7 @@ type monitorScreen struct {
 	client        *ControlClient
 	cursor        tui.Cursor
 	pollCursor    uint64
+	pollInFlight  bool
 	items         []logItem
 	newCount      int
 	firstTickSeen bool
@@ -53,6 +54,12 @@ type allowResultMsg struct {
 	index  int
 	status allowStatus
 	err    error
+}
+
+// logsPollResultMsg is returned by async log polling.
+type logsPollResultMsg struct {
+	entries []proxy.LogEntry
+	err     error
 }
 
 func allowValueForEntry(entry proxy.LogEntry) string {
@@ -92,6 +99,13 @@ func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea
 			}
 		}
 		return allowResultMsg{index: index, status: status}
+	}
+}
+
+func (s *monitorScreen) pollLogsCmd(afterID uint64) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := s.client.LogsAfter(afterID)
+		return logsPollResultMsg{entries: entries, err: err}
 	}
 }
 
@@ -142,28 +156,37 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			}
 		}
 
+	case logsPollResultMsg:
+		s.pollInFlight = false
+		if msg.err != nil {
+			w.SetError(msg.err)
+			break
+		}
+		w.ClearError()
+
+		wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
+		for _, e := range msg.entries {
+			s.items = append(s.items, logItem{entry: e})
+			s.pollCursor = e.ID
+		}
+		s.cursor.ItemCount = len(s.items)
+		if !wasAtEnd && len(msg.entries) > 0 && len(s.items) > s.cursor.Offset+s.cursor.VpHeight {
+			s.newCount += len(msg.entries)
+		}
+		if wasAtEnd && len(s.items) > 0 {
+			s.cursor.Pos = len(s.items) - 1
+			s.newCount = 0
+			s.cursor.EnsureVisible()
+		}
+
 	case tui.TickMsg:
-		if w.IntervalElapsed(pollInterval) || !s.firstTickSeen {
-			entries, err := s.client.LogsAfter(s.pollCursor)
-			if err != nil {
-				w.SetError(err)
-			} else {
-				w.ClearError()
-				wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
-				for _, e := range entries {
-					s.items = append(s.items, logItem{entry: e})
-					s.pollCursor = e.ID
-				}
-				s.cursor.ItemCount = len(s.items)
-				if !wasAtEnd && len(entries) > 0 && len(s.items) > s.cursor.Offset+s.cursor.VpHeight {
-					s.newCount += len(entries)
-				}
-				if wasAtEnd && len(s.items) > 0 {
-					s.cursor.Pos = len(s.items) - 1
-					s.newCount = 0
-					s.cursor.EnsureVisible()
-				}
+		if (w.IntervalElapsed(pollInterval) || !s.firstTickSeen) && !s.pollInFlight {
+			s.firstTickSeen = true
+			if s.client == nil {
+				break
 			}
+			s.pollInFlight = true
+			return s, s.pollLogsCmd(s.pollCursor)
 		}
 		s.firstTickSeen = true
 	}

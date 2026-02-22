@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bernd/vibepit/config"
@@ -15,6 +18,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 	s := newMonitorScreen(&SessionInfo{
@@ -317,6 +326,50 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 		assert.Equal(t, 0, s.newCount)
 		assert.Equal(t, 4, s.cursor.Pos)
 	})
+}
+
+func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
+	requests := 0
+	client := &ControlClient{
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests++
+				assert.Equal(t, "/logs", req.URL.Path)
+				assert.Equal(t, "after=0", req.URL.RawQuery)
+				body := `[{"id":11,"domain":"api.openai.com","port":"443","action":"block","source":"proxy"}]`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+		baseURL: "https://proxy.local",
+	}
+
+	s := newMonitorScreen(&SessionInfo{
+		SessionID:  "test123456",
+		ProjectDir: "/home/user/project",
+	}, client)
+	header := &tui.HeaderInfo{ProjectDir: "/home/user/project", SessionID: "test123456"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	_, cmd := s.Update(tui.TickMsg{}, w)
+	require.NotNil(t, cmd, "tick should return async poll command")
+	assert.Len(t, s.items, 0, "Update should not fetch logs synchronously")
+	assert.True(t, s.pollInFlight)
+
+	_, secondCmd := s.Update(tui.TickMsg{}, w)
+	assert.Nil(t, secondCmd, "should not start another poll while one is in-flight")
+
+	_, followCmd := s.Update(cmd(), w)
+	assert.Nil(t, followCmd)
+	assert.False(t, s.pollInFlight)
+	require.Len(t, s.items, 1)
+	assert.Equal(t, uint64(11), s.pollCursor)
+	assert.Equal(t, 1, requests)
 }
 
 func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
