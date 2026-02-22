@@ -23,14 +23,24 @@ var displayNames = map[string]string{
 // DisplayName returns a human-friendly name for the agent based on its metric
 // prefixes. Falls back to the raw agent identifier.
 func DisplayName(agent string, metrics []proxy.MetricSummary) string {
+	var name string
 	for _, m := range metrics {
 		if prefix := detectPrefix(m.Name); prefix != "" {
-			if name, ok := displayNames[prefix]; ok {
-				return name
+			if n, ok := displayNames[prefix]; ok {
+				name = n
+				break
 			}
 		}
 	}
-	return agent
+	if name == "" {
+		return agent
+	}
+	for _, m := range metrics {
+		if v := m.Attributes["app.version"]; v != "" {
+			return name + " v" + v
+		}
+	}
+	return name
 }
 
 // FormatAgent formats all metrics for a single agent. Metrics matching a
@@ -60,12 +70,19 @@ func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {
 	slices.Sort(prefixes)
 
 	var lines []string
-	for _, prefix := range prefixes {
-		fn := registry[prefix] // always present: detectPrefix only returns registry keys
-		lines = append(lines, fn(agent, matched[prefix])...)
-	}
-	if len(unmatched) > 0 {
-		lines = append(lines, formatGeneric(agent, unmatched)...)
+	if len(prefixes) == 1 {
+		// Single agent formatter: pass all metrics so it can access derived
+		// metrics (api.count, tool.count, etc.) alongside its own prefix.
+		fn := registry[prefixes[0]]
+		lines = append(lines, fn(agent, metrics)...)
+	} else {
+		for _, prefix := range prefixes {
+			fn := registry[prefix]
+			lines = append(lines, fn(agent, matched[prefix])...)
+		}
+		if len(unmatched) > 0 {
+			lines = append(lines, formatGeneric(agent, unmatched)...)
+		}
 	}
 	return lines
 }

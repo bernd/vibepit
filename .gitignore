@@ -5,3 +5,4 @@ dist/
 embed/proxy/vibepit
 site/
 .venv/
+/*.json

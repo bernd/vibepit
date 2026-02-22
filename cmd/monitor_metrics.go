@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,27 +74,36 @@ func (s *metricsScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 }
 
 func (s *metricsScreen) rebuildLines() {
-	byAgent := make(map[string][]proxy.MetricSummary)
+	// Group metrics by agent, preserving sorted order from summaries.
+	type group struct {
+		agent   string
+		metrics []proxy.MetricSummary
+	}
+	var groups []group
+	seen := map[string]int{} // agent -> index into groups
+
 	for _, m := range s.summaries {
 		if s.filter.active != "" && m.Agent != s.filter.active {
 			continue
 		}
-		byAgent[m.Agent] = append(byAgent[m.Agent], m)
+		if idx, ok := seen[m.Agent]; ok {
+			groups[idx].metrics = append(groups[idx].metrics, m)
+		} else {
+			seen[m.Agent] = len(groups)
+			groups = append(groups, group{agent: m.Agent, metrics: []proxy.MetricSummary{m}})
+		}
 	}
 
 	s.lines = nil
 	first := true
-	for _, agent := range s.filter.agents {
-		metrics, ok := byAgent[agent]
-		if !ok {
-			continue
-		}
+	for _, g := range groups {
 		if first {
 			s.lines = append(s.lines, metricsLine{text: ""})
 			first = false
 		}
-		s.lines = append(s.lines, metricsLine{isAgent: true, text: telemetry.DisplayName(agent, metrics)})
-		for _, line := range telemetry.FormatAgent(agent, metrics) {
+		header := telemetry.DisplayName(g.agent, g.metrics)
+		s.lines = append(s.lines, metricsLine{isAgent: true, text: header})
+		for _, line := range telemetry.FormatAgent(g.agent, g.metrics) {
 			s.lines = append(s.lines, metricsLine{text: line})
 		}
 	}
@@ -109,8 +119,8 @@ func (s *metricsScreen) View(w *tui.Window) string {
 	}
 
 	agentStyle := lipgloss.NewStyle().Foreground(tui.ColorOrange).Bold(true)
-	labelStyle := lipgloss.NewStyle().Foreground(tui.ColorField)
-	valueStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
+	sectionStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
+	accentStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
 
 	var out []string
 	end := min(s.cursor.Offset+height, len(s.lines))
@@ -120,13 +130,7 @@ func (s *metricsScreen) View(w *tui.Window) string {
 		if line.isAgent {
 			out = append(out, marker+agentStyle.Render(line.text))
 		} else {
-			if idx := strings.Index(line.text, ": "); idx >= 0 {
-				name := line.text[:idx]
-				val := line.text[idx+2:]
-				out = append(out, marker+labelStyle.Render(name+":")+valueStyle.Render(" "+val))
-			} else {
-				out = append(out, marker+labelStyle.Render(line.text))
-			}
+			out = append(out, marker+renderMetricsLine(line.text, sectionStyle, accentStyle))
 		}
 	}
 	for len(out) < height {
@@ -153,4 +157,25 @@ func (s *metricsScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
 	}
 	keys = append(keys, s.cursor.FooterKeys()...)
 	return keys
+}
+
+// Section headers: lines with only leading spaces + a single word (no digits, no colons).
+var sectionHeaderRe = regexp.MustCompile(`^(\s+)([A-Z][a-z]+)$`)
+
+// Dollar amounts like $0.3421 or $0.17.
+var dollarRe = regexp.MustCompile(`\$\d+\.\d+`)
+
+// renderMetricsLine applies selective color to a metrics display line.
+// Section headers (Models, Efficiency, etc.) get sectionStyle.
+// Dollar amounts get accentStyle. Everything else renders in default color.
+func renderMetricsLine(text string, sectionStyle, accentStyle lipgloss.Style) string {
+	if sectionHeaderRe.MatchString(text) {
+		return sectionStyle.Render(text)
+	}
+
+	// Highlight dollar amounts within the line.
+	result := dollarRe.ReplaceAllStringFunc(text, func(match string) string {
+		return accentStyle.Render(match)
+	})
+	return result
 }

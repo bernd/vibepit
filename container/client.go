@@ -641,6 +641,13 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 			"OTEL_LOGS_EXPORTER=otlp",
 			fmt.Sprintf("OTEL_EXPORTER_OTLP_ENDPOINT=http://%s:%d", cfg.ProxyIP, cfg.OTLPPort),
 			"OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+			"OTEL_METRIC_EXPORT_INTERVAL=1000",
+			"OTEL_LOGS_EXPORT_INTERVAL=1000",
+			"OTEL_LOG_USER_PROMPTS=1",
+			"OTEL_LOG_TOOL_DETAILS=1",
+			"OTEL_METRICS_INCLUDE_SESSION_ID=true",
+			"OTEL_METRICS_INCLUDE_VERSION=true",
+			"OTEL_METRICS_INCLUDE_ACCOUNT_UUID=true",
 		)
 	}
 

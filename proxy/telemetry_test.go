@@ -115,6 +115,21 @@ func TestTelemetryBuffer_Metrics(t *testing.T) {
 		assert.Equal(t, float64(200), metrics[0].Value)
 	})
 
+	t.Run("different model produces separate series", func(t *testing.T) {
+		buf := NewTelemetryBuffer(100)
+		buf.UpdateMetric(MetricSummary{
+			Name: "claude_code.cost.usage", Agent: "claude-code", Value: 0.10,
+			Attributes: map[string]string{"model": "opus"},
+		})
+		buf.UpdateMetric(MetricSummary{
+			Name: "claude_code.cost.usage", Agent: "claude-code", Value: 0.20,
+			Attributes: map[string]string{"model": "haiku"},
+		})
+
+		metrics := buf.Metrics()
+		require.Len(t, metrics, 2)
+	})
+
 	t.Run("respects cardinality cap", func(t *testing.T) {
 		buf := NewTelemetryBuffer(100)
 		buf.maxMetricSeries = 3 // override for test
@@ -127,4 +142,117 @@ func TestTelemetryBuffer_Metrics(t *testing.T) {
 		metrics := buf.Metrics()
 		assert.Len(t, metrics, 3)
 	})
+}
+
+func TestDeriveEventMetrics_APIRequest(t *testing.T) {
+	buf := NewTelemetryBuffer(100)
+	buf.AddEvent(TelemetryEvent{
+		Agent:     "claude-code",
+		EventName: "api_request",
+		Attrs: map[string]string{
+			"model":       "claude-opus-4-6",
+			"duration_ms": "1500",
+			"cost_usd":    "0.10",
+		},
+	})
+	buf.AddEvent(TelemetryEvent{
+		Agent:     "claude-code",
+		EventName: "api_request",
+		Attrs: map[string]string{
+			"model":       "claude-opus-4-6",
+			"duration_ms": "2500",
+			"cost_usd":    "0.15",
+		},
+	})
+
+	metrics := buf.Metrics()
+	byName := map[string]float64{}
+	for _, m := range metrics {
+		key := m.Name
+		if m.Attributes["model"] != "" {
+			key += "{model=" + m.Attributes["model"] + "}"
+		}
+		if m.Attributes["type"] != "" {
+			key += "{type=" + m.Attributes["type"] + "}"
+		}
+		byName[key] = m.Value
+	}
+
+	assert.Equal(t, 2.0, byName["api.count{model=claude-opus-4-6}"])
+	assert.Equal(t, 4000.0, byName["api.duration{model=claude-opus-4-6}"])
+	assert.Equal(t, 2.0, byName["event_type.count{type=api_request}"])
+	assert.Equal(t, 4000.0, byName["event_type.duration{type=api_request}"])
+}
+
+func TestDeriveEventMetrics_ToolResult(t *testing.T) {
+	buf := NewTelemetryBuffer(100)
+	buf.AddEvent(TelemetryEvent{
+		Agent:     "claude-code",
+		EventName: "tool_result",
+		Attrs: map[string]string{
+			"tool_name":              "Bash",
+			"duration_ms":            "120",
+			"tool_result_size_bytes": "200",
+		},
+	})
+	buf.AddEvent(TelemetryEvent{
+		Agent:     "claude-code",
+		EventName: "tool_result",
+		Attrs: map[string]string{
+			"tool_name":              "Bash",
+			"duration_ms":            "80",
+			"tool_result_size_bytes": "510",
+		},
+	})
+
+	metrics := buf.Metrics()
+	byName := map[string]float64{}
+	for _, m := range metrics {
+		key := m.Name
+		if m.Attributes["type"] != "" {
+			key += "{type=" + m.Attributes["type"] + "}"
+		}
+		byName[key] = m.Value
+	}
+
+	assert.Equal(t, 2.0, byName["tool.count{type=Bash}"])
+	assert.Equal(t, 200.0, byName["tool.duration{type=Bash}"])
+	assert.Equal(t, 710.0, byName["tool.result_size{type=Bash}"])
+	assert.Equal(t, 510.0, byName["tool.result_size_max{type=Bash}"])
+}
+
+func TestUpdateMaxMetricLocked(t *testing.T) {
+	buf := NewTelemetryBuffer(100)
+
+	// First value sets the baseline.
+	buf.mu.Lock()
+	buf.updateMaxMetricLocked(MetricSummary{
+		Name: "tool.result_size_max", Agent: "test", Value: 100,
+		Attributes: map[string]string{"type": "Read"},
+	})
+	buf.mu.Unlock()
+
+	// Smaller value does not replace.
+	buf.mu.Lock()
+	buf.updateMaxMetricLocked(MetricSummary{
+		Name: "tool.result_size_max", Agent: "test", Value: 50,
+		Attributes: map[string]string{"type": "Read"},
+	})
+	buf.mu.Unlock()
+
+	metrics := buf.Metrics()
+	require.Len(t, metrics, 1)
+	assert.Equal(t, 100.0, metrics[0].Value)
+
+	// Larger value replaces.
+	buf.mu.Lock()
+	buf.updateMaxMetricLocked(MetricSummary{
+		Name: "tool.result_size_max", Agent: "test", Value: 200,
+		Attributes: map[string]string{"type": "Read"},
+	})
+	buf.mu.Unlock()
+
+	metrics = buf.Metrics()
+	require.Len(t, metrics, 1)
+	assert.Equal(t, 200.0, metrics[0].Value)
 }

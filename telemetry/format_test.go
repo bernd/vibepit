@@ -32,43 +32,46 @@ func TestFormatAgent_ClaudeCode(t *testing.T) {
 		{Name: "claude_code.token.usage", Agent: "claude-code", Value: 4606, Attributes: map[string]string{"type": "cacheCreation", "model": "claude-haiku-4-5-20251001"}},
 		{Name: "claude_code.active_time.total", Agent: "claude-code", Value: 29.0, Attributes: map[string]string{"type": "user"}},
 		{Name: "claude_code.active_time.total", Agent: "claude-code", Value: 12.7, Attributes: map[string]string{"type": "cli"}},
-		{Name: "claude_code.session.count", Agent: "claude-code", Value: 1},
+		{Name: "api.count", Agent: "claude-code", Value: 5, IsDelta: true, Attributes: map[string]string{"model": "claude-haiku-4-5-20251001"}},
+		{Name: "api.duration", Agent: "claude-code", Value: 3500, IsDelta: true, Attributes: map[string]string{"model": "claude-haiku-4-5-20251001"}},
 	}
 	lines := FormatAgent("claude-code", metrics)
+	joined := strings.Join(lines, "\n")
 
-	t.Run("shows models", func(t *testing.T) {
-		assert.Contains(t, lines[0], "Models:")
-		assert.Contains(t, lines[0], "claude-haiku-4-5-20251001")
-	})
-	t.Run("shows cost", func(t *testing.T) {
-		assert.Contains(t, strings.Join(lines, "\n"), "$0.0621")
+	t.Run("shows cost and requests", func(t *testing.T) {
+		assert.Contains(t, joined, "$0.0621")
+		assert.Contains(t, joined, "Requests: 5")
 	})
 	t.Run("shows tokens", func(t *testing.T) {
-		joined := strings.Join(lines, "\n")
-		assert.Contains(t, joined, "input")
-		assert.Contains(t, joined, "output")
+		assert.Contains(t, joined, "4 in")
+		assert.Contains(t, joined, "524 out")
 		assert.Contains(t, joined, "cache read")
 		assert.Contains(t, joined, "cache write")
 	})
 	t.Run("shows active time", func(t *testing.T) {
-		joined := strings.Join(lines, "\n")
-		assert.Contains(t, joined, "29")
-		assert.Contains(t, joined, "12.7")
+		assert.Contains(t, joined, "29.0s user")
+		assert.Contains(t, joined, "12.7s cli")
 	})
-	t.Run("shows sessions", func(t *testing.T) {
-		assert.Contains(t, strings.Join(lines, "\n"), "1")
+	t.Run("shows models section", func(t *testing.T) {
+		assert.Contains(t, joined, "Models")
+		assert.Contains(t, joined, "claude-haiku-4-5-20251001")
+		assert.Contains(t, joined, "5 req")
+		assert.Contains(t, joined, "avg")
+	})
+	t.Run("shows efficiency section", func(t *testing.T) {
+		assert.Contains(t, joined, "Efficiency")
+		assert.Contains(t, joined, "Cost/request")
+		assert.Contains(t, joined, "Cache hit")
 	})
 }
 
-func TestFormatAgent_ClaudeCode_ZeroValuesSkipped(t *testing.T) {
+func TestFormatAgent_ClaudeCode_CostOnly(t *testing.T) {
 	metrics := []proxy.MetricSummary{
 		{Name: "claude_code.cost.usage", Agent: "claude-code", Value: 0.05},
-		{Name: "claude_code.session.count", Agent: "claude-code", Value: 0},
 	}
 	lines := FormatAgent("claude-code", metrics)
 	joined := strings.Join(lines, "\n")
-	assert.Contains(t, joined, "Cost")
-	assert.NotContains(t, joined, "Sessions")
+	assert.Contains(t, joined, "Cost: $0.0500")
 }
 
 func TestDisplayName(t *testing.T) {
@@ -78,9 +81,15 @@ func TestDisplayName(t *testing.T) {
 		}
 		assert.Equal(t, "Claude Code", DisplayName("claude-code", metrics))
 	})
-	t.Run("unknown prefix returns raw agent", func(t *testing.T) {
+	t.Run("includes version when app.version present", func(t *testing.T) {
 		metrics := []proxy.MetricSummary{
-			{Name: "unknown.metric", Agent: "myagent"},
+			{Name: "claude_code.cost.usage", Agent: "claude-code", Attributes: map[string]string{"app.version": "2.1.50"}},
+		}
+		assert.Equal(t, "Claude Code v2.1.50", DisplayName("claude-code", metrics))
+	})
+	t.Run("unknown prefix returns raw agent without version", func(t *testing.T) {
+		metrics := []proxy.MetricSummary{
+			{Name: "unknown.metric", Agent: "myagent", Attributes: map[string]string{"app.version": "1.0"}},
 		}
 		assert.Equal(t, "myagent", DisplayName("myagent", metrics))
 	})

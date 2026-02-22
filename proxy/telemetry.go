@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -91,6 +92,8 @@ func (b *TelemetryBuffer) AddEvent(event TelemetryEvent) {
 	if b.pos == 0 && !b.full {
 		b.full = true
 	}
+
+	b.deriveEventMetrics(event)
 }
 
 func (b *TelemetryBuffer) Events() []TelemetryEvent {
@@ -136,22 +139,7 @@ func (b *TelemetryBuffer) eventsLocked() []TelemetryEvent {
 func (b *TelemetryBuffer) UpdateMetric(m MetricSummary) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	key := metricKey{name: m.Name, agent: m.Agent, metricType: m.Attributes["type"], model: m.Attributes["model"]}
-	if existing, ok := b.metrics[key]; ok {
-		if m.IsDelta {
-			existing.Value += m.Value
-		} else {
-			existing.Value = m.Value
-		}
-		existing.RawMetric = m.RawMetric
-		return
-	}
-	if len(b.metrics) >= b.maxMetricSeries {
-		return // silently drop
-	}
-	stored := m // copy
-	b.metrics[key] = &stored
+	b.updateMetricLocked(m)
 }
 
 func (b *TelemetryBuffer) Metrics() []MetricSummary {
@@ -175,6 +163,106 @@ func (b *TelemetryBuffer) Metrics() []MetricSummary {
 		return cmp.Compare(a.Attributes["type"], b.Attributes["type"])
 	})
 	return result
+}
+
+// updateMetricLocked updates a metric, caller must hold b.mu.
+func (b *TelemetryBuffer) updateMetricLocked(m MetricSummary) {
+	key := metricKey{name: m.Name, agent: m.Agent, metricType: m.Attributes["type"], model: m.Attributes["model"]}
+	if existing, ok := b.metrics[key]; ok {
+		if m.IsDelta {
+			existing.Value += m.Value
+		} else {
+			existing.Value = m.Value
+		}
+		existing.RawMetric = m.RawMetric
+		return
+	}
+	if len(b.metrics) >= b.maxMetricSeries {
+		return
+	}
+	stored := m
+	b.metrics[key] = &stored
+}
+
+// updateMaxMetricLocked stores the metric only if the new value exceeds the
+// existing one. Caller must hold b.mu.
+func (b *TelemetryBuffer) updateMaxMetricLocked(m MetricSummary) {
+	key := metricKey{name: m.Name, agent: m.Agent, metricType: m.Attributes["type"], model: m.Attributes["model"]}
+	if existing, ok := b.metrics[key]; ok {
+		if m.Value > existing.Value {
+			existing.Value = m.Value
+		}
+		return
+	}
+	if len(b.metrics) >= b.maxMetricSeries {
+		return
+	}
+	stored := m
+	b.metrics[key] = &stored
+}
+
+// deriveEventMetrics creates derived metric summaries from event attributes.
+// Caller must hold b.mu.
+func (b *TelemetryBuffer) deriveEventMetrics(e TelemetryEvent) {
+	durationStr := e.Attrs["duration_ms"]
+	duration, _ := strconv.ParseFloat(durationStr, 64)
+
+	// Per-event-type count and duration (for all events with duration_ms).
+	if durationStr != "" {
+		b.updateMetricLocked(MetricSummary{
+			Name: "event_type.count", Agent: e.Agent, Value: 1, IsDelta: true,
+			Attributes: map[string]string{"type": e.EventName},
+		})
+		b.updateMetricLocked(MetricSummary{
+			Name: "event_type.duration", Agent: e.Agent, Value: duration, IsDelta: true,
+			Attributes: map[string]string{"type": e.EventName},
+		})
+	}
+
+	switch e.EventName {
+	case "api_request":
+		model := e.Attrs["model"]
+		if model == "" {
+			return
+		}
+		b.updateMetricLocked(MetricSummary{
+			Name: "api.count", Agent: e.Agent, Value: 1, IsDelta: true,
+			Attributes: map[string]string{"model": model},
+		})
+		if durationStr != "" {
+			b.updateMetricLocked(MetricSummary{
+				Name: "api.duration", Agent: e.Agent, Value: duration, IsDelta: true,
+				Attributes: map[string]string{"model": model},
+			})
+		}
+
+	case "tool_result":
+		toolName := e.Attrs["tool_name"]
+		if toolName == "" {
+			return
+		}
+		b.updateMetricLocked(MetricSummary{
+			Name: "tool.count", Agent: e.Agent, Value: 1, IsDelta: true,
+			Attributes: map[string]string{"type": toolName},
+		})
+		if durationStr != "" {
+			b.updateMetricLocked(MetricSummary{
+				Name: "tool.duration", Agent: e.Agent, Value: duration, IsDelta: true,
+				Attributes: map[string]string{"type": toolName},
+			})
+		}
+		if sizeStr := e.Attrs["tool_result_size_bytes"]; sizeStr != "" {
+			size, _ := strconv.ParseFloat(sizeStr, 64)
+			b.updateMetricLocked(MetricSummary{
+				Name: "tool.result_size", Agent: e.Agent, Value: size, IsDelta: true,
+				Attributes: map[string]string{"type": toolName},
+			})
+			b.updateMaxMetricLocked(MetricSummary{
+				Name: "tool.result_size_max", Agent: e.Agent, Value: size,
+				Attributes: map[string]string{"type": toolName},
+			})
+		}
+	}
 }
 
 func truncate(s string, maxBytes int) string {

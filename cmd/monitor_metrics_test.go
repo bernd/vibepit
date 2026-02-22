@@ -111,6 +111,24 @@ func TestMetricsScreen_RebuildLines(t *testing.T) {
 	})
 }
 
+func TestMetricsScreen_AgentGrouping(t *testing.T) {
+	t.Run("merges all metrics for same agent", func(t *testing.T) {
+		summaries := []proxy.MetricSummary{
+			{Name: "claude_code.cost.usage", Agent: "claude-code", Value: 0.10},
+			{Name: "claude_code.cost.usage", Agent: "claude-code", Value: 0.20},
+		}
+		s, _ := makeMetricsSetup(summaries)
+
+		agentHeaders := 0
+		for _, l := range s.lines {
+			if l.isAgent {
+				agentHeaders++
+			}
+		}
+		assert.Equal(t, 1, agentHeaders, "should have one agent header")
+	})
+}
+
 func TestMetricsScreen_Footer(t *testing.T) {
 	t.Run("shows filter key", func(t *testing.T) {
 		s, w := makeMetricsSetup(sampleMetrics())
