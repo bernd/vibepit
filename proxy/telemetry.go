@@ -69,16 +69,13 @@ func (b *TelemetryBuffer) AddEvent(event TelemetryEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// Enforce attribute limits.
 	if len(event.Attrs) > MaxAttrsPerEvent {
 		trimmed := make(map[string]string, MaxAttrsPerEvent)
-		i := 0
 		for k, v := range event.Attrs {
-			if i >= MaxAttrsPerEvent {
+			if len(trimmed) >= MaxAttrsPerEvent {
 				break
 			}
 			trimmed[k] = truncate(v, MaxAttrValueLen)
-			i++
 		}
 		event.Attrs = trimmed
 	} else {
@@ -115,19 +112,12 @@ func (b *TelemetryBuffer) EventsAfter(afterID uint64) []TelemetryEvent {
 		return all
 	}
 
-	start := -1
 	for i, e := range all {
 		if e.ID > afterID {
-			start = i
-			break
+			return all[i:]
 		}
 	}
-	if start == -1 {
-		return nil
-	}
-	result := make([]TelemetryEvent, len(all)-start)
-	copy(result, all[start:])
-	return result
+	return nil
 }
 
 // eventsLocked returns all events in chronological order. Caller must hold b.mu.

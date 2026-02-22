@@ -81,9 +81,7 @@ func (r *OTLPReceiver) handleLogs(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "{}")
+	writeOTLPOK(w)
 }
 
 func (r *OTLPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
@@ -121,6 +119,10 @@ func (r *OTLPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	writeOTLPOK(w)
+}
+
+func writeOTLPOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "{}")
@@ -165,11 +167,7 @@ func numberDataPoints(dps []*metricspb.NumberDataPoint, isDelta bool) []dataPoin
 func readLimited(req *http.Request, maxBytes int64) ([]byte, error) {
 	limited := http.MaxBytesReader(nil, req.Body, maxBytes)
 	defer limited.Close()
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return io.ReadAll(limited)
 }
 
 func extractServiceName(res *resourcepb.Resource) string {
@@ -179,8 +177,7 @@ func extractServiceName(res *resourcepb.Resource) string {
 	for _, attr := range res.Attributes {
 		if attr.Key == "service.name" {
 			if sv, ok := attr.Value.Value.(*commonpb.AnyValue_StringValue); ok {
-				name := truncate(sv.StringValue, 64)
-				return name
+				return truncate(sv.StringValue, 64)
 			}
 		}
 	}

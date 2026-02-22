@@ -105,18 +105,7 @@ func (s *metricsScreen) View(w *tui.Window) string {
 	height := w.VpHeight() - s.heightOffset
 
 	if s.client == nil {
-		msg := lipgloss.NewStyle().Foreground(tui.ColorField).
-			Render("Agent telemetry is disabled. Set agent-telemetry: true in .vibepit/network.yaml to enable.")
-		pad := height / 2
-		var out []string
-		for range pad {
-			out = append(out, "")
-		}
-		out = append(out, "  "+msg)
-		for len(out) < height {
-			out = append(out, "")
-		}
-		return strings.Join(out, "\n")
+		return renderDisabledView(height)
 	}
 
 	agentStyle := lipgloss.NewStyle().Foreground(tui.ColorOrange).Bold(true)
@@ -131,7 +120,6 @@ func (s *metricsScreen) View(w *tui.Window) string {
 		if line.isAgent {
 			out = append(out, marker+agentStyle.Render(line.text))
 		} else {
-			// Parse "  name: value" for styled rendering.
 			if idx := strings.Index(line.text, ": "); idx >= 0 {
 				name := line.text[:idx]
 				val := line.text[idx+2:]

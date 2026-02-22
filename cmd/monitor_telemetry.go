@@ -92,23 +92,11 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 	return s, nil
 }
 
-
 func (s *telemetryScreen) View(w *tui.Window) string {
 	height := w.VpHeight() - s.heightOffset
 
 	if s.client == nil {
-		msg := lipgloss.NewStyle().Foreground(tui.ColorField).
-			Render("Agent telemetry is disabled. Set agent-telemetry: true in .vibepit/network.yaml to enable.")
-		pad := height / 2
-		var lines []string
-		for range pad {
-			lines = append(lines, "")
-		}
-		lines = append(lines, "  "+msg)
-		for len(lines) < height {
-			lines = append(lines, "")
-		}
-		return strings.Join(lines, "\n")
+		return renderDisabledView(height)
 	}
 
 	filtered := s.filteredEvents()
@@ -147,6 +135,14 @@ func stripControl(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func renderDisabledView(height int) string {
+	msg := lipgloss.NewStyle().Foreground(tui.ColorField).
+		Render("Agent telemetry is disabled. Set agent-telemetry: true in .vibepit/network.yaml to enable.")
+	lines := make([]string, height)
+	lines[height/2] = "  " + msg
+	return strings.Join(lines, "\n")
 }
 
 func renderTelemetryLine(e proxy.TelemetryEvent, highlighted bool) string {

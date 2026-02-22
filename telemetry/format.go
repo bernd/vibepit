@@ -52,7 +52,7 @@ func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {
 		}
 	}
 
-	// Sort prefixes for stable output order across refreshes.
+	// Stable output order across refreshes.
 	prefixes := make([]string, 0, len(matched))
 	for p := range matched {
 		prefixes = append(prefixes, p)
@@ -61,12 +61,8 @@ func FormatAgent(agent string, metrics []proxy.MetricSummary) []string {
 
 	var lines []string
 	for _, prefix := range prefixes {
-		ms := matched[prefix]
-		if fn, ok := registry[prefix]; ok {
-			lines = append(lines, fn(agent, ms)...)
-		} else {
-			unmatched = append(unmatched, ms...)
-		}
+		fn := registry[prefix] // always present: detectPrefix only returns registry keys
+		lines = append(lines, fn(agent, matched[prefix])...)
 	}
 	if len(unmatched) > 0 {
 		lines = append(lines, formatGeneric(agent, unmatched)...)
