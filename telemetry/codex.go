@@ -76,17 +76,17 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 				}
 				mt.reasoning += m.Value
 			}
-		case "api.count":
+		case "codex.api.count":
 			apiCount[model] += m.Value
-		case "api.duration":
+		case "codex.api.duration":
 			apiDuration[model] += m.Value
-		case "event_type.count":
+		case "codex.event_type.count":
 			eventCount[typ] += m.Value
-		case "event_type.duration":
+		case "codex.event_type.duration":
 			eventDuration[typ] += m.Value
-		case "tool.count":
+		case "codex.tool.count":
 			toolCount[typ] += m.Value
-		case "tool.duration":
+		case "codex.tool.duration":
 			toolDuration[typ] += m.Value
 		}
 	}
@@ -128,25 +128,12 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 	}
 
 	// Models section.
-	if len(apiCount) > 0 {
-		models := sortedKeys(apiCount)
-		nameW := maxLen(models)
-		countW := countWidth(apiCount)
-		lines = append(lines, "")
-		lines = append(lines, "  Models")
-		for _, model := range models {
-			count := apiCount[model]
-			avgMs := apiDuration[model] / count
-			costStr := ""
-			if c, ok := modelCost[model]; ok {
-				costStr = fmt.Sprintf("   $%.4f", c)
-				if source, ok := proxy.PricingSource(model); ok && source != model {
-					costStr += fmt.Sprintf(" (priced as %s)", source)
-				}
-			}
-			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f req   avg %5.0fms%s", nameW, model, countW, count, avgMs, costStr))
+	lines = append(lines, renderModelsSection(apiCount, apiDuration, modelCost, func(model string) string {
+		if source, ok := proxy.PricingSource(model); ok && source != model {
+			return fmt.Sprintf(" (priced as %s)", source)
 		}
-	}
+		return ""
+	})...)
 
 	// Efficiency section.
 	if len(modelTok) > 0 {
@@ -180,30 +167,10 @@ func formatCodex(_ string, metrics []proxy.MetricSummary) []string {
 	}
 
 	// Latency section.
-	if len(eventCount) > 0 {
-		types := sortedKeys(eventCount)
-		nameW := maxLen(types)
-		countW := countWidth(eventCount)
-		lines = append(lines, "  Latency")
-		for _, typ := range types {
-			count := eventCount[typ]
-			avgMs := eventDuration[typ] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms", nameW, typ, countW, count, avgMs))
-		}
-	}
+	lines = append(lines, renderLatencySection(eventCount, eventDuration)...)
 
 	// Tools section.
-	if len(toolCount) > 0 {
-		tools := sortedKeys(toolCount)
-		nameW := maxLen(tools)
-		countW := countWidth(toolCount)
-		lines = append(lines, "  Tools")
-		for _, tool := range tools {
-			count := toolCount[tool]
-			avgMs := toolDuration[tool] / count
-			lines = append(lines, fmt.Sprintf("    %-*s  %*.0f calls   avg %5.0fms", nameW, tool, countW, count, avgMs))
-		}
-	}
+	lines = append(lines, renderToolsSection(toolCount, toolDuration, nil, nil)...)
 
 	return lines
 }
