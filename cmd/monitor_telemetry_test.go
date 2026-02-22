@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/bernd/vibepit/tui"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func makeTelemetrySetup(n int) (*telemetryScreen, *tui.Window) {
@@ -26,9 +28,9 @@ func makeTelemetrySetup(n int) (*telemetryScreen, *tui.Window) {
 			Attrs:     map[string]string{"tool_name": "Read"},
 		})
 	}
-	s.cursor.ItemCount = len(s.events)
-	if len(s.events) > 0 {
-		s.cursor.Pos = len(s.events) - 1
+	s.rebuildLines()
+	if len(s.lines) > 0 {
+		s.cursor.Pos = len(s.lines) - 1
 	}
 	return s, w
 }
@@ -86,10 +88,11 @@ func TestTelemetryScreen_View(t *testing.T) {
 }
 
 func TestTelemetryScreen_Footer(t *testing.T) {
-	t.Run("shows filter key", func(t *testing.T) {
+	t.Run("shows expand and filter keys", func(t *testing.T) {
 		s, w := makeTelemetrySetup(5)
 		keys := s.FooterKeys(w)
 		descs := footerKeyDescs(keys)
+		assert.Contains(t, descs, "expand")
 		assert.Contains(t, descs, "filter agent")
 	})
 
@@ -99,6 +102,166 @@ func TestTelemetryScreen_Footer(t *testing.T) {
 		status := s.FooterStatus(w)
 		assert.Contains(t, status, "claude-code")
 	})
+}
+
+func TestTelemetryScreen_FilterAcceptedToolDecision(t *testing.T) {
+	t.Run("accepted tool_decision hidden", func(t *testing.T) {
+		s := newTelemetryScreen(&ControlClient{})
+		header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+		s.events = []proxy.TelemetryEvent{
+			{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_decision",
+				Attrs: map[string]string{"decision": "accept", "tool_name": "Bash"}},
+			{ID: 2, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+				Attrs: map[string]string{"tool_name": "Bash", "success": "true"}},
+		}
+		s.rebuildLines()
+
+		// Only the tool_result should appear.
+		require.Len(t, s.lines, 1)
+		assert.Equal(t, uint64(2), s.lines[0].eventID)
+	})
+
+	t.Run("rejected tool_decision visible", func(t *testing.T) {
+		s := newTelemetryScreen(&ControlClient{})
+		header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+		s.events = []proxy.TelemetryEvent{
+			{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_decision",
+				Attrs: map[string]string{"decision": "reject", "tool_name": "Bash", "source": "user"}},
+		}
+		s.rebuildLines()
+
+		require.Len(t, s.lines, 1)
+		assert.Contains(t, s.lines[0].text, "\u2717")
+		assert.Contains(t, s.lines[0].text, "rejected")
+	})
+}
+
+func TestTelemetryScreen_ToolResultDescription(t *testing.T) {
+	s := newTelemetryScreen(&ControlClient{})
+	header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	s.events = []proxy.TelemetryEvent{
+		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+			Attrs: map[string]string{
+				"tool_name":       "Bash",
+				"success":         "true",
+				"duration_ms":     "70",
+				"tool_parameters": `{"command":"go vet ./...","description":"Run Go vet"}`,
+			}},
+	}
+	s.rebuildLines()
+
+	require.Len(t, s.lines, 1)
+	assert.Contains(t, s.lines[0].text, "Bash")
+	assert.Contains(t, s.lines[0].text, "Run Go vet")
+}
+
+func TestTelemetryScreen_APIRequestShortModel(t *testing.T) {
+	s := newTelemetryScreen(&ControlClient{})
+	header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	s.events = []proxy.TelemetryEvent{
+		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "api_request",
+			Attrs: map[string]string{
+				"model":         "claude-opus-4-6",
+				"duration_ms":   "741",
+				"cost_usd":      "0.0005",
+				"input_tokens":  "311",
+				"output_tokens": "32",
+			}},
+	}
+	s.rebuildLines()
+
+	require.Len(t, s.lines, 1)
+	assert.Contains(t, s.lines[0].text, "opus")
+	assert.Contains(t, s.lines[0].text, "741ms")
+	assert.Contains(t, s.lines[0].text, "$0.0005")
+	assert.Contains(t, s.lines[0].text, "311\u2191")
+	assert.Contains(t, s.lines[0].text, "32\u2193")
+}
+
+func TestTelemetryScreen_ExpandCollapse(t *testing.T) {
+	s := newTelemetryScreen(&ControlClient{})
+	header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	s.events = []proxy.TelemetryEvent{
+		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+			Attrs: map[string]string{
+				"tool_name":       "Bash",
+				"success":         "true",
+				"duration_ms":     "70",
+				"tool_parameters": `{"command":"go vet ./...","description":"Run Go vet"}`,
+				"result_size":     "86",
+			}},
+		{ID: 2, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+			Attrs: map[string]string{
+				"tool_name": "Read",
+				"success":   "true",
+			}},
+	}
+	s.rebuildLines()
+	s.cursor.Pos = 0
+
+	// Initially 2 lines (one per event).
+	require.Len(t, s.lines, 2)
+
+	// Press Enter to expand first event.
+	enterKey := tea.KeyMsg{Type: tea.KeyEnter}
+	s.Update(enterKey, w)
+
+	assert.True(t, s.expanded[1])
+	assert.Greater(t, len(s.lines), 2, "detail lines should appear")
+
+	// Verify detail lines contain expanded info.
+	var detailTexts []string
+	for _, l := range s.lines {
+		if !l.isEvent && l.eventID == 1 {
+			detailTexts = append(detailTexts, l.text)
+		}
+	}
+	joined := strings.Join(detailTexts, "\n")
+	assert.Contains(t, joined, "result_size")
+
+	// Press Enter again to collapse.
+	s.Update(enterKey, w)
+	assert.False(t, s.expanded[1])
+	assert.Len(t, s.lines, 2, "back to collapsed")
+}
+
+func TestTelemetryScreen_CursorCountIncludesDetails(t *testing.T) {
+	s := newTelemetryScreen(&ControlClient{})
+	header := &tui.HeaderInfo{ProjectDir: "/test", SessionID: "test123"}
+	w := tui.NewWindow(header, s)
+	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	s.events = []proxy.TelemetryEvent{
+		{ID: 1, Time: time.Now(), Agent: "cc", EventName: "tool_result",
+			Attrs: map[string]string{
+				"tool_name":   "Bash",
+				"success":     "true",
+				"result_size": "86",
+			}},
+	}
+	s.rebuildLines()
+	collapsedCount := s.cursor.ItemCount
+
+	s.cursor.Pos = 0
+	s.expanded[1] = true
+	s.rebuildLines()
+
+	assert.Greater(t, s.cursor.ItemCount, collapsedCount)
 }
 
 func TestStripControl(t *testing.T) {
@@ -115,6 +278,29 @@ func TestStripControl(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, stripControl(tt.input))
+		})
+	}
+}
+
+func TestToolDescription(t *testing.T) {
+	tests := []struct {
+		name   string
+		params string
+		want   string
+	}{
+		{"empty", "", ""},
+		{"invalid json", "not json", ""},
+		{"description field", `{"description":"Run Go vet","command":"go vet"}`, "Run Go vet"},
+		{"command fallback", `{"command":"go vet ./..."}`, "go vet ./..."},
+		{"file_path fallback", `{"file_path":"/home/user/main.go"}`, "/home/user/main.go"},
+		{"pattern fallback", `{"pattern":"func Test.*"}`, "func Test.*"},
+		{"url fallback", `{"url":"https://example.com"}`, "https://example.com"},
+		{"description wins over file_path", `{"description":"Read config","file_path":"/etc/foo"}`, "Read config"},
+		{"no useful fields", `{"timeout":30}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, toolDescription(tt.params))
 		})
 	}
 }

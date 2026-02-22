@@ -190,7 +190,7 @@ func formatClaudeCode(_ string, metrics []proxy.MetricSummary) []string {
 			total := mt.cacheRead + mt.input
 			if total > 0 {
 				pct := mt.cacheRead / total * 100
-				cacheParts = append(cacheParts, fmt.Sprintf("%.0f%% (%s)", pct, shortModelName(model)))
+				cacheParts = append(cacheParts, fmt.Sprintf("%.0f%% (%s)", pct, ShortModelName(model)))
 			}
 		}
 		if len(cacheParts) > 0 {
@@ -247,9 +247,9 @@ func sortedKeys(m map[string]float64) []string {
 	return keys
 }
 
-// shortModelName extracts a short display name from a full model identifier.
+// ShortModelName extracts a short display name from a full model identifier.
 // e.g. "claude-opus-4-6" -> "opus", "claude-haiku-4-5-20251001" -> "haiku".
-func shortModelName(model string) string {
+func ShortModelName(model string) string {
 	for _, name := range []string{"opus", "sonnet", "haiku"} {
 		if strings.Contains(model, name) {
 			return name

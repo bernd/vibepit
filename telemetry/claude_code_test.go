@@ -79,8 +79,8 @@ func TestFormatClaudeCode_LatencySection(t *testing.T) {
 }
 
 func TestShortModelName(t *testing.T) {
-	assert.Equal(t, "opus", shortModelName("claude-opus-4-6"))
-	assert.Equal(t, "haiku", shortModelName("claude-haiku-4-5-20251001"))
-	assert.Equal(t, "sonnet", shortModelName("claude-sonnet-4-6"))
-	assert.Equal(t, "unknown-model", shortModelName("unknown-model"))
+	assert.Equal(t, "opus", ShortModelName("claude-opus-4-6"))
+	assert.Equal(t, "haiku", ShortModelName("claude-haiku-4-5-20251001"))
+	assert.Equal(t, "sonnet", ShortModelName("claude-sonnet-4-6"))
+	assert.Equal(t, "unknown-model", ShortModelName("unknown-model"))
 }
