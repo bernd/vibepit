@@ -95,12 +95,8 @@ func (s *metricsScreen) rebuildLines() {
 	}
 
 	s.lines = nil
-	first := true
 	for _, g := range groups {
-		if first {
-			s.lines = append(s.lines, metricsLine{text: ""})
-			first = false
-		}
+		s.lines = append(s.lines, metricsLine{text: ""})
 		header := telemetry.DisplayName(g.agent, g.metrics)
 		s.lines = append(s.lines, metricsLine{isAgent: true, text: header})
 		for _, line := range telemetry.FormatAgent(g.agent, g.metrics) {
