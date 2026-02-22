@@ -12,9 +12,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// metricsPollResultMsg is returned by the async metrics polling command.
+type metricsPollResultMsg struct {
+	metrics []proxy.MetricSummary
+	err     error
+}
+
 type metricsScreen struct {
 	client        *ControlClient
 	cursor        tui.Cursor
+	pollInFlight  bool
 	summaries     []proxy.MetricSummary
 	filter        agentFilter
 	firstTickSeen bool
@@ -30,6 +37,13 @@ type metricsLine struct {
 func newMetricsScreen(client *ControlClient) *metricsScreen {
 	return &metricsScreen{
 		client: client,
+	}
+}
+
+func (s *metricsScreen) pollMetricsCmd() tea.Cmd {
+	return func() tea.Msg {
+		metrics, err := s.client.TelemetryMetrics(false)
+		return metricsPollResultMsg{metrics: metrics, err: err}
 	}
 }
 
@@ -53,19 +67,24 @@ func (s *metricsScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		s.cursor.VpHeight = w.VpHeight() - s.heightOffset
 		s.cursor.EnsureVisible()
 
+	case metricsPollResultMsg:
+		s.pollInFlight = false
+		if msg.err != nil {
+			w.SetError(msg.err)
+			break
+		}
+		w.ClearError()
+		s.summaries = msg.metrics
+		for _, m := range msg.metrics {
+			s.filter.track(m.Agent)
+		}
+		s.rebuildLines()
+
 	case tui.TickMsg:
-		if s.client != nil && (w.IntervalElapsed(time.Second) || !s.firstTickSeen) {
-			metrics, err := s.client.TelemetryMetrics(false)
-			if err != nil {
-				w.SetError(err)
-			} else {
-				w.ClearError()
-				s.summaries = metrics
-				for _, m := range metrics {
-					s.filter.track(m.Agent)
-				}
-				s.rebuildLines()
-			}
+		if s.client != nil && (w.IntervalElapsed(time.Second) || !s.firstTickSeen) && !s.pollInFlight {
+			s.firstTickSeen = true
+			s.pollInFlight = true
+			return s, s.pollMetricsCmd()
 		}
 		s.firstTickSeen = true
 	}

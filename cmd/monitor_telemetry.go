@@ -21,10 +21,17 @@ type telemetryLine struct {
 	text    string // pre-rendered styled content (cursor marker added in View)
 }
 
+// eventsPollResultMsg is returned by the async events polling command.
+type eventsPollResultMsg struct {
+	events []proxy.TelemetryEvent
+	err    error
+}
+
 type telemetryScreen struct {
 	client        *ControlClient
 	cursor        tui.Cursor
 	pollCursor    uint64
+	pollInFlight  bool
 	events        []proxy.TelemetryEvent
 	expanded      map[uint64]bool
 	lines         []telemetryLine
@@ -77,6 +84,13 @@ func (s *telemetryScreen) rebuildLines() {
 	s.cursor.EnsureVisible()
 }
 
+func (s *telemetryScreen) pollEventsCmd(afterID uint64) tea.Cmd {
+	return func() tea.Msg {
+		events, err := s.client.TelemetryEventsAfter(afterID, "", false)
+		return eventsPollResultMsg{events: events, err: err}
+	}
+}
+
 func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -104,25 +118,30 @@ func (s *telemetryScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cm
 		s.cursor.VpHeight = w.VpHeight() - s.heightOffset
 		s.cursor.EnsureVisible()
 
+	case eventsPollResultMsg:
+		s.pollInFlight = false
+		if msg.err != nil {
+			w.SetError(msg.err)
+			break
+		}
+		w.ClearError()
+		wasAtEnd := len(s.events) == 0 || s.cursor.AtEnd()
+		for _, e := range msg.events {
+			s.events = append(s.events, e)
+			s.pollCursor = e.ID
+			s.filter.track(e.Agent)
+		}
+		s.rebuildLines()
+		if wasAtEnd && len(s.lines) > 0 {
+			s.cursor.Pos = len(s.lines) - 1
+			s.cursor.EnsureVisible()
+		}
+
 	case tui.TickMsg:
-		if s.client != nil && (w.IntervalElapsed(telemetryPollInterval) || !s.firstTickSeen) {
-			events, err := s.client.TelemetryEventsAfter(s.pollCursor, "", false)
-			if err != nil {
-				w.SetError(err)
-			} else {
-				w.ClearError()
-				wasAtEnd := len(s.events) == 0 || s.cursor.AtEnd()
-				for _, e := range events {
-					s.events = append(s.events, e)
-					s.pollCursor = e.ID
-					s.filter.track(e.Agent)
-				}
-				s.rebuildLines()
-				if wasAtEnd && len(s.lines) > 0 {
-					s.cursor.Pos = len(s.lines) - 1
-					s.cursor.EnsureVisible()
-				}
-			}
+		if s.client != nil && (w.IntervalElapsed(telemetryPollInterval) || !s.firstTickSeen) && !s.pollInFlight {
+			s.firstTickSeen = true
+			s.pollInFlight = true
+			return s, s.pollEventsCmd(s.pollCursor)
 		}
 		s.firstTickSeen = true
 	}
