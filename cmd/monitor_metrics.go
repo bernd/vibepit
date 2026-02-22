@@ -122,11 +122,16 @@ func (s *metricsScreen) View(w *tui.Window) string {
 	sectionStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
 	accentStyle := lipgloss.NewStyle().Foreground(tui.ColorCyan)
 
+	scrollable := len(s.lines) > height
+	if !scrollable {
+		s.cursor.Offset = 0
+	}
+
 	var out []string
 	end := min(s.cursor.Offset+height, len(s.lines))
 	for i := s.cursor.Offset; i < end; i++ {
 		line := s.lines[i]
-		_, marker := tui.LineStyle(i == s.cursor.Pos)
+		_, marker := tui.LineStyle(scrollable && i == s.cursor.Pos)
 		if line.isAgent {
 			out = append(out, marker+agentStyle.Render(line.text))
 		} else {
