@@ -69,6 +69,14 @@ GitHub Copilot services.
 **.enterprise.githubcopilot.com:443
 ```
 
+### `amp`
+
+Amp Endpoints.
+
+```
+ampcode.com:443
+```
+
 ### `aws-bedrock`
 
 AWS Bedrock Endpoints.

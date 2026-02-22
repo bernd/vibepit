@@ -48,6 +48,12 @@
     - "bedrock.*.amazonaws.com:443"
     - "bedrock-runtime.*.amazonaws.com:443"
 
+- name: "amp"
+  group: "Infrastructure"
+  description: "Amp Endpoints"
+  domains:
+    - "ampcode.com:443"
+
 - name: "vcs-github"
   group: "Infrastructure"
   description: "GitHub"
