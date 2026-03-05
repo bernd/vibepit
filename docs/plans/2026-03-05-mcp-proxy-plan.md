@@ -78,7 +78,7 @@ func TestMCPToolAllowlistValidation(t *testing.T) {
 		{"valid glob", []string{"get_*"}, false},
 		{"empty entry", []string{""}, true},
 		{"spaces", []string{"get file"}, true},
-		{"bare star", []string{"*"}, true},
+		{"bare star allowed", []string{"*"}, false},
 	}
 
 	for _, tt := range tests {
@@ -91,6 +91,14 @@ func TestMCPToolAllowlistValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMCPToolAllowlistAllowAll(t *testing.T) {
+	al, err := NewMCPToolAllowlist([]string{"*"})
+	require.NoError(t, err)
+	assert.True(t, al.Allows("anything"))
+	assert.True(t, al.Allows("execute_terminal_command"))
+	assert.False(t, al.Allows(""))
 }
 ```
 
@@ -144,20 +152,6 @@ func (al *MCPToolAllowlist) Allows(tool string) bool {
 	return false
 }
 
-// MatchedPattern returns the first pattern that matches tool, or "" if none.
-func (al *MCPToolAllowlist) MatchedPattern(tool string) string {
-	if tool == "" {
-		return ""
-	}
-	tool = strings.ToLower(tool)
-	for _, p := range al.patterns {
-		if toolMatches(p, tool) {
-			return p
-		}
-	}
-	return ""
-}
-
 func toolMatches(pattern, tool string) bool {
 	if !strings.Contains(pattern, "*") {
 		return pattern == tool
@@ -177,10 +171,7 @@ func validateToolPattern(entry string) error {
 	if strings.Contains(entry, " ") {
 		return fmt.Errorf("invalid tool pattern %q: spaces not allowed", entry)
 	}
-	if entry == "*" {
-		return fmt.Errorf("invalid tool pattern: bare '*' is too broad")
-	}
-	// Only trailing * is allowed.
+	// Only trailing * is allowed (including bare "*" to allow all tools).
 	starCount := strings.Count(entry, "*")
 	if starCount > 1 {
 		return fmt.Errorf("invalid tool pattern %q: at most one '*' allowed", entry)
@@ -406,7 +397,6 @@ package proxy
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -445,6 +435,8 @@ func TestMCPProxy_ToolCallAllowed(t *testing.T) {
 	assert.Equal(t, ActionAllow, entries[0].Action)
 	assert.Equal(t, SourceMCP, entries[0].Source)
 	assert.Equal(t, "test-server", entries[0].Domain)
+	assert.Empty(t, entries[0].Port) // Port not used for MCP.
+	assert.Contains(t, entries[0].Reason, "get_file_text_by_path")
 }
 
 func TestMCPProxy_ToolCallBlocked(t *testing.T) {
@@ -481,9 +473,95 @@ func TestMCPProxy_ToolCallBlocked(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, ActionBlock, entries[0].Action)
 	assert.Equal(t, SourceMCP, entries[0].Source)
+	assert.Contains(t, entries[0].Reason, "execute_terminal_command")
 }
 
-func TestMCPProxy_NonToolCallPassesThrough(t *testing.T) {
+func TestMCPProxy_BatchRequestRejected(t *testing.T) {
+	// Upstream should never be called for batch requests.
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	proxy := NewMCPProxy("test-server", upstream.URL, al, NewLogBuffer(100))
+
+	// Batch request containing a blocked tool call.
+	body := `[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_terminal_command","arguments":{}}}]`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.False(t, upstreamCalled)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotNil(t, resp["error"])
+	errObj := resp["error"].(map[string]any)
+	assert.Equal(t, float64(-32600), errObj["code"])
+}
+
+func TestMCPProxy_InvalidJSONRejected(t *testing.T) {
+	// Upstream should never be called for unparseable requests.
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	proxy := NewMCPProxy("test-server", upstream.URL, al, NewLogBuffer(100))
+
+	body := `{invalid json`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.False(t, upstreamCalled)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotNil(t, resp["error"])
+	errObj := resp["error"].(map[string]any)
+	assert.Equal(t, float64(-32700), errObj["code"])
+}
+
+func TestMCPProxy_UnknownMethodRejected(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	proxy := NewMCPProxy("test-server", upstream.URL, al, NewLogBuffer(100))
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"vendor/dangerous","params":{}}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.False(t, upstreamCalled)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotNil(t, resp["error"])
+}
+
+func TestMCPProxy_KnownMethodPassesThrough(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}`))
@@ -504,7 +582,7 @@ func TestMCPProxy_NonToolCallPassesThrough(t *testing.T) {
 	proxy.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	// Non-tool-call messages should not be logged.
+	// Known safe methods should not be logged.
 	assert.Empty(t, log.Entries())
 }
 
@@ -556,6 +634,35 @@ func TestMCPProxy_ToolsListFiltered(t *testing.T) {
 	assert.Contains(t, names, "get_file_text_by_path")
 	assert.Contains(t, names, "get_symbol_info")
 	assert.NotContains(t, names, "execute_terminal_command")
+}
+
+func TestMCPProxy_ToolsListFilterFailureReturnsEmpty(t *testing.T) {
+	// Upstream returns malformed tools/list response.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"tools":"not_an_array"}}`))
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	proxy := NewMCPProxy("test-server", upstream.URL, al, NewLogBuffer(100))
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	result := resp["result"].(map[string]any)
+	tools := result["tools"].([]any)
+	assert.Empty(t, tools) // Empty, not the original malformed data.
 }
 
 func TestMCPProxy_SSEPassthrough(t *testing.T) {
@@ -611,6 +718,35 @@ func TestMCPProxy_GETPassthrough(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "endpoint")
 }
+
+func TestMCPProxy_HopByHopHeadersNotForwarded(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify hop-by-hop headers were stripped from the forwarded request.
+		assert.Empty(t, r.Header.Get("Connection"))
+		assert.Empty(t, r.Header.Get("Proxy-Authorization"))
+		// Non-hop-by-hop should be forwarded.
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	proxy := NewMCPProxy("test-server", upstream.URL, al, NewLogBuffer(100))
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Proxy-Authorization", "Basic secret")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
 ```
 
 **Step 2: Run test to verify it fails**
@@ -634,6 +770,32 @@ import (
 	"time"
 )
 
+const maxMCPBodySize = 10 << 20 // 10 MB
+
+// knownMCPMethods lists JSON-RPC methods that are safe to forward.
+// Unknown methods are rejected to prevent bypasses via future or
+// vendor-prefixed methods.
+var knownMCPMethods = map[string]bool{
+	"initialize":             true,
+	"initialized":            true,
+	"ping":                   true,
+	"notifications/cancelled": true,
+	"notifications/progress":  true,
+	"tools/call":             true,
+	"tools/list":             true,
+	"resources/list":         true,
+	"resources/read":         true,
+	"resources/templates/list": true,
+	"resources/subscribe":    true,
+	"resources/unsubscribe":  true,
+	"prompts/list":           true,
+	"prompts/get":            true,
+	"logging/setLevel":       true,
+	"completion/complete":    true,
+	"sampling/createMessage": true,
+	"roots/list":             true,
+}
+
 // MCPProxy is a reverse proxy for a single MCP server that filters tool calls.
 type MCPProxy struct {
 	serverName string
@@ -649,7 +811,11 @@ func NewMCPProxy(serverName, upstream string, allowlist *MCPToolAllowlist, log *
 		upstream:   upstream,
 		allowlist:  allowlist,
 		log:        log,
-		client:     &http.Client{Timeout: 5 * time.Minute},
+		client: &http.Client{
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		},
 	}
 }
 
@@ -666,6 +832,18 @@ type toolCallParams struct {
 	Name string `json:"name"`
 }
 
+// hopByHopHeaders are headers that MUST NOT be forwarded by proxies (RFC 7230 §6.1).
+var hopByHopHeaders = map[string]bool{
+	"Connection":          true,
+	"Keep-Alive":          true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
 func (p *MCPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// GET requests (SSE event stream) pass through without inspection.
 	if r.Method == http.MethodGet {
@@ -673,18 +851,28 @@ func (p *MCPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the request body to inspect it.
-	body, err := io.ReadAll(r.Body)
+	// Read the request body with a size limit to prevent OOM.
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxMCPBodySize))
 	if err != nil {
 		http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
 		return
 	}
 	r.Body.Close()
 
+	// SECURITY: Reject batch requests (JSON arrays). JSON-RPC 2.0 supports
+	// batches, but they would bypass per-request tool filtering.
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		writeJSONRPCError(w, nil, -32600, "batch requests are not supported")
+		return
+	}
+
+	// SECURITY: Reject unparseable requests. Never forward what we can't
+	// inspect — parser differentials between Go and the upstream could
+	// bypass filtering.
 	var rpcReq jsonRPCRequest
 	if err := json.Unmarshal(body, &rpcReq); err != nil {
-		// Not valid JSON-RPC — forward as-is.
-		p.forwardRequest(w, r, body)
+		writeJSONRPCError(w, nil, -32700, "parse error")
 		return
 	}
 
@@ -694,6 +882,12 @@ func (p *MCPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "tools/list":
 		p.handleToolsList(w, r, body, &rpcReq)
 	default:
+		// SECURITY: Only forward known MCP methods. Unknown or vendor-
+		// prefixed methods could invoke tools in future protocol versions.
+		if !knownMCPMethods[rpcReq.Method] {
+			writeJSONRPCError(w, rpcReq.ID, -32601, fmt.Sprintf("method %q not allowed", rpcReq.Method))
+			return
+		}
 		p.forwardRequest(w, r, body)
 	}
 }
@@ -701,7 +895,7 @@ func (p *MCPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *MCPProxy) handleToolCall(w http.ResponseWriter, r *http.Request, body []byte, rpcReq *jsonRPCRequest) {
 	var params toolCallParams
 	if err := json.Unmarshal(rpcReq.Params, &params); err != nil {
-		p.forwardRequest(w, r, body)
+		writeJSONRPCError(w, rpcReq.ID, -32602, "invalid tool call params")
 		return
 	}
 
@@ -709,23 +903,20 @@ func (p *MCPProxy) handleToolCall(w http.ResponseWriter, r *http.Request, body [
 		p.log.Add(LogEntry{
 			Time:   time.Now(),
 			Domain: p.serverName,
-			Port:   params.Name,
 			Action: ActionBlock,
 			Source: SourceMCP,
-			Reason: "tool not in allowlist",
+			Reason: fmt.Sprintf("tool %q not in allowlist", params.Name),
 		})
 		writeJSONRPCError(w, rpcReq.ID, -32601, fmt.Sprintf("tool %q is not allowed", params.Name))
 		return
 	}
 
-	pattern := p.allowlist.MatchedPattern(params.Name)
 	p.log.Add(LogEntry{
 		Time:   time.Now(),
 		Domain: p.serverName,
-		Port:   params.Name,
 		Action: ActionAllow,
 		Source: SourceMCP,
-		Reason: fmt.Sprintf("matched %q", pattern),
+		Reason: fmt.Sprintf("tool %q allowed", params.Name),
 	})
 
 	p.forwardRequest(w, r, body)
@@ -747,21 +938,14 @@ func (p *MCPProxy) handleToolsList(w http.ResponseWriter, r *http.Request, body 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPBodySize))
 	if err != nil {
 		http.Error(w, `{"error":"failed to read upstream response"}`, http.StatusBadGateway)
 		return
 	}
 
-	// Try to filter the tools list.
-	filtered, err := p.filterToolsList(respBody)
-	if err != nil {
-		// Can't parse — return original.
-		copyHeaders(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		w.Write(respBody)
-		return
-	}
+	// Filter the tools list. On failure, return empty tools (fail-closed).
+	filtered := p.filterToolsList(respBody)
 
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "application/json")
@@ -769,30 +953,33 @@ func (p *MCPProxy) handleToolsList(w http.ResponseWriter, r *http.Request, body 
 	w.Write(filtered)
 }
 
-func (p *MCPProxy) filterToolsList(body []byte) ([]byte, error) {
+// filterToolsList removes disallowed tools from a tools/list response.
+// On any parse failure, returns a response with an empty tools list
+// (fail-closed: never leak unfiltered tool names).
+func (p *MCPProxy) filterToolsList(body []byte) []byte {
 	var resp map[string]json.RawMessage
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
+		return p.emptyToolsResponse(body)
 	}
 
 	resultRaw, ok := resp["result"]
 	if !ok {
-		return body, nil
+		return body
 	}
 
 	var result map[string]json.RawMessage
 	if err := json.Unmarshal(resultRaw, &result); err != nil {
-		return body, nil
+		return p.emptyToolsResponse(body)
 	}
 
 	toolsRaw, ok := result["tools"]
 	if !ok {
-		return body, nil
+		return body
 	}
 
 	var tools []map[string]any
 	if err := json.Unmarshal(toolsRaw, &tools); err != nil {
-		return body, nil
+		return p.emptyToolsResponse(body)
 	}
 
 	var filtered []map[string]any
@@ -803,19 +990,24 @@ func (p *MCPProxy) filterToolsList(body []byte) ([]byte, error) {
 		}
 	}
 
-	filteredJSON, err := json.Marshal(filtered)
-	if err != nil {
-		return body, nil
-	}
+	filteredJSON, _ := json.Marshal(filtered)
 	result["tools"] = filteredJSON
-
-	newResult, err := json.Marshal(result)
-	if err != nil {
-		return body, nil
-	}
+	newResult, _ := json.Marshal(result)
 	resp["result"] = newResult
+	out, _ := json.Marshal(resp)
+	return out
+}
 
-	return json.Marshal(resp)
+func (p *MCPProxy) emptyToolsResponse(body []byte) []byte {
+	var resp map[string]json.RawMessage
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return []byte(`{"jsonrpc":"2.0","result":{"tools":[]}}`)
+	}
+	result := map[string]json.RawMessage{"tools": json.RawMessage("[]")}
+	resultJSON, _ := json.Marshal(result)
+	resp["result"] = resultJSON
+	out, _ := json.Marshal(resp)
+	return out
 }
 
 func (p *MCPProxy) forwardRequest(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -863,6 +1055,9 @@ func (p *MCPProxy) forwardRequest(w http.ResponseWriter, r *http.Request, body [
 
 func copyHeaders(dst, src http.Header) {
 	for k, vv := range src {
+		if hopByHopHeaders[http.CanonicalHeaderKey(k)] {
+			continue
+		}
 		for _, v := range vv {
 			dst.Add(k, v)
 		}
@@ -904,8 +1099,77 @@ git commit -m "proxy: add MCP reverse proxy with tool call filtering"
 
 **Files:**
 - Modify: `proxy/server.go:56-117`
+- Create: `proxy/mcp_server_test.go`
 
-**Step 1: Add MCP proxy startup to Server.Run**
+**Step 1: Write the failing test**
+
+Create `proxy/mcp_server_test.go`:
+
+```go
+package proxy
+
+import (
+	"encoding/json"
+	"net"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestStartMCPProxyListener(t *testing.T) {
+	// Find a free port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+	log := NewLogBuffer(100)
+
+	// Start a fake upstream.
+	upstream := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	})}
+	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer upstreamLn.Close()
+	go upstream.Serve(upstreamLn)
+
+	mcpProxy := NewMCPProxy("test", "http://"+upstreamLn.Addr().String(), al, log)
+	mcpLn, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	require.NoError(t, err)
+	defer mcpLn.Close()
+	go http.Serve(mcpLn, mcpProxy)
+
+	// Verify it accepts connections and filters.
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	resp, err := http.Post(
+		fmt.Sprintf("http://127.0.0.1:%d", port),
+		"application/json",
+		strings.NewReader(body),
+	)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var result map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.NotNil(t, result["result"])
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `go test ./proxy/ -run TestStartMCPProxy -v`
+Expected: FAIL (or PASS if types already exist — test validates the wiring works).
+
+**Step 3: Add MCP proxy startup to Server.Run**
 
 After the existing service goroutines (HTTP proxy, DNS, control API), add MCP proxy listeners. Insert before the `select` block (line ~110):
 
@@ -933,20 +1197,15 @@ Update `errCh` buffer size from `3` to `3+len(s.config.MCPServers)`:
 errCh := make(chan error, 3+len(s.config.MCPServers))
 ```
 
-**Step 2: Verify build**
+**Step 4: Run tests**
 
-Run: `go build ./...`
-Expected: success
-
-**Step 3: Run existing tests**
-
-Run: `make test`
+Run: `go test ./proxy/ -run TestStartMCPProxy -v && make test`
 Expected: PASS
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
-git add proxy/server.go
+git add proxy/server.go proxy/mcp_server_test.go
 git commit -m "proxy: start MCP proxy listeners in Server.Run"
 ```
 
@@ -1094,13 +1353,129 @@ git commit -m "cmd: add TCP forwarder for MCP host connectivity"
 
 ---
 
-### Task 7: Wire MCP into the run command
+### Task 7: Add GatewayIP to NetworkInfo
+
+**Files:**
+- Modify: `container/client.go:345-348` (NetworkInfo struct)
+- Modify: `container/client.go:353-380` (CreateNetwork function)
+
+**Step 1: Add GatewayIP field**
+
+In `container/client.go`, add `GatewayIP` to `NetworkInfo`:
+
+```go
+type NetworkInfo struct {
+	ID        string
+	ProxyIP   string
+	GatewayIP string
+}
+```
+
+In `CreateNetwork`, populate it (the `gateway` variable is already computed):
+
+```go
+return NetworkInfo{
+	ID:        resp.ID,
+	ProxyIP:   proxyIP.String(),
+	GatewayIP: gateway.String(),
+}, nil
+```
+
+**Step 2: Verify build**
+
+Run: `go build ./...`
+Expected: success
+
+**Step 3: Commit**
+
+```bash
+git add container/client.go
+git commit -m "container: expose GatewayIP in NetworkInfo"
+```
+
+---
+
+### Task 8: Wire MCP into the run command
 
 **Files:**
 - Modify: `cmd/run.go` (port allocation, forwarders, proxy config, sandbox env vars)
 - Modify: `container/client.go` (SandboxContainerConfig — add MCPEnvVars field)
+- Create: `cmd/mcpenv.go`
+- Create: `cmd/mcpenv_test.go`
 
-**Step 1: Add MCPEnvVars to SandboxContainerConfig**
+**Step 1: Write test for env var construction**
+
+Create `cmd/mcpenv_test.go`:
+
+```go
+package cmd
+
+import (
+	"testing"
+
+	"github.com/bernd/vibepit/config"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestBuildMCPEnvVars(t *testing.T) {
+	servers := []config.MCPServerConfig{
+		{Name: "intellij", Port: 9100},
+		{Name: "vs-code", Port: 9101},
+		{Name: "my_server", Port: 9102},
+	}
+
+	envVars := BuildMCPEnvVars(servers, "10.0.0.2")
+
+	assert.Equal(t, []string{
+		"VIBEPIT_MCP_INTELLIJ=http://10.0.0.2:9100",
+		"VIBEPIT_MCP_VS_CODE=http://10.0.0.2:9101",
+		"VIBEPIT_MCP_MY_SERVER=http://10.0.0.2:9102",
+	}, envVars)
+}
+
+func TestBuildMCPEnvVarsEmpty(t *testing.T) {
+	envVars := BuildMCPEnvVars(nil, "10.0.0.2")
+	assert.Empty(t, envVars)
+}
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `go test ./cmd/ -run TestBuildMCPEnv -v`
+Expected: FAIL — `BuildMCPEnvVars` not found.
+
+**Step 3: Implement**
+
+Create `cmd/mcpenv.go`:
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/bernd/vibepit/config"
+)
+
+// BuildMCPEnvVars constructs VIBEPIT_MCP_<NAME> environment variables
+// for each configured MCP server, pointing to the proxy endpoint.
+func BuildMCPEnvVars(servers []config.MCPServerConfig, proxyIP string) []string {
+	var envVars []string
+	for _, s := range servers {
+		name := strings.ToUpper(strings.ReplaceAll(s.Name, "-", "_"))
+		envVars = append(envVars, fmt.Sprintf("VIBEPIT_MCP_%s=http://%s:%d", name, proxyIP, s.Port))
+	}
+	return envVars
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `go test ./cmd/ -run TestBuildMCPEnv -v`
+Expected: PASS
+
+**Step 5: Add MCPEnvVars to SandboxContainerConfig**
 
 In `container/client.go`, add to `SandboxContainerConfig` (after the `User` field, line ~613):
 
@@ -1114,14 +1489,13 @@ In `CreateSandboxContainer`, append them to `env` (after the ColorTerm block, li
 env = append(env, cfg.MCPEnvVars...)
 ```
 
-**Step 2: Add MCP wiring to RunAction in cmd/run.go**
+**Step 6: Add MCP wiring to RunAction in cmd/run.go**
 
 After port allocation (line ~224, after `merged.ControlAPIPort = controlAPIPort`), add MCP port allocation and forwarder setup:
 
 ```go
 // Allocate ports for MCP proxy listeners and start host-side TCP forwarders.
 var mcpForwarders []*TCPForwarder
-var mcpEnvVars []string
 usedPorts := append(merged.AllowHostPorts, proxyPort, controlAPIPort)
 
 for i := range merged.MCPServers {
@@ -1131,17 +1505,13 @@ for i := range merged.MCPServers {
 	}
 	usedPorts = append(usedPorts, mcpPort)
 	merged.MCPServers[i].Port = mcpPort
-
-	// Start host-side TCP forwarder: gateway-ip:mcpPort -> MCP server URL host:port.
-	// The URL is parsed to extract host:port for the TCP target.
 }
 ```
 
-Parse each MCP server URL to get host:port for the TCP forwarder. After network creation (after `proxyIP := netInfo.ProxyIP`, line ~209), the gateway IP is available as `netInfo.GatewayIP` (or via `host-gateway` — check what `netInfo` provides). Start forwarders:
+After network creation (after `proxyIP := netInfo.ProxyIP`, line ~209), start TCP forwarders using `netInfo.GatewayIP`:
 
 ```go
 for i, mcpCfg := range merged.MCPServers {
-	// Parse URL to get host:port.
 	u, err := url.Parse(mcpCfg.URL)
 	if err != nil {
 		return fmt.Errorf("MCP %s URL: %w", mcpCfg.Name, err)
@@ -1167,10 +1537,6 @@ for i, mcpCfg := range merged.MCPServers {
 	// as seen from the proxy container (gateway IP).
 	merged.MCPServers[i].URL = fmt.Sprintf("http://%s:%d", netInfo.GatewayIP, mcpCfg.Port)
 
-	// Build env var for sandbox.
-	envName := "VIBEPIT_MCP_" + strings.ToUpper(strings.ReplaceAll(mcpCfg.Name, "-", "_"))
-	mcpEnvVars = append(mcpEnvVars, fmt.Sprintf("%s=http://%s:%d", envName, proxyIP, mcpCfg.Port))
-
 	tui.Status("MCP", "%s proxy on :%d -> %s", mcpCfg.Name, mcpCfg.Port, target)
 }
 defer func() {
@@ -1180,7 +1546,11 @@ defer func() {
 }()
 ```
 
-Pass `mcpEnvVars` to the sandbox config:
+Build env vars and pass to sandbox config:
+
+```go
+mcpEnvVars := BuildMCPEnvVars(merged.MCPServers, proxyIP)
+```
 
 ```go
 MCPEnvVars: mcpEnvVars,
@@ -1188,30 +1558,26 @@ MCPEnvVars: mcpEnvVars,
 
 Add `"net/url"` and `"strings"` to imports if not present.
 
-**Step 3: Check that GatewayIP is available**
-
-Read `container/client.go` `CreateNetwork` return type. If `NetworkInfo` doesn't have `GatewayIP`, add it. The gateway IP is the host-side IP of the Docker bridge for this network — extract it from the Docker network inspect response.
-
-**Step 4: Verify build**
+**Step 7: Verify build**
 
 Run: `go build ./...`
 Expected: success
 
-**Step 5: Run tests**
+**Step 8: Run tests**
 
 Run: `make test`
 Expected: PASS
 
-**Step 6: Commit**
+**Step 9: Commit**
 
 ```bash
-git add cmd/run.go container/client.go
+git add cmd/run.go cmd/mcpenv.go cmd/mcpenv_test.go container/client.go
 git commit -m "cmd: wire MCP proxy into run command with TCP forwarders"
 ```
 
 ---
 
-### Task 8: Integration test
+### Task 9: Integration test
 
 **Files:**
 - Create: `proxy/mcp_proxy_integration_test.go`
@@ -1375,9 +1741,33 @@ git commit -m "proxy: add MCP proxy integration test"
 | 2 | Config types | `config/config.go`, `proxy/server.go` | `config/mcp_test.go` |
 | 3 | SourceMCP log constant | `proxy/log.go` | — |
 | 4 | MCP reverse proxy handler | `proxy/mcp_proxy.go` | `proxy/mcp_proxy_test.go` |
-| 5 | Start MCP listeners in Server.Run | `proxy/server.go` | existing tests |
+| 5 | Start MCP listeners in Server.Run | `proxy/server.go` | `proxy/mcp_server_test.go` |
 | 6 | Host TCP forwarder | `cmd/tcpforward.go` | `cmd/tcpforward_test.go` |
-| 7 | Wire into run command | `cmd/run.go`, `container/client.go` | build + `make test` |
-| 8 | Integration test | `proxy/mcp_proxy_integration_test.go` | integration |
+| 7 | Add GatewayIP to NetworkInfo | `container/client.go` | — |
+| 8 | Wire into run command | `cmd/run.go`, `cmd/mcpenv.go`, `container/client.go` | `cmd/mcpenv_test.go` |
+| 9 | Integration test | `proxy/mcp_proxy_integration_test.go` | integration |
 
-Dependencies: Task 4 depends on tasks 1+3. Task 5 depends on tasks 2+4. Task 7 depends on tasks 5+6. Task 8 depends on task 4.
+Dependencies: Task 4 depends on tasks 1+3. Task 5 depends on tasks 2+4. Task 8 depends on tasks 5+6+7. Task 9 depends on task 4.
+
+### Parallelization
+
+| Batch | Tasks | Max Concurrent |
+|-------|-------|---------------|
+| 1 | 1, 2, 3, 6, 7 | 5 |
+| 2 | 4 | 1 |
+| 3 | 5, 9 | 2 |
+| 4 | 8 | 1 |
+
+Critical path: 1 → 4 → 5 → 8
+
+### Security Hardening (from review)
+
+The following security measures are built into Task 4:
+
+1. **Batch request rejection** — JSON arrays rejected before parsing (prevents allowlist bypass).
+2. **Fail-closed on parse errors** — Unparseable requests return JSON-RPC error, never forwarded.
+3. **Body size limit** — 10 MB max via `io.LimitReader` (prevents OOM).
+4. **Method allowlist** — Only known MCP methods forwarded; unknown methods rejected.
+5. **Hop-by-hop header stripping** — RFC 7230 §6.1 compliant.
+6. **SSE-safe client** — `ResponseHeaderTimeout` instead of `Client.Timeout`.
+7. **tools/list fail-closed** — Parse failures return empty tools list, not unfiltered.
