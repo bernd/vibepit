@@ -16,18 +16,28 @@ const (
 	LogBufferCapacity  = 10000
 )
 
+// MCPServerProxyConfig is the per-MCP-server config passed to the proxy container.
+type MCPServerProxyConfig struct {
+	Name       string   `json:"name"`
+	URL        string   `json:"url"`
+	Transport  string   `json:"transport"`
+	AllowTools []string `json:"allow-tools"`
+	Port       int      `json:"port"`
+}
+
 // ProxyConfig is the JSON config file passed to the proxy container.
 type ProxyConfig struct {
-	AllowHTTP      []string `json:"allow-http"`
-	AllowDNS       []string `json:"allow-dns"`
-	BlockCIDR      []string `json:"block-cidr"`
-	Upstream       string   `json:"upstream"`
-	AllowHostPorts []int    `json:"allow-host-ports"`
-	ProxyIP        string   `json:"proxy-ip"`
-	HostGateway    string   `json:"host-gateway"`
-	ProxyPort      int      `json:"proxy-port"`
-	ControlAPIPort int      `json:"control-api-port"`
-	DNSPort        int      `json:"dns-port"`
+	AllowHTTP      []string               `json:"allow-http"`
+	AllowDNS       []string               `json:"allow-dns"`
+	BlockCIDR      []string               `json:"block-cidr"`
+	Upstream       string                 `json:"upstream"`
+	AllowHostPorts []int                  `json:"allow-host-ports"`
+	ProxyIP        string                 `json:"proxy-ip"`
+	HostGateway    string                 `json:"host-gateway"`
+	ProxyPort      int                    `json:"proxy-port"`
+	ControlAPIPort int                    `json:"control-api-port"`
+	DNSPort        int                    `json:"dns-port"`
+	MCPServers     []MCPServerProxyConfig `json:"mcp-servers,omitempty"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.

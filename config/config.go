@@ -30,11 +30,20 @@ type GlobalConfig struct {
 	BlockCIDR []string `koanf:"block-cidr"`
 }
 
+type MCPServerConfig struct {
+	Name       string   `koanf:"name"       json:"name"`
+	URL        string   `koanf:"url"        json:"url"`
+	Transport  string   `koanf:"transport"  json:"transport,omitempty"`
+	AllowTools []string `koanf:"allow-tools" json:"allow-tools,omitempty"`
+	Port       int      `koanf:"-"          json:"port,omitempty"`
+}
+
 type ProjectConfig struct {
-	Presets        []string `koanf:"presets"`
-	AllowHTTP      []string `koanf:"allow-http"`
-	AllowDNS       []string `koanf:"allow-dns"`
-	AllowHostPorts []int    `koanf:"allow-host-ports"`
+	Presets        []string          `koanf:"presets"`
+	AllowHTTP      []string          `koanf:"allow-http"`
+	AllowDNS       []string          `koanf:"allow-dns"`
+	AllowHostPorts []int             `koanf:"allow-host-ports"`
+	MCPServers     []MCPServerConfig `koanf:"mcp-servers"`
 }
 
 type Config struct {
@@ -43,14 +52,15 @@ type Config struct {
 }
 
 type MergedConfig struct {
-	AllowHTTP      []string `json:"allow-http"`
-	AllowDNS       []string `json:"allow-dns"`
-	BlockCIDR      []string `json:"block-cidr"`
-	AllowHostPorts []int    `json:"allow-host-ports"`
-	ProxyIP        string   `json:"proxy-ip,omitempty"`
-	HostGateway    string   `json:"host-gateway,omitempty"`
-	ProxyPort      int      `json:"proxy-port,omitempty"`
-	ControlAPIPort int      `json:"control-api-port,omitempty"`
+	AllowHTTP      []string          `json:"allow-http"`
+	AllowDNS       []string          `json:"allow-dns"`
+	BlockCIDR      []string          `json:"block-cidr"`
+	AllowHostPorts []int             `json:"allow-host-ports"`
+	ProxyIP        string            `json:"proxy-ip,omitempty"`
+	HostGateway    string            `json:"host-gateway,omitempty"`
+	ProxyPort      int               `json:"proxy-port,omitempty"`
+	ControlAPIPort int               `json:"control-api-port,omitempty"`
+	MCPServers     []MCPServerConfig `json:"mcp-servers,omitempty"`
 }
 
 // RandomProxyPort returns a random port in the ephemeral range (49152-65535)
@@ -117,11 +127,20 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 		return MergedConfig{}, fmt.Errorf("allow-dns: %w", err)
 	}
 
+	mcpServers := make([]MCPServerConfig, len(c.Project.MCPServers))
+	copy(mcpServers, c.Project.MCPServers)
+	for i := range mcpServers {
+		if mcpServers[i].Transport == "" {
+			mcpServers[i].Transport = "sse"
+		}
+	}
+
 	return MergedConfig{
 		AllowHTTP:      allowHTTP,
 		AllowDNS:       allowDNS,
 		BlockCIDR:      c.Global.BlockCIDR,
 		AllowHostPorts: c.Project.AllowHostPorts,
+		MCPServers:     mcpServers,
 	}, nil
 }
 
