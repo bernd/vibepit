@@ -930,6 +930,7 @@ func (p *MCPProxy) handleToolsList(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 	copyHeaders(upstreamReq.Header, r.Header)
+	upstreamReq.URL.RawQuery = r.URL.RawQuery
 
 	resp, err := p.client.Do(upstreamReq)
 	if err != nil {
@@ -949,6 +950,8 @@ func (p *MCPProxy) handleToolsList(w http.ResponseWriter, r *http.Request, body 
 
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "application/json")
+	// Remove stale Content-Length — the filtered body differs from upstream.
+	w.Header().Del("Content-Length")
 	w.WriteHeader(resp.StatusCode)
 	w.Write(filtered)
 }
@@ -1534,8 +1537,14 @@ for i, mcpCfg := range merged.MCPServers {
 	go fwd.Serve()
 
 	// Update the MCP server URL in config to point to the forwarder
-	// as seen from the proxy container (gateway IP).
-	merged.MCPServers[i].URL = fmt.Sprintf("http://%s:%d", netInfo.GatewayIP, mcpCfg.Port)
+	// as seen from the proxy container (gateway IP). The TCP forwarder
+	// is a raw tunnel, so we always use http:// for the local hop.
+	// Preserve the original path and query so the proxy forwards to
+	// the correct endpoint (e.g., /mcp, /sse).
+	fwdURL := *u
+	fwdURL.Scheme = "http"
+	fwdURL.Host = fmt.Sprintf("%s:%d", netInfo.GatewayIP, mcpCfg.Port)
+	merged.MCPServers[i].URL = fwdURL.String()
 
 	tui.Status("MCP", "%s proxy on :%d -> %s", mcpCfg.Name, mcpCfg.Port, target)
 }
