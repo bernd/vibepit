@@ -343,8 +343,9 @@ func (c *Client) ExecSession(ctx context.Context, containerID string) error {
 
 // NetworkInfo is returned by CreateNetwork with the Docker-assigned addresses.
 type NetworkInfo struct {
-	ID      string
-	ProxyIP string
+	ID        string
+	ProxyIP   string
+	GatewayIP string
 }
 
 // CreateNetwork creates an internal Docker network with a random /24 subnet
@@ -374,8 +375,9 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 
 	proxyIP := nextIP(gateway)
 	return NetworkInfo{
-		ID:      resp.ID,
-		ProxyIP: proxyIP.String(),
+		ID:        resp.ID,
+		ProxyIP:   proxyIP.String(),
+		GatewayIP: gateway.String(),
 	}, nil
 }
 
