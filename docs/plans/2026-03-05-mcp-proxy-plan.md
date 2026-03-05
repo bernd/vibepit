@@ -1538,11 +1538,9 @@ for i, mcpCfg := range merged.MCPServers {
 
 	// Update the MCP server URL in config to point to the forwarder
 	// as seen from the proxy container (gateway IP). The TCP forwarder
-	// is a raw tunnel, so we always use http:// for the local hop.
-	// Preserve the original path and query so the proxy forwards to
-	// the correct endpoint (e.g., /mcp, /sse).
+	// is a raw tunnel — TLS passes through unchanged, so the original
+	// scheme must be preserved. Path and query are also kept.
 	fwdURL := *u
-	fwdURL.Scheme = "http"
 	fwdURL.Host = fmt.Sprintf("%s:%d", netInfo.GatewayIP, mcpCfg.Port)
 	merged.MCPServers[i].URL = fwdURL.String()
 
