@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -16,47 +18,82 @@ const maxMCPBodySize = 10 << 20 // 10 MB
 // Unknown methods are rejected to prevent bypasses via future or
 // vendor-prefixed methods.
 var knownMCPMethods = map[string]bool{
-	"initialize":               true,
-	"initialized":              true,
-	"ping":                     true,
-	"notifications/cancelled":  true,
-	"notifications/progress":   true,
-	"tools/call":               true,
-	"tools/list":               true,
-	"resources/list":           true,
-	"resources/read":           true,
-	"resources/templates/list": true,
-	"resources/subscribe":      true,
-	"resources/unsubscribe":    true,
-	"prompts/list":             true,
-	"prompts/get":              true,
-	"logging/setLevel":         true,
-	"completion/complete":      true,
-	"sampling/createMessage":   true,
-	"roots/list":               true,
+	// Lifecycle (https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
+	"initialize":                  true,
+	"notifications/initialized":   true,
+	"ping":                        true,
+	"notifications/cancelled":     true,
+	"notifications/progress":      true,
+
+	// Tools
+	"tools/call":                  true,
+	"tools/list":                  true,
+	"notifications/tools/list_changed": true,
+
+	// Resources
+	"resources/list":              true,
+	"resources/read":              true,
+	"resources/templates/list":    true,
+	"resources/subscribe":         true,
+	"resources/unsubscribe":       true,
+	"notifications/resources/list_changed": true,
+	"notifications/resources/updated":      true,
+
+	// Prompts
+	"prompts/list":                true,
+	"prompts/get":                 true,
+	"notifications/prompts/list_changed": true,
+
+	// Logging, completion, sampling, roots
+	"logging/setLevel":            true,
+	"completion/complete":         true,
+	"sampling/createMessage":      true,
+	"roots/list":                  true,
+	"notifications/roots/list_changed": true,
 }
 
 // MCPProxy is a reverse proxy for a single MCP server that filters tool calls.
 type MCPProxy struct {
-	serverName string
-	upstream   string
-	allowlist  *MCPToolAllowlist
-	log        *LogBuffer
-	client     *http.Client
+	serverName  string
+	upstreamURL *url.URL
+	allowlist   *MCPToolAllowlist
+	log         *LogBuffer
+	client      *http.Client
 }
 
 func NewMCPProxy(serverName, upstream string, allowlist *MCPToolAllowlist, log *LogBuffer) *MCPProxy {
+	u, _ := url.Parse(upstream)
 	return &MCPProxy{
-		serverName: serverName,
-		upstream:   upstream,
-		allowlist:  allowlist,
-		log:        log,
+		serverName:  serverName,
+		upstreamURL: u,
+		allowlist:   allowlist,
+		log:         log,
 		client: &http.Client{
 			Transport: &http.Transport{
 				ResponseHeaderTimeout: 30 * time.Second,
 			},
 		},
 	}
+}
+
+// resolveUpstream builds the full upstream URL by joining the configured
+// upstream base URL with the incoming request path and query parameters.
+// If the upstream has a base path (e.g. /api/v1), the request path is
+// appended without double slashes. Query parameters from both the
+// upstream URL and the incoming request are merged.
+func (p *MCPProxy) resolveUpstream(r *http.Request) string {
+	u := *p.upstreamURL
+	// Join upstream base path with request path, avoiding double slashes.
+	u.Path = strings.TrimRight(u.Path, "/") + "/" + strings.TrimLeft(r.URL.Path, "/")
+	// Merge query parameters: upstream params first, then request params.
+	q := u.Query()
+	for k, vv := range r.URL.Query() {
+		for _, v := range vv {
+			q.Add(k, v)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // jsonRPCRequest is the subset of a JSON-RPC request we need to inspect.
@@ -172,13 +209,12 @@ func (p *MCPProxy) handleToolsList(w http.ResponseWriter, r *http.Request, body 
 	defer cancel()
 
 	// Forward the request to get the full tools list.
-	upstreamReq, err := http.NewRequestWithContext(ctx, r.Method, p.upstream+r.URL.Path, bytes.NewReader(body))
+	upstreamReq, err := http.NewRequestWithContext(ctx, r.Method, p.resolveUpstream(r), bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, `{"error":"failed to create upstream request"}`, http.StatusInternalServerError)
 		return
 	}
 	copyHeaders(upstreamReq.Header, r.Header)
-	upstreamReq.URL.RawQuery = r.URL.RawQuery
 
 	resp, err := p.client.Do(upstreamReq)
 	if err != nil {
@@ -276,14 +312,12 @@ func (p *MCPProxy) forwardRequest(w http.ResponseWriter, r *http.Request, body [
 		reqBody = bytes.NewReader(body)
 	}
 
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, p.upstream+r.URL.Path, reqBody)
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, p.resolveUpstream(r), reqBody)
 	if err != nil {
 		http.Error(w, `{"error":"failed to create upstream request"}`, http.StatusInternalServerError)
 		return
 	}
 	copyHeaders(upstreamReq.Header, r.Header)
-	// Pass query string through.
-	upstreamReq.URL.RawQuery = r.URL.RawQuery
 
 	resp, err := p.client.Do(upstreamReq)
 	if err != nil {

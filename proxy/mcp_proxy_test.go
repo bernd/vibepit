@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -179,14 +180,19 @@ func TestMCPProxy_KnownMethodPassesThrough(t *testing.T) {
 
 	proxy := NewMCPProxy("test-server", upstream.URL, al, log)
 
-	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
-	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	// Test both initialize and notifications/initialized (MCP lifecycle).
+	for _, method := range []string{"initialize", "notifications/initialized"} {
+		t.Run(method, func(t *testing.T) {
+			body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":%q,"params":{}}`, method)
+			req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
 
-	proxy.ServeHTTP(w, req)
+			proxy.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+			assert.Equal(t, http.StatusOK, w.Code)
+		})
+	}
 	// Known safe methods should not be logged.
 	assert.Empty(t, log.Entries())
 }
@@ -390,4 +396,59 @@ func TestMCPProxy_ToolCallNullParams(t *testing.T) {
 			assert.NotNil(t, resp["error"], "should return JSON-RPC error")
 		})
 	}
+}
+
+func TestMCPProxy_UpstreamBasePath(t *testing.T) {
+	// Upstream MCP server at a non-root path with a query token.
+	var receivedPath, receivedQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	// Upstream has a base path and query parameter.
+	proxy := NewMCPProxy("test-server", upstream.URL+"/api/v1?token=abc", al, NewLogBuffer(100))
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest("POST", "/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/api/v1/messages", receivedPath)
+	assert.Contains(t, receivedQuery, "token=abc")
+}
+
+func TestMCPProxy_UpstreamTrailingSlash(t *testing.T) {
+	var receivedPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	// Trailing slash on upstream should not cause double slashes.
+	proxy := NewMCPProxy("test-server", upstream.URL+"/api/", al, NewLogBuffer(100))
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	req := httptest.NewRequest("POST", "/messages", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	proxy.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/api/messages", receivedPath)
 }
