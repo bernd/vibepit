@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	embeddedproxy "github.com/bernd/vibepit/embed/proxy"
@@ -213,20 +213,39 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	merged.ProxyIP = proxyIP
 	merged.HostGateway = "host-gateway"
 
-	// Start host-side TCP forwarders for MCP servers.
+	// Generate random ports for proxy services, avoiding user's host ports.
+	proxyPort, err := config.RandomProxyPort(merged.AllowHostPorts)
+	if err != nil {
+		return fmt.Errorf("proxy port: %w", err)
+	}
+	controlAPIPort, err := config.RandomProxyPort(append(merged.AllowHostPorts, proxyPort))
+	if err != nil {
+		return fmt.Errorf("control API port: %w", err)
+	}
+	merged.ProxyPort = proxyPort
+	merged.ControlAPIPort = controlAPIPort
+
+	// Allocate ports for MCP proxy listeners.
+	usedPorts := append(merged.AllowHostPorts, proxyPort, controlAPIPort)
+	for i := range merged.MCPServers {
+		mcpPort, err := config.RandomProxyPort(usedPorts)
+		if err != nil {
+			return fmt.Errorf("MCP port for %s: %w", merged.MCPServers[i].Name, err)
+		}
+		usedPorts = append(usedPorts, mcpPort)
+		merged.MCPServers[i].Port = mcpPort
+	}
+
+	// Start host-side TCP forwarders for MCP servers (after port allocation).
 	var mcpForwarders []*TCPForwarder
 	for i, mcpCfg := range merged.MCPServers {
 		u, err := url.Parse(mcpCfg.URL)
 		if err != nil {
 			return fmt.Errorf("MCP %s URL: %w", mcpCfg.Name, err)
 		}
-		target := u.Host
-		if !strings.Contains(target, ":") {
-			if u.Scheme == "https" {
-				target += ":443"
-			} else {
-				target += ":80"
-			}
+		target, err := mcpTargetAddr(u)
+		if err != nil {
+			return fmt.Errorf("MCP %s target: %w", mcpCfg.Name, err)
 		}
 
 		listenAddr := fmt.Sprintf("%s:%d", netInfo.GatewayIP, mcpCfg.Port)
@@ -252,29 +271,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 			fwd.Close()
 		}
 	}()
-
-	// Generate random ports for proxy services, avoiding user's host ports.
-	proxyPort, err := config.RandomProxyPort(merged.AllowHostPorts)
-	if err != nil {
-		return fmt.Errorf("proxy port: %w", err)
-	}
-	controlAPIPort, err := config.RandomProxyPort(append(merged.AllowHostPorts, proxyPort))
-	if err != nil {
-		return fmt.Errorf("control API port: %w", err)
-	}
-	merged.ProxyPort = proxyPort
-	merged.ControlAPIPort = controlAPIPort
-
-	// Allocate ports for MCP proxy listeners and start host-side TCP forwarders.
-	usedPorts := append(merged.AllowHostPorts, proxyPort, controlAPIPort)
-	for i := range merged.MCPServers {
-		mcpPort, err := config.RandomProxyPort(usedPorts)
-		if err != nil {
-			return fmt.Errorf("MCP port for %s: %w", merged.MCPServers[i].Name, err)
-		}
-		usedPorts = append(usedPorts, mcpPort)
-		merged.MCPServers[i].Port = mcpPort
-	}
 
 	proxyConfig, _ := json.Marshal(merged)
 	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
@@ -338,7 +334,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		term = "xterm-256color"
 	}
 
-	mcpEnvVars := BuildMCPEnvVars(merged.MCPServers, proxyIP)
+	mcpEnvVars, err := BuildMCPEnvVars(merged.MCPServers, proxyIP)
+	if err != nil {
+		return fmt.Errorf("MCP env vars: %w", err)
+	}
 
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
 	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
@@ -370,4 +369,23 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
 	return client.AttachAndStartSession(ctx, sandboxContainer)
+}
+
+// mcpTargetAddr returns a host:port dial target from a parsed URL,
+// handling both IPv4 and IPv6 addresses correctly.
+func mcpTargetAddr(u *url.URL) (string, error) {
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "https":
+			port = "443"
+		default:
+			port = "80"
+		}
+	}
+	if host == "" {
+		return "", fmt.Errorf("empty host in URL %q", u.String())
+	}
+	return net.JoinHostPort(host, port), nil
 }
