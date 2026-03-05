@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"runtime/debug"
 	"strconv"
 )
 
@@ -33,13 +35,43 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 }
 
 func (a *ControlAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	a.mux.ServeHTTP(w, r)
+	rw := &responseState{ResponseWriter: w}
+	defer func() {
+		if p := recover(); p != nil {
+			fmt.Fprintf(os.Stderr, "control API panic: %v\n%s\n", p, debug.Stack())
+			if !rw.written {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, `{"error":"internal server error"}`)
+			}
+		}
+	}()
+	a.mux.ServeHTTP(rw, r)
+}
+
+// responseState wraps http.ResponseWriter to track whether headers/body
+// have been sent, so panic recovery can avoid corrupting in-flight responses.
+type responseState struct {
+	http.ResponseWriter
+	written bool
+}
+
+func (rw *responseState) WriteHeader(code int) {
+	rw.written = true
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseState) Write(b []byte) (int, error) {
+	rw.written = true
+	return rw.ResponseWriter.Write(b)
 }
 
 func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
 	var afterID uint64
-	if s := r.URL.Query().Get("after"); s != "" {
-		afterID, _ = strconv.ParseUint(s, 10, 64)
+	if r.URL != nil {
+		if s := r.URL.Query().Get("after"); s != "" {
+			afterID, _ = strconv.ParseUint(s, 10, 64)
+		}
 	}
 	writeJSON(w, a.log.EntriesAfter(afterID))
 }

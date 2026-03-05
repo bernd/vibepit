@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -132,5 +133,81 @@ func TestControlAPI(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.False(t, dnsAllowlist.Allows("github.com"))
+	})
+
+	t.Run("GET /logs with nil URL returns all entries", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/logs", nil)
+		req.URL = nil
+		w := httptest.NewRecorder()
+		api.handleLogs(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var entries []LogEntry
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+		assert.Len(t, entries, 2)
+	})
+}
+
+func TestControlAPIPanicRecovery(t *testing.T) {
+	log := NewLogBuffer(100)
+	allowlist, err := NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAllowlist, err := NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := NewControlAPI(log, nil, allowlist, dnsAllowlist)
+
+	// Register a handler that panics.
+	api.mux.HandleFunc("GET /panic", func(w http.ResponseWriter, r *http.Request) {
+		panic("test panic")
+	})
+
+	t.Run("httptest recorder", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/panic", nil)
+		w := httptest.NewRecorder()
+
+		assert.NotPanics(t, func() {
+			api.ServeHTTP(w, req)
+		})
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+		assert.Contains(t, w.Body.String(), "internal server error")
+	})
+
+	t.Run("live server", func(t *testing.T) {
+		srv := httptest.NewServer(api)
+		defer srv.Close()
+
+		resp, err := http.Get(srv.URL + "/panic")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	})
+
+	t.Run("live server panic after partial write", func(t *testing.T) {
+		// Register a handler that writes headers then panics.
+		api.mux.HandleFunc("GET /partial-panic", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("partial"))
+			panic("mid-write panic")
+		})
+
+		srv := httptest.NewServer(api)
+		defer srv.Close()
+
+		resp, err := http.Get(srv.URL + "/partial-panic")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		// Headers already sent before panic — recovery skips writing the
+		// error response to avoid corrupting the in-flight body.
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, "partial", string(body), "body should not have error JSON appended")
 	})
 }
