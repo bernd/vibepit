@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,6 +86,10 @@ var hopByHopHeaders = map[string]bool{
 
 func (p *MCPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// GET requests (SSE event stream) pass through without inspection.
+	// NOTE: SSE transport sends tools/list responses on this event stream,
+	// so tools/list filtering only works for streamable-HTTP transport.
+	// tools/call filtering works for both transports (POSTs are always
+	// intercepted). SSE event stream filtering is deferred to a follow-up.
 	if r.Method == http.MethodGet {
 		p.forwardRequest(w, r, nil)
 		return
@@ -162,8 +167,12 @@ func (p *MCPProxy) handleToolCall(w http.ResponseWriter, r *http.Request, body [
 }
 
 func (p *MCPProxy) handleToolsList(w http.ResponseWriter, r *http.Request, body []byte, rpcReq *jsonRPCRequest) {
+	// Use a deadline for the non-streaming tools/list round-trip.
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
 	// Forward the request to get the full tools list.
-	upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, p.upstream+r.URL.Path, bytes.NewReader(body))
+	upstreamReq, err := http.NewRequestWithContext(ctx, r.Method, p.upstream+r.URL.Path, bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, `{"error":"failed to create upstream request"}`, http.StatusInternalServerError)
 		return
@@ -232,11 +241,20 @@ func (p *MCPProxy) filterToolsList(body []byte) []byte {
 		}
 	}
 
-	filteredJSON, _ := json.Marshal(filtered)
+	filteredJSON, err := json.Marshal(filtered)
+	if err != nil {
+		return p.emptyToolsResponse(body)
+	}
 	result["tools"] = filteredJSON
-	newResult, _ := json.Marshal(result)
+	newResult, err := json.Marshal(result)
+	if err != nil {
+		return p.emptyToolsResponse(body)
+	}
 	resp["result"] = newResult
-	out, _ := json.Marshal(resp)
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return p.emptyToolsResponse(body)
+	}
 	return out
 }
 

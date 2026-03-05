@@ -352,3 +352,42 @@ func TestMCPProxy_HopByHopHeadersNotForwarded(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestMCPProxy_ToolCallNullParams(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+	}))
+	defer upstream.Close()
+
+	al, err := NewMCPToolAllowlist([]string{"get_*"})
+	require.NoError(t, err)
+
+	proxy := NewMCPProxy("test-server", upstream.URL, al, NewLogBuffer(100))
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"null params", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":null}`},
+		{"empty params", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}`},
+		{"missing name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"arguments":{}}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamCalled = false
+			req := httptest.NewRequest("POST", "/", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			proxy.ServeHTTP(w, req)
+
+			assert.False(t, upstreamCalled, "upstream should not be called")
+
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.NotNil(t, resp["error"], "should return JSON-RPC error")
+		})
+	}
+}

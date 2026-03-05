@@ -226,7 +226,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	merged.ControlAPIPort = controlAPIPort
 
 	// Allocate ports for MCP proxy listeners.
-	usedPorts := append(merged.AllowHostPorts, proxyPort, controlAPIPort)
+	usedPorts := make([]int, 0, len(merged.AllowHostPorts)+2+len(merged.MCPServers))
+	usedPorts = append(usedPorts, merged.AllowHostPorts...)
+	usedPorts = append(usedPorts, proxyPort, controlAPIPort)
 	for i := range merged.MCPServers {
 		mcpPort, err := config.RandomProxyPort(usedPorts)
 		if err != nil {
@@ -242,6 +244,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		u, err := url.Parse(mcpCfg.URL)
 		if err != nil {
 			return fmt.Errorf("MCP %s URL: %w", mcpCfg.Name, err)
+		}
+		if !isLoopback(u.Hostname()) {
+			return fmt.Errorf("MCP %s URL: host %q is not a loopback address (only 127.0.0.1/::1/localhost allowed)", mcpCfg.Name, u.Hostname())
 		}
 		target, err := mcpTargetAddr(u)
 		if err != nil {
@@ -388,4 +393,14 @@ func mcpTargetAddr(u *url.URL) (string, error) {
 		return "", fmt.Errorf("empty host in URL %q", u.String())
 	}
 	return net.JoinHostPort(host, port), nil
+}
+
+// isLoopback returns true if host is a loopback address (127.0.0.0/8, ::1)
+// or "localhost". MCP server URLs must point to the local host.
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
