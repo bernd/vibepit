@@ -37,4 +37,3 @@ func TestWatchResizeSignalsStopsOnDone(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 }
-

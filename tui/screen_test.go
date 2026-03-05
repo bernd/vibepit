@@ -16,7 +16,7 @@ func (s *stubScreen) Update(msg tea.Msg, w *Window) (Screen, tea.Cmd) {
 	s.updated = true
 	return s, nil
 }
-func (s *stubScreen) View(w *Window) string           { return "stub" }
+func (s *stubScreen) View(w *Window) string            { return "stub" }
 func (s *stubScreen) FooterKeys(w *Window) []FooterKey { return nil }
 func (s *stubScreen) FooterStatus(w *Window) string    { return "" }
 
@@ -28,7 +28,7 @@ type switchScreen struct {
 func (s *switchScreen) Update(msg tea.Msg, w *Window) (Screen, tea.Cmd) {
 	return s.target, nil
 }
-func (s *switchScreen) View(w *Window) string           { return "" }
+func (s *switchScreen) View(w *Window) string            { return "" }
 func (s *switchScreen) FooterKeys(w *Window) []FooterKey { return nil }
 func (s *switchScreen) FooterStatus(w *Window) string    { return "" }
 
