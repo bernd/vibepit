@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	embeddedproxy "github.com/bernd/vibepit/embed/proxy"
@@ -211,6 +213,46 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	merged.ProxyIP = proxyIP
 	merged.HostGateway = "host-gateway"
 
+	// Start host-side TCP forwarders for MCP servers.
+	var mcpForwarders []*TCPForwarder
+	for i, mcpCfg := range merged.MCPServers {
+		u, err := url.Parse(mcpCfg.URL)
+		if err != nil {
+			return fmt.Errorf("MCP %s URL: %w", mcpCfg.Name, err)
+		}
+		target := u.Host
+		if !strings.Contains(target, ":") {
+			if u.Scheme == "https" {
+				target += ":443"
+			} else {
+				target += ":80"
+			}
+		}
+
+		listenAddr := fmt.Sprintf("%s:%d", netInfo.GatewayIP, mcpCfg.Port)
+		fwd, err := NewTCPForwarder(listenAddr, target)
+		if err != nil {
+			return fmt.Errorf("MCP forwarder %s: %w", mcpCfg.Name, err)
+		}
+		mcpForwarders = append(mcpForwarders, fwd)
+		go fwd.Serve()
+
+		// Update the MCP server URL in config to point to the forwarder
+		// as seen from the proxy container (gateway IP). The TCP forwarder
+		// is a raw tunnel — TLS passes through unchanged, so the original
+		// scheme must be preserved. Path and query are also kept.
+		fwdURL := *u
+		fwdURL.Host = fmt.Sprintf("%s:%d", netInfo.GatewayIP, mcpCfg.Port)
+		merged.MCPServers[i].URL = fwdURL.String()
+
+		tui.Status("MCP", "%s proxy on :%d -> %s", mcpCfg.Name, mcpCfg.Port, target)
+	}
+	defer func() {
+		for _, fwd := range mcpForwarders {
+			fwd.Close()
+		}
+	}()
+
 	// Generate random ports for proxy services, avoiding user's host ports.
 	proxyPort, err := config.RandomProxyPort(merged.AllowHostPorts)
 	if err != nil {
@@ -222,6 +264,17 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	merged.ProxyPort = proxyPort
 	merged.ControlAPIPort = controlAPIPort
+
+	// Allocate ports for MCP proxy listeners and start host-side TCP forwarders.
+	usedPorts := append(merged.AllowHostPorts, proxyPort, controlAPIPort)
+	for i := range merged.MCPServers {
+		mcpPort, err := config.RandomProxyPort(usedPorts)
+		if err != nil {
+			return fmt.Errorf("MCP port for %s: %w", merged.MCPServers[i].Name, err)
+		}
+		usedPorts = append(usedPorts, mcpPort)
+		merged.MCPServers[i].Port = mcpPort
+	}
 
 	proxyConfig, _ := json.Marshal(merged)
 	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
@@ -285,6 +338,8 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		term = "xterm-256color"
 	}
 
+	mcpEnvVars := BuildMCPEnvVars(merged.MCPServers, proxyIP)
+
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
 	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
 		Image:               image,
@@ -301,6 +356,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		ColorTerm:           os.Getenv("COLORTERM"),
 		UID:                 uid,
 		User:                u.Username,
+		MCPEnvVars:          mcpEnvVars,
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)

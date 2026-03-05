@@ -613,6 +613,7 @@ type SandboxContainerConfig struct {
 	ColorTerm           string
 	UID                 int
 	User                string
+	MCPEnvVars          []string
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -635,6 +636,7 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 	if cfg.ColorTerm != "" {
 		env = append(env, fmt.Sprintf("COLORTERM=%s", cfg.ColorTerm))
 	}
+	env = append(env, cfg.MCPEnvVars...)
 
 	binds := []string{
 		cfg.HomeVolumeName + ":" + HomeMountPath,
