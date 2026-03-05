@@ -17,6 +17,7 @@ type Source string
 const (
 	SourceProxy Source = "proxy"
 	SourceDNS   Source = "dns"
+	SourceMCP   Source = "mcp"
 )
 
 type LogEntry struct {
