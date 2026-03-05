@@ -91,7 +91,7 @@ func (s *Server) Run(ctx context.Context) error {
 	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
 	dnsAddr := fmt.Sprintf(":%d", s.dnsPort())
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 3+len(s.config.MCPServers))
 
 	go func() {
 		fmt.Printf("proxy: HTTP proxy listening on %s\n", proxyAddr)
@@ -117,6 +117,22 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		errCh <- http.Serve(ln, controlAPI)
 	}()
+
+	// Start MCP proxy listeners.
+	for _, mcpCfg := range s.config.MCPServers {
+		mcpCfg := mcpCfg // capture
+		go func() {
+			al, err := NewMCPToolAllowlist(mcpCfg.AllowTools)
+			if err != nil {
+				errCh <- fmt.Errorf("MCP %s allowlist: %w", mcpCfg.Name, err)
+				return
+			}
+			mcpProxy := NewMCPProxy(mcpCfg.Name, mcpCfg.URL, al, log)
+			addr := fmt.Sprintf(":%d", mcpCfg.Port)
+			fmt.Printf("proxy: MCP proxy for %q listening on %s -> %s\n", mcpCfg.Name, addr, mcpCfg.URL)
+			errCh <- http.ListenAndServe(addr, mcpProxy)
+		}()
+	}
 
 	select {
 	case err := <-errCh:
