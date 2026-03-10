@@ -6,37 +6,35 @@ agents running inside a Vibepit sandbox.
 
 ## Goal
 
-An IDE on the host connects to an ACP endpoint exposed by the Vibepit proxy.
-The proxy bridges messages to an agent process running inside the sandbox
-container. The agent executes tools (file edits, terminal commands, etc.)
-against the sandboxed project directory while the IDE renders streaming updates,
-plans, and permission prompts.
+An IDE on the host launches `vibepit acp` as a local subprocess. This command
+execs into the running sandbox to start the agent, and acts as a protocol-aware
+bridge between the IDE and the sandboxed agent. The agent works against the
+sandboxed project directory while the IDE renders streaming updates, plans, and
+permission prompts.
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Host                                                                │
-│                                                                     │
-│  ┌──────────┐   JSON-RPC / newline-delimited   ┌────────────────┐  │
-│  │   IDE    │ ──────────────────────────────────▸│ Proxy container│  │
-│  │ (client) │◂──────────────────────────────────│                │  │
-│  └──────────┘   WebSocket or Streamable HTTP    │  ┌──────────┐ │  │
-│                 mTLS on 127.0.0.1:<port>        │  │ ACP      │ │  │
-│                                                 │  │ bridge   │ │  │
-│                                                 │  └────┬─────┘ │  │
-│                                                 │       │ stdin/ │  │
-│                                                 │       │ stdout │  │
-│                                                 │       │ (exec) │  │
-│                                                 └───────┼────────┘  │
-│                                        isolated network │           │
-│                                                 ┌───────┼────────┐  │
-│                                                 │ Sandbox        │  │
-│                                                 │  ┌─────▼─────┐ │  │
-│                                                 │  │   Agent    │ │  │
-│                                                 │  │ (claude,   │ │  │
-│                                                 │  │  codex, …) │ │  │
-│                                                 │  └───────────┘ │  │
-│                                                 └────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ Host                                                            │
+│                                                                 │
+│  ┌──────────┐   stdio        ┌──────────────┐                  │
+│  │   IDE    │ ──────────────▸│ vibepit acp  │                  │
+│  │ (client) │◂──────────────│ (bridge)      │                  │
+│  └──────────┘   JSON-RPC    │              │                  │
+│                              │  intercepts: │                  │
+│                              │  • terminal/* │                  │
+│                              │  • fs/*       │                  │
+│                              └──────┬───────┘                  │
+│                                     │ docker exec              │
+│                                     │ stdin/stdout             │
+│                              ┌──────┼───────┐                  │
+│                              │ Sandbox      │                  │
+│                              │  ┌───▼─────┐ │                  │
+│                              │  │  Agent  │ │                  │
+│                              │  │ (claude,│ │                  │
+│                              │  │ codex,…)│ │                  │
+│                              │  └─────────┘ │                  │
+│                              └──────────────┘                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## ACP Protocol Summary
@@ -50,66 +48,86 @@ talk to coding agents. Key characteristics:
 | **Lifecycle** | `initialize` → `session/new` → `session/prompt` ↔ `session/update` loop |
 | **Streaming** | Agent sends `session/update` notifications (plan, text chunks, tool calls) |
 | **Permissions** | Agent requests permission via `session/request_permission`; client approves/denies |
-| **File access** | Agent can call client-side `fs/read_text_file`, `fs/write_text_file` |
-| **Terminals** | Agent can request `terminal/create`, `terminal/output`, etc. |
+| **File access** | Agent calls client-side `fs/read_text_file`, `fs/write_text_file` |
+| **Terminals** | Agent calls client-side `terminal/create`, `terminal/output`, etc. |
 | **Sessions** | Identified by opaque session IDs; optionally resumable via `session/load` |
+
+### Why not a transparent pipe
+
+ACP defines `terminal/*` and `fs/*` as **client-side methods** — the agent
+sends requests to the IDE asking it to execute commands and read/write files.
+In a naive stdio pipe, these requests would reach the IDE and execute on the
+**host**, outside the sandbox. This defeats Vibepit's isolation model.
+
+The `vibepit acp` bridge must intercept these methods and fulfill them inside
+the sandbox container instead of forwarding them to the IDE.
 
 ## Design
 
-### Where the ACP endpoint lives
+### Architecture: CLI command, not a proxy service
 
-The proxy container already runs three services (HTTP proxy, DNS server, control
-API). The ACP bridge is a fourth service on a dedicated port, also mTLS-secured
-and published to `127.0.0.1` on the host.
+The bridge is a `vibepit acp` CLI command, not a new service in the proxy
+container. Rationale:
 
-Why the proxy, not the sandbox:
+1. **ACP's primary transport is stdio** — IDEs already know how to spawn a
+   subprocess and talk JSON-RPC over stdin/stdout. No WebSocket, no mTLS, no
+   new ports.
+2. **Simpler** — A single command that execs into the sandbox. No proxy
+   changes, no container image changes.
+3. **Standard** — The IDE configures it exactly like any other local ACP agent.
 
-1. **Network boundary** — The sandbox has no published ports and lives on an
-   isolated network. The proxy is the only component with both host-facing and
-   sandbox-facing connectivity.
-2. **Security** — mTLS on the control plane is already implemented. The ACP
-   endpoint reuses the same CA/cert infrastructure.
-3. **No image changes** — The sandbox image does not need to bundle an HTTP
-   server or expose ports. Agents use their native stdio transport inside the
-   container.
+The proxy-based approach (WebSocket, mTLS) would only be needed for remote IDE
+access, which is a separate feature.
 
-### Transport: host ↔ proxy
+### Message routing
 
-ACP's primary transport is stdio, designed for local subprocesses. Since the
-agent runs in a remote container, we need a network transport. Two options:
+The bridge parses each JSON-RPC message and routes it:
 
-| Option | Mechanism | Fit |
-|--------|-----------|-----|
-| **WebSocket** | Full-duplex, natural mapping to bidirectional JSON-RPC | Best fit — low latency, simple framing, wide IDE support |
-| **Streamable HTTP** | ACP draft spec for HTTP-based transport | Future option once spec stabilises |
+| Direction | Method | Action |
+|-----------|--------|--------|
+| IDE → Agent | `initialize`, `session/*`, etc. | Forward to agent stdin |
+| Agent → IDE | `session/update`, `session/request_permission` | Forward to IDE stdout |
+| Agent → IDE | `terminal/create` | **Intercept**: run command in sandbox via `docker exec` |
+| Agent → IDE | `terminal/output` | **Intercept**: return buffered output from sandbox exec |
+| Agent → IDE | `terminal/wait_for_exit` | **Intercept**: wait for sandbox exec to complete |
+| Agent → IDE | `terminal/kill` | **Intercept**: signal the sandbox exec process |
+| Agent → IDE | `terminal/release` | **Intercept**: clean up sandbox exec resources |
+| Agent → IDE | `fs/read_text_file` | **Intercept**: read file from sandbox filesystem |
+| Agent → IDE | `fs/write_text_file` | **Intercept**: write file in sandbox filesystem |
 
-**Recommendation:** Start with WebSocket. Each WebSocket connection maps to one
-agent session. Messages are newline-delimited JSON-RPC, identical to the stdio
-framing that ACP already defines.
+Everything else passes through unmodified. The bridge is transparent for the
+core conversation flow (`session/prompt`, `session/update`, etc.) and only
+interposes on sandbox-sensitive operations.
 
-### Transport: proxy ↔ sandbox agent
+### Initialize handshake
 
-The proxy starts the agent inside the sandbox via `docker exec` (or equivalent)
-and communicates over the exec session's stdin/stdout — exactly the stdio
-transport ACP was designed for. This is the simplest and most compatible
-approach: every ACP-compliant agent works unmodified.
+During `initialize`, the bridge must modify the response to advertise
+client capabilities for `terminal` and `fs`, since it handles these itself:
 
 ```
-IDE ──ws──▸ proxy ──docker exec stdin/stdout──▸ agent
-IDE ◂──ws── proxy ◂──docker exec stdin/stdout── agent
+IDE ── initialize ──▸ bridge ── initialize ──▸ agent
+IDE ◂── result ────── bridge ◂── result ────── agent
+                        │
+                        └─ patches clientCapabilities in the
+                           initialize request to include
+                           terminal: true, fs: true
 ```
+
+The agent sees a client that supports terminals and filesystem access. The IDE
+does not need to implement these capabilities.
 
 ### Session lifecycle
 
 ```
-IDE                         Proxy (ACP bridge)              Sandbox
+IDE                      vibepit acp (bridge)              Sandbox
  │                               │                              │
- │── WS connect ────────────────▸│                              │
- │   (mTLS handshake)           │                              │
+ │   (IDE spawns subprocess)     │                              │
  │                               │── docker exec agent ────────▸│
  │                               │   (stdin/stdout attached)    │
  │                               │                              │
  │── initialize ────────────────▸│── initialize ───────────────▸│
+ │                               │   (patches clientCapabilities│
+ │                               │    to add terminal + fs)     │
  │◂── initialize result ────────│◂── initialize result ────────│
  │                               │                              │
  │── session/new ───────────────▸│── session/new ──────────────▸│
@@ -120,176 +138,120 @@ IDE                         Proxy (ACP bridge)              Sandbox
  │◂── session/update (chunks) ──│◂── session/update (chunks) ──│
  │◂── session/update (tool) ────│◂── session/update (tool) ────│
  │                               │                              │
- │   (agent calls fs/read…)     │                              │
- │◂── fs/read_text_file ────────│◂── fs/read_text_file ────────│
- │── fs/read result ────────────▸│── fs/read result ───────────▸│
+ │   (agent wants to run cmd)   │                              │
+ │                               │◂── terminal/create ─────────│
+ │                               │── docker exec <cmd> ────────▸│
+ │                               │── terminal/create result ───▸│
+ │                               │                              │
+ │                               │◂── terminal/wait_for_exit ──│
+ │                               │   (waits for exec to finish) │
+ │                               │── wait result ──────────────▸│
  │                               │                              │
  │◂── session/prompt result ────│◂── session/prompt result ────│
  │                               │                              │
- │── WS close ──────────────────▸│── signal / close stdin ─────▸│
+ │   (IDE closes stdin)          │── signal agent ─────────────▸│
  │                               │                              │
 ```
 
-The proxy is a transparent bidirectional relay — it forwards JSON-RPC messages
-in both directions without interpreting their contents, with two exceptions:
+### Terminal handling in detail
 
-1. **`fs/read_text_file` and `fs/write_text_file`** — When the agent calls
-   these client methods, the proxy can intercept and serve them directly from
-   the sandbox filesystem (via `docker exec cat` or similar) instead of
-   forwarding to the IDE. This keeps file I/O inside the sandbox and avoids
-   exposing host paths. Alternatively, these can be forwarded to the IDE if the
-   use case requires host-side file access.
+The bridge maintains a map of `terminalId` → exec session:
 
-2. **`terminal/*` methods** — Similarly, terminal operations can be handled
-   inside the sandbox rather than forwarded to the IDE.
+```go
+type terminalState struct {
+    execID     string       // docker exec ID
+    output     bytes.Buffer // captured output
+    exitCode   *int         // nil while running
+    cancel     func()       // cancel context to kill
+}
+```
+
+- **`terminal/create`**: Starts `docker exec` in the sandbox with the
+  requested command, args, env, and cwd. Returns a `terminalId` immediately.
+  Output is captured in background.
+- **`terminal/output`**: Returns buffered output and truncation status.
+- **`terminal/wait_for_exit`**: Blocks on the exec process. Returns exit code.
+- **`terminal/kill`**: Sends signal to the exec process.
+- **`terminal/release`**: Kills process if still running, cleans up state.
+
+### Filesystem handling in detail
+
+- **`fs/read_text_file`**: Reads from the sandbox filesystem via
+  `docker exec cat <path>` or the container client's exec API.
+- **`fs/write_text_file`**: Writes via `docker exec tee <path>` or equivalent.
+
+All paths are resolved within the sandbox — the bridge never accesses host
+filesystem paths.
 
 ### Configuration
 
-Extend `ProxyConfig` with ACP settings:
-
-```go
-type ProxyConfig struct {
-    // ... existing fields ...
-    ACPPort    int    `json:"acp-port"`    // 0 = disabled
-    ACPAgent   string `json:"acp-agent"`   // agent command, e.g. "claude"
-    ACPAgentArgs []string `json:"acp-agent-args"` // e.g. ["--acp"]
-}
-```
-
-The `run` command gains flags:
-
-```
-vibepit run --acp                    # enable ACP endpoint
-vibepit run --acp-agent claude       # specify which agent to launch
-vibepit run --acp-port 9444          # override default port
-```
-
-When `--acp` is set, the proxy container publishes the ACP port to
-`127.0.0.1`, and the CLI prints connection details:
-
-```
-ACP endpoint: wss://127.0.0.1:9444  (mTLS)
-```
-
-### Authentication
-
-Reuse the existing mTLS infrastructure:
-
-- The proxy already generates an ephemeral CA + server/client cert pair per
-  session.
-- The IDE needs the CA cert and client cert/key to connect.
-- These are already written to `$XDG_RUNTIME_DIR/vibepit/<sessionID>/`.
-
-For IDEs that don't support mTLS natively, offer a local plaintext fallback:
-
-```
-vibepit run --acp --acp-no-tls     # listen on 127.0.0.1 without TLS
-```
-
-Since the port is bound to localhost only, the security boundary is the host
-OS's process isolation (same trust model as LSP servers).
-
-### Handling client-side capabilities
-
-ACP agents may request capabilities that normally live on the client side:
-
-| Capability | Strategy |
-|------------|----------|
-| `fs/read_text_file` | Intercept in proxy, read from sandbox via exec. The agent already has direct filesystem access in the sandbox so this is mainly for protocol compliance. |
-| `fs/write_text_file` | Same — proxy writes to sandbox filesystem. |
-| `terminal/*` | Proxy creates exec sessions in the sandbox container. |
-| `session/request_permission` | Forward to IDE — the user must approve tool use. |
-
-This means the proxy can advertise full filesystem and terminal capabilities
-during `initialize`, even though these are handled server-side rather than by
-the IDE client.
-
-### Multiple agents / sessions
-
-- Each WebSocket connection corresponds to one agent process.
-- Multiple connections can run concurrently (multiple IDE windows, different
-  agents).
-- The proxy manages a map of WebSocket connection → exec session.
-- When a WebSocket closes, the proxy signals the agent process to exit.
-
-### IDE configuration
-
-For an IDE to connect, it needs:
-
-1. The ACP endpoint URL (printed by `vibepit run`).
-2. mTLS credentials (or no-TLS mode).
-3. The agent's advertised capabilities (discovered via `initialize`).
-
-A `vibepit ide-config` command could emit a JSON config suitable for IDE
-plugins:
+The IDE configures the bridge as a standard ACP agent subprocess:
 
 ```json
 {
-  "transport": "websocket",
-  "url": "wss://127.0.0.1:9444",
-  "tls": {
-    "ca": "/run/user/1000/vibepit/abc123/ca.pem",
-    "cert": "/run/user/1000/vibepit/abc123/client-cert.pem",
-    "key": "/run/user/1000/vibepit/abc123/client-key.pem"
-  }
+  "command": "vibepit",
+  "args": ["acp", "--agent", "claude"]
 }
 ```
 
+CLI flags for `vibepit acp`:
+
+```
+vibepit acp                          # auto-detect agent and session
+vibepit acp --agent claude           # specify agent command
+vibepit acp --agent-args "--acp"     # pass args to agent
+vibepit acp --session <id>           # target specific session
+```
+
+Session discovery reuses the existing `ListProxySessions()` from
+`cmd/session.go`. If only one session is running, it is selected automatically.
+
 ## Implementation Plan
 
-### Phase 1: Transparent relay
+### Phase 1: Protocol-aware bridge
 
-1. Add `proxy/acp.go` — WebSocket server that accepts connections, spawns an
-   agent via `docker exec` in the sandbox, and relays JSON-RPC messages
-   bidirectionally between the WebSocket and the exec stdin/stdout.
-2. Wire the ACP service into `proxy/server.go` as a fourth goroutine.
-3. Add `acp-port`, `acp-agent` to `ProxyConfig`.
-4. Add `--acp` flags to the `run` command.
-5. Publish the ACP port to `127.0.0.1` like the control API port.
+1. Add `cmd/acp.go` — the `vibepit acp` command.
+2. Session discovery: find the running sandbox container.
+3. Agent launch: `docker exec -i <sandbox> <agent>` with stdin/stdout.
+4. Message parsing: line-delimited JSON-RPC router that classifies messages
+   by method.
+5. Forwarding: pass-through for all non-intercepted methods.
+6. `terminal/*` interception: manage exec sessions in the sandbox.
+7. `fs/*` interception: read/write files in the sandbox.
+8. `initialize` patching: inject `terminal` and `fs` client capabilities.
 
-This gets basic IDE → agent connectivity working. All ACP messages pass through
-unmodified.
+### Phase 2: Polish
 
-### Phase 2: Sandbox-local file and terminal handling
+1. Multiple concurrent terminals (map of terminalId → exec session).
+2. Output byte limiting and truncation per ACP spec.
+3. Graceful shutdown: clean up exec sessions when IDE disconnects.
+4. `session/load` support for resuming agent sessions.
+5. Error handling: surface container exec failures as JSON-RPC errors.
 
-1. Intercept `fs/read_text_file` and `fs/write_text_file` in the proxy,
-   fulfilling them from the sandbox filesystem.
-2. Intercept `terminal/*` methods, creating exec sessions in the sandbox.
-3. Advertise these capabilities during `initialize` so agents can use them
-   without requiring IDE-side implementations.
+### Phase 3: Remote IDE support (optional)
 
-### Phase 3: IDE integration polish
+If remote IDE access becomes a requirement, add a WebSocket/mTLS endpoint in
+the proxy container that speaks the same protocol. The proxy would run the
+same bridge logic, but over a network transport instead of stdio. This is
+additive — the CLI command continues to work for local IDEs.
 
-1. `vibepit ide-config` command to emit connection details.
-2. Editor plugin examples (VS Code extension, Neovim plugin) showing how to
-   connect.
-3. `--acp-no-tls` for IDEs that don't support mTLS.
-4. Session resume support (`session/load`).
-
-### Phase 4: Streamable HTTP transport
-
-Once the ACP streamable HTTP spec stabilises, add it as an alternative to
-WebSocket for environments where WebSocket is inconvenient (corporate proxies,
-etc.).
-
-## Key Decisions and Trade-offs
+## Key Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| Bridge in proxy, not sandbox | Proxy already has host-facing ports and mTLS. Sandbox stays image-agnostic. |
-| WebSocket over HTTP | Full-duplex maps naturally to bidirectional JSON-RPC. Lower latency than polling. |
-| Transparent relay first | Gets working fast, no protocol interpretation needed, any ACP agent works. |
-| Reuse mTLS | No new auth mechanism. Same security model as control API. |
-| `docker exec` for agent spawn | Uses existing container client code. Agent gets stdio transport for free. |
-| Intercept fs/terminal later | Phase 1 works without it (agents can use the sandbox filesystem directly). |
+| CLI command, not proxy service | stdio is ACP's native transport. No new infrastructure needed. |
+| Intercept `terminal/*` and `fs/*` | These are client-side methods that would escape the sandbox if forwarded to the IDE. |
+| Forward `session/request_permission` to IDE | The user must approve tool use — this stays in the IDE where the user is. |
+| `docker exec` for both agent and terminals | Reuses existing container client code. Consistent execution model. |
+| Patch `initialize` capabilities | Agent sees full client support without requiring IDE-side implementations. |
 
 ## Open Questions
 
-1. **Agent discovery** — Should the proxy auto-detect which agents are installed
-   in the sandbox, or require explicit configuration?
-2. **Multiple agents per session** — Should one WebSocket support switching
-   between agents, or one connection = one agent?
-3. **Streamable HTTP priority** — If major IDEs adopt streamable HTTP before
-   WebSocket, should we skip WebSocket and go straight to HTTP?
-4. **Host file access** — Should `fs/*` ever reach the IDE for host-side files,
-   or always stay sandboxed?
+1. **Agent discovery** — Should `vibepit acp` auto-detect installed agents in
+   the sandbox, or always require `--agent`?
+2. **Permission forwarding** — Should `session/request_permission` be
+   auto-approved (the sandbox is already isolated) or always forwarded to the
+   IDE for user confirmation?
+3. **Output streaming** — Should `terminal/output` stream incrementally or
+   only return on poll? The ACP spec uses polling, but streaming would be more
+   responsive.
