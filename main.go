@@ -14,8 +14,7 @@ func main() {
 	app := cmd.RootCommand()
 
 	if err := app.Run(context.Background(), os.Args); err != nil {
-		var exitErr *ctr.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*ctr.ExitError](err); ok {
 			os.Exit(exitErr.Code)
 		}
 		tui.Error("%v", err)
