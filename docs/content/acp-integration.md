@@ -7,35 +7,42 @@ agents running inside a Vibepit sandbox.
 ## Goal
 
 An IDE on the host launches `vibepit acp` as a local subprocess. This command
-execs into the running sandbox to start the agent, and acts as a protocol-aware
-bridge between the IDE and the sandboxed agent. The agent works against the
-sandboxed project directory while the IDE renders streaming updates, plans, and
-permission prompts.
+does a single `docker exec` into the sandbox to run `vibepit acp-intercept`,
+which starts the agent and handles all intercepted operations (terminals,
+filesystem) directly inside the sandbox — no per-command `docker exec` needed.
+The IDE renders streaming updates, plans, and permission prompts.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Host                                                            │
-│                                                                 │
-│  ┌──────────┐   stdio        ┌──────────────┐                  │
-│  │   IDE    │ ──────────────▸│ vibepit acp  │                  │
-│  │ (client) │◂──────────────│ (bridge)      │                  │
-│  └──────────┘   JSON-RPC    │              │                  │
-│                              │  intercepts: │                  │
-│                              │  • terminal/* │                  │
-│                              │  • fs/*       │                  │
-│                              └──────┬───────┘                  │
-│                                     │ docker exec              │
-│                                     │ stdin/stdout             │
-│                              ┌──────┼───────┐                  │
-│                              │ Sandbox      │                  │
-│                              │  ┌───▼─────┐ │                  │
-│                              │  │  Agent  │ │                  │
-│                              │  │ (claude,│ │                  │
-│                              │  │ codex,…)│ │                  │
-│                              │  └─────────┘ │                  │
-│                              └──────────────┘                  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Host                                                              │
+│                                                                   │
+│  ┌──────────┐  stdio   ┌──────────────┐                          │
+│  │   IDE    │ ────────▸│ vibepit acp  │                          │
+│  │ (client) │◂────────│ (host shim)  │                          │
+│  └──────────┘  JSON-RPC└──────┬───────┘                          │
+│                               │ single docker exec               │
+│                               │ stdin/stdout                     │
+│                        ┌──────┼──────────────────────────┐       │
+│                        │ Sandbox                         │       │
+│                        │  ┌───▼────────────────────────┐ │       │
+│                        │  │ vibepit acp-intercept      │ │       │
+│                        │  │                            │ │       │
+│                        │  │  intercepts:               │ │       │
+│                        │  │  • terminal/* → os/exec    │ │       │
+│                        │  │  • fs/*       → os file I/O│ │       │
+│                        │  │                            │ │       │
+│                        │  │  ┌────────────────────┐    │ │       │
+│                        │  │  │  Agent (claude, …) │    │ │       │
+│                        │  │  │  stdin/stdout pipe │    │ │       │
+│                        │  │  └────────────────────┘    │ │       │
+│                        │  └────────────────────────────┘ │       │
+│                        └─────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+The vibepit binary is bind-mounted into the sandbox container at startup
+(read-only), so `acp-intercept` is available without modifying the sandbox
+image.
 
 ## ACP Protocol Summary
 
@@ -59,22 +66,36 @@ sends requests to the IDE asking it to execute commands and read/write files.
 In a naive stdio pipe, these requests would reach the IDE and execute on the
 **host**, outside the sandbox. This defeats Vibepit's isolation model.
 
-The `vibepit acp` bridge must intercept these methods and fulfill them inside
-the sandbox container instead of forwarding them to the IDE.
+The interceptor running inside the sandbox handles these methods directly using
+native system calls (`os/exec` for terminals, `os` file I/O for filesystem),
+keeping all tool execution sandboxed.
 
 ## Design
 
-### Architecture: CLI command, not a proxy service
+### Architecture: two-part CLI command
 
-The bridge is a `vibepit acp` CLI command, not a new service in the proxy
-container. Rationale:
+The bridge has two halves:
 
-1. **ACP's primary transport is stdio** — IDEs already know how to spawn a
-   subprocess and talk JSON-RPC over stdin/stdout. No WebSocket, no mTLS, no
-   new ports.
-2. **Simpler** — A single command that execs into the sandbox. No proxy
-   changes, no container image changes.
-3. **Standard** — The IDE configures it exactly like any other local ACP agent.
+1. **`vibepit acp`** (runs on host) — Thin shim that the IDE spawns as a
+   subprocess. It does a single `docker exec` into the sandbox to start
+   `vibepit acp-intercept`, then relays stdio between the IDE and the exec
+   session. It has no protocol awareness — it is a byte pipe.
+
+2. **`vibepit acp-intercept`** (runs inside sandbox) — The protocol-aware
+   interceptor. It starts the agent as a child process, parses JSON-RPC
+   messages, and intercepts `terminal/*` and `fs/*` methods. Intercepted
+   operations run directly inside the sandbox using native Go APIs (`os/exec`,
+   `os` file I/O). Everything else is forwarded between the IDE and the agent.
+
+Rationale:
+
+1. **ACP's primary transport is stdio** — IDEs spawn a subprocess and talk
+   JSON-RPC over stdin/stdout. No WebSocket, no mTLS, no new ports.
+2. **No per-command docker exec** — Terminals and file operations run natively
+   inside the sandbox. Only one `docker exec` is needed for the entire session.
+3. **No image changes** — The vibepit binary is bind-mounted into the sandbox
+   at startup (read-only). No new dependencies in the sandbox image.
+4. **Standard** — The IDE configures it exactly like any other local ACP agent.
 
 The proxy-based approach (WebSocket, mTLS) would only be needed for remote IDE
 access, which is a separate feature.
@@ -87,30 +108,30 @@ The bridge parses each JSON-RPC message and routes it:
 |-----------|--------|--------|
 | IDE → Agent | `initialize`, `session/*`, etc. | Forward to agent stdin |
 | Agent → IDE | `session/update`, `session/request_permission` | Forward to IDE stdout |
-| Agent → IDE | `terminal/create` | **Intercept**: run command in sandbox via `docker exec` |
-| Agent → IDE | `terminal/output` | **Intercept**: return buffered output from sandbox exec |
-| Agent → IDE | `terminal/wait_for_exit` | **Intercept**: wait for sandbox exec to complete |
-| Agent → IDE | `terminal/kill` | **Intercept**: signal the sandbox exec process |
-| Agent → IDE | `terminal/release` | **Intercept**: clean up sandbox exec resources |
-| Agent → IDE | `fs/read_text_file` | **Intercept**: read file from sandbox filesystem |
-| Agent → IDE | `fs/write_text_file` | **Intercept**: write file in sandbox filesystem |
+| Agent → IDE | `terminal/create` | **Intercept**: `os/exec.Command()` in sandbox |
+| Agent → IDE | `terminal/output` | **Intercept**: return buffered output |
+| Agent → IDE | `terminal/wait_for_exit` | **Intercept**: `cmd.Wait()` |
+| Agent → IDE | `terminal/kill` | **Intercept**: `cmd.Process.Signal()` |
+| Agent → IDE | `terminal/release` | **Intercept**: kill + clean up |
+| Agent → IDE | `fs/read_text_file` | **Intercept**: `os.ReadFile()` |
+| Agent → IDE | `fs/write_text_file` | **Intercept**: `os.WriteFile()` |
 
-Everything else passes through unmodified. The bridge is transparent for the
-core conversation flow (`session/prompt`, `session/update`, etc.) and only
+Everything else passes through unmodified. The interceptor is transparent for
+the core conversation flow (`session/prompt`, `session/update`, etc.) and only
 interposes on sandbox-sensitive operations.
 
 ### Initialize handshake
 
-During `initialize`, the bridge must modify the response to advertise
+During `initialize`, the interceptor modifies the request to advertise
 client capabilities for `terminal` and `fs`, since it handles these itself:
 
 ```
-IDE ── initialize ──▸ bridge ── initialize ──▸ agent
-IDE ◂── result ────── bridge ◂── result ────── agent
-                        │
-                        └─ patches clientCapabilities in the
-                           initialize request to include
-                           terminal: true, fs: true
+IDE ── initialize ──▸ interceptor ── initialize ──▸ agent
+IDE ◂── result ────── interceptor ◂── result ────── agent
+                           │
+                           └─ patches clientCapabilities in the
+                              initialize request to include
+                              terminal: true, fs: true
 ```
 
 The agent sees a client that supports terminals and filesystem access. The IDE
@@ -119,69 +140,82 @@ does not need to implement these capabilities.
 ### Session lifecycle
 
 ```
-IDE                      vibepit acp (bridge)              Sandbox
- │                               │                              │
- │   (IDE spawns subprocess)     │                              │
- │                               │── docker exec agent ────────▸│
- │                               │   (stdin/stdout attached)    │
- │                               │                              │
- │── initialize ────────────────▸│── initialize ───────────────▸│
- │                               │   (patches clientCapabilities│
- │                               │    to add terminal + fs)     │
- │◂── initialize result ────────│◂── initialize result ────────│
- │                               │                              │
- │── session/new ───────────────▸│── session/new ──────────────▸│
- │◂── session/new result ───────│◂── session/new result ───────│
- │                               │                              │
- │── session/prompt ────────────▸│── session/prompt ───────────▸│
- │◂── session/update (plan) ────│◂── session/update (plan) ────│
- │◂── session/update (chunks) ──│◂── session/update (chunks) ──│
- │◂── session/update (tool) ────│◂── session/update (tool) ────│
- │                               │                              │
- │   (agent wants to run cmd)   │                              │
- │                               │◂── terminal/create ─────────│
- │                               │── docker exec <cmd> ────────▸│
- │                               │── terminal/create result ───▸│
- │                               │                              │
- │                               │◂── terminal/wait_for_exit ──│
- │                               │   (waits for exec to finish) │
- │                               │── wait result ──────────────▸│
- │                               │                              │
- │◂── session/prompt result ────│◂── session/prompt result ────│
- │                               │                              │
- │   (IDE closes stdin)          │── signal agent ─────────────▸│
- │                               │                              │
+IDE              vibepit acp          vibepit acp-intercept (in sandbox)
+ │               (host shim)                    │
+ │                    │                         │
+ │  (IDE spawns       │                         │
+ │   subprocess)      │── docker exec ─────────▸│
+ │                    │   vibepit acp-intercept  │
+ │                    │                         │── starts agent
+ │                    │                         │   (child process)
+ │                    │                         │
+ │── initialize ─────▸│─── relay ──────────────▸│── initialize ──▸ agent
+ │                    │                         │   (patches caps)
+ │◂── result ────────│◂── relay ───────────────│◂── result ────── agent
+ │                    │                         │
+ │── session/prompt ─▸│─── relay ──────────────▸│── forward ─────▸ agent
+ │◂── session/update─│◂── relay ───────────────│◂── forward ───── agent
+ │                    │                         │
+ │                    │   (agent wants to       │
+ │                    │    run a command)        │
+ │                    │                         │◂── terminal/create
+ │                    │                         │    agent
+ │                    │                         │── os/exec <cmd>
+ │                    │                         │── result ──────▸ agent
+ │                    │                         │
+ │◂── prompt result──│◂── relay ───────────────│◂── prompt result  agent
+ │                    │                         │
+ │  (IDE closes       │                         │
+ │   stdin)           │── EOF ─────────────────▸│── signal agent
+ │                    │                         │
 ```
+
+Note how the host shim (`vibepit acp`) is a simple byte relay — all protocol
+logic lives in `acp-intercept` inside the sandbox.
 
 ### Terminal handling in detail
 
-The bridge maintains a map of `terminalId` → exec session:
+The interceptor maintains a map of `terminalId` → process:
 
 ```go
 type terminalState struct {
-    execID     string       // docker exec ID
-    output     bytes.Buffer // captured output
-    exitCode   *int         // nil while running
-    cancel     func()       // cancel context to kill
+    cmd      *exec.Cmd
+    output   bytes.Buffer // captured stdout+stderr
+    exitCode *int         // nil while running
+    cancel   func()       // cancel context to kill
 }
 ```
 
-- **`terminal/create`**: Starts `docker exec` in the sandbox with the
-  requested command, args, env, and cwd. Returns a `terminalId` immediately.
-  Output is captured in background.
+Since the interceptor runs inside the sandbox, terminal operations are native:
+
+- **`terminal/create`**: Starts the command via `os/exec.CommandContext()` with
+  the requested command, args, env, and cwd. Returns a `terminalId`
+  immediately. Output is captured in background goroutine.
 - **`terminal/output`**: Returns buffered output and truncation status.
-- **`terminal/wait_for_exit`**: Blocks on the exec process. Returns exit code.
-- **`terminal/kill`**: Sends signal to the exec process.
+- **`terminal/wait_for_exit`**: Calls `cmd.Wait()`. Returns exit code.
+- **`terminal/kill`**: Calls `cmd.Process.Signal()`.
 - **`terminal/release`**: Kills process if still running, cleans up state.
+
+No `docker exec` per command — processes are direct children of the
+interceptor.
 
 ### Filesystem handling in detail
 
-- **`fs/read_text_file`**: Reads from the sandbox filesystem via
-  `docker exec cat <path>` or the container client's exec API.
-- **`fs/write_text_file`**: Writes via `docker exec tee <path>` or equivalent.
+- **`fs/read_text_file`**: `os.ReadFile(path)` — direct filesystem access.
+- **`fs/write_text_file`**: `os.WriteFile(path, data, perm)` — direct write.
 
-All paths are resolved within the sandbox — the bridge never accesses host
-filesystem paths.
+All paths are naturally sandboxed because the interceptor runs inside the
+container. No path translation or escaping is needed.
+
+### Binary mounting
+
+The `run` command bind-mounts the vibepit binary into the sandbox container at
+a well-known path (e.g. `/usr/local/bin/vibepit`) as read-only. This makes
+`acp-intercept` available inside the sandbox without modifying the image.
+
+The binary is the same `vibepit` binary running on the host. On Linux hosts
+this works directly. On macOS hosts, the existing cross-compiled Linux binary
+(used for the proxy container) is mounted instead.
 
 ### Configuration
 
@@ -194,7 +228,7 @@ The IDE configures the bridge as a standard ACP agent subprocess:
 }
 ```
 
-CLI flags for `vibepit acp`:
+CLI flags for `vibepit acp` (host side):
 
 ```
 vibepit acp                          # auto-detect agent and session
@@ -203,36 +237,49 @@ vibepit acp --agent-args "--acp"     # pass args to agent
 vibepit acp --session <id>           # target specific session
 ```
 
+`vibepit acp` discovers the running session, then runs:
+
+```
+docker exec -i <sandbox> vibepit acp-intercept --agent <agent> [--agent-args ...]
+```
+
+`vibepit acp-intercept` (sandbox side) is an internal command not intended for
+direct use. It starts the agent, runs the JSON-RPC interceptor, and exits when
+stdin closes.
+
 Session discovery reuses the existing `ListProxySessions()` from
 `cmd/session.go`. If only one session is running, it is selected automatically.
 
 ## Implementation Plan
 
-### Phase 1: Protocol-aware bridge
+### Phase 1: Protocol-aware interceptor
 
-1. Add `cmd/acp.go` — the `vibepit acp` command.
-2. Session discovery: find the running sandbox container.
-3. Agent launch: `docker exec -i <sandbox> <agent>` with stdin/stdout.
-4. Message parsing: line-delimited JSON-RPC router that classifies messages
+1. Add `cmd/acp.go` — the `vibepit acp` host shim. Discovers session, runs
+   `docker exec -i <sandbox> vibepit acp-intercept ...`, relays stdio.
+2. Add `cmd/acp_intercept.go` — the `vibepit acp-intercept` command that runs
+   inside the sandbox.
+3. Bind-mount the vibepit binary into the sandbox in `cmd/run.go`.
+4. Agent launch: start the agent as a child process with piped stdin/stdout.
+5. Message parsing: line-delimited JSON-RPC router that classifies messages
    by method.
-5. Forwarding: pass-through for all non-intercepted methods.
-6. `terminal/*` interception: manage exec sessions in the sandbox.
-7. `fs/*` interception: read/write files in the sandbox.
-8. `initialize` patching: inject `terminal` and `fs` client capabilities.
+6. Forwarding: pass-through for all non-intercepted methods.
+7. `terminal/*` interception: manage child processes via `os/exec`.
+8. `fs/*` interception: read/write files via `os` package.
+9. `initialize` patching: inject `terminal` and `fs` client capabilities.
 
 ### Phase 2: Polish
 
-1. Multiple concurrent terminals (map of terminalId → exec session).
+1. Multiple concurrent terminals (map of terminalId → `*exec.Cmd`).
 2. Output byte limiting and truncation per ACP spec.
-3. Graceful shutdown: clean up exec sessions when IDE disconnects.
+3. Graceful shutdown: kill child processes when stdin closes.
 4. `session/load` support for resuming agent sessions.
-5. Error handling: surface container exec failures as JSON-RPC errors.
+5. Error handling: surface process failures as JSON-RPC errors.
 
 ### Phase 3: Remote IDE support (optional)
 
 If remote IDE access becomes a requirement, add a WebSocket/mTLS endpoint in
 the proxy container that speaks the same protocol. The proxy would run the
-same bridge logic, but over a network transport instead of stdio. This is
+same interceptor logic, but over a network transport instead of stdio. This is
 additive — the CLI command continues to work for local IDEs.
 
 ## Key Decisions
@@ -240,9 +287,11 @@ additive — the CLI command continues to work for local IDEs.
 | Decision | Rationale |
 |----------|-----------|
 | CLI command, not proxy service | stdio is ACP's native transport. No new infrastructure needed. |
+| Interceptor inside sandbox | Terminal and fs operations are native (no per-command docker exec). Only one docker exec for the entire session. |
+| Bind-mount vibepit binary | No sandbox image changes needed. Same binary, read-only mount. |
+| Two-part command (shim + interceptor) | Host shim is trivial (byte pipe). All protocol logic runs sandboxed. |
 | Intercept `terminal/*` and `fs/*` | These are client-side methods that would escape the sandbox if forwarded to the IDE. |
 | Forward `session/request_permission` to IDE | The user must approve tool use — this stays in the IDE where the user is. |
-| `docker exec` for both agent and terminals | Reuses existing container client code. Consistent execution model. |
 | Patch `initialize` capabilities | Agent sees full client support without requiring IDE-side implementations. |
 
 ## Open Questions
