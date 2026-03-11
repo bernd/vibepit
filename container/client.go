@@ -47,6 +47,8 @@ const (
 	LinuxbrewMountPath = "/home/linuxbrew"
 	ContainerHostname  = "vibes"
 
+	SandboxBinaryPath = "/usr/local/bin/vibepit"
+
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
 	LabelControlPort = "vibepit.control-port"
 )
@@ -611,6 +613,7 @@ type SandboxContainerConfig struct {
 	ColorTerm           string
 	UID                 int
 	User                string
+	BinaryPath          string // Host path to vibepit binary (mounted read-only into sandbox)
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -661,6 +664,9 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		}
 		binds = append(binds, mavenSettings+":/etc/vibepit/maven-settings.xml:ro")
 		env = append(env, `MAVEN_ARGS=--global-settings=/etc/vibepit/maven-settings.xml`)
+	}
+	if cfg.BinaryPath != "" {
+		binds = append(binds, cfg.BinaryPath+":"+SandboxBinaryPath+":ro")
 	}
 	if _, err := os.Stat("/etc/localtime"); err == nil {
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")
@@ -747,6 +753,63 @@ func (c *Client) EnsureVolume(ctx context.Context, name string, uid int, user st
 
 func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 	return c.docker.VolumeRemove(ctx, name, false)
+}
+
+// FindSandboxBySessionID returns the container ID of the sandbox container for
+// the given session ID, or an error if not found.
+func (c *Client) FindSandboxBySessionID(ctx context.Context, sessionID string) (string, error) {
+	name := "vibepit-sandbox-" + sessionID
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("name", name),
+			filters.Arg("label", LabelRole+"="+RoleSandbox),
+		),
+	})
+	if err != nil {
+		return "", fmt.Errorf("find sandbox: %w", err)
+	}
+	if len(containers) == 0 {
+		return "", fmt.Errorf("no sandbox container found for session %q", sessionID)
+	}
+	return containers[0].ID, nil
+}
+
+// ExecNonInteractive creates an exec session in the container with stdin/stdout
+// attached but no TTY. It returns the hijacked connection for the caller to use.
+func (c *Client) ExecNonInteractive(ctx context.Context, containerID string, cmd []string) (*HijackedExec, error) {
+	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+		Tty:          false,
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Cmd:          cmd,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("exec create: %w", err)
+	}
+
+	hijack, err := c.docker.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{
+		Tty: false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("exec attach: %w", err)
+	}
+
+	return &HijackedExec{
+		Conn:   hijack.Conn,
+		Reader: hijack.Reader,
+	}, nil
+}
+
+// HijackedExec wraps a hijacked connection from docker exec.
+type HijackedExec struct {
+	Conn   io.WriteCloser
+	Reader io.Reader
+}
+
+// Close closes the hijacked connection.
+func (h *HijackedExec) Close() error {
+	return h.Conn.Close()
 }
 
 // StreamLogs follows the container log output and copies it to the given writer.
