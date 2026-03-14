@@ -9,12 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,7 +68,7 @@ func TestMonitorScreen_WindowSizeMsg(t *testing.T) {
 
 func TestMonitorScreen_ViewContainsHeader(t *testing.T) {
 	_, w := makeTestSetup(0)
-	view := w.View()
+	view := w.View().Content
 	assert.Contains(t, view, "I PITY THE VIBES")
 }
 
@@ -140,9 +138,6 @@ func TestRenderLogLine_AllowStatuses(t *testing.T) {
 }
 
 func TestRenderLogLine_Highlighted(t *testing.T) {
-	lipgloss.DefaultRenderer().SetColorProfile(termenv.ANSI)
-	defer lipgloss.DefaultRenderer().SetColorProfile(termenv.Ascii)
-
 	item := logItem{
 		entry: proxy.LogEntry{
 			Domain: "example.com",
@@ -185,7 +180,7 @@ func TestMonitorScreen_FlashOnAlreadyAllowed(t *testing.T) {
 	s, w := makeTestSetup(5)
 	s.items[2].entry.Action = proxy.ActionAllow // not blocked
 	s.cursor.Pos = 2
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}}, w)
+	s.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}, w)
 	assert.Equal(t, "already allowed", w.Flash())
 }
 
@@ -193,42 +188,42 @@ func TestMonitorScreen_CursorNavigation(t *testing.T) {
 	t.Run("j moves cursor down", func(t *testing.T) {
 		s, w := makeTestSetup(20)
 		s.cursor.Pos = 5
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 		assert.Equal(t, 6, s.cursor.Pos)
 	})
 
 	t.Run("k moves cursor up", func(t *testing.T) {
 		s, w := makeTestSetup(20)
 		s.cursor.Pos = 5
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'k', Text: "k"}, w)
 		assert.Equal(t, 4, s.cursor.Pos)
 	})
 
 	t.Run("j at end stays at end", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		s.cursor.Pos = 4
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 		assert.Equal(t, 4, s.cursor.Pos)
 	})
 
 	t.Run("k at start stays at start", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		s.cursor.Pos = 0
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'k', Text: "k"}, w)
 		assert.Equal(t, 0, s.cursor.Pos)
 	})
 
 	t.Run("G jumps to end", func(t *testing.T) {
 		s, w := makeTestSetup(20)
 		s.cursor.Pos = 0
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'G', Text: "G"}, w)
 		assert.Equal(t, 19, s.cursor.Pos)
 	})
 
 	t.Run("g jumps to start", func(t *testing.T) {
 		s, w := makeTestSetup(20)
 		s.cursor.Pos = 15
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'g', Text: "g"}, w)
 		assert.Equal(t, 0, s.cursor.Pos)
 	})
 }
@@ -241,7 +236,7 @@ func TestMonitorScreen_Footer(t *testing.T) {
 		assert.Contains(t, descs, "navigate")
 		assert.Contains(t, descs, "jump")
 		// "quit" is added by Window, verify via full view
-		view := w.View()
+		view := w.View().Content
 		assert.Contains(t, view, "quit")
 	})
 
@@ -284,14 +279,14 @@ func TestMonitorScreen_Footer(t *testing.T) {
 	t.Run("shows connection error", func(t *testing.T) {
 		_, w := makeTestSetup(5)
 		w.SetError(fmt.Errorf("connection refused"))
-		view := w.View()
+		view := w.View().Content
 		assert.Contains(t, view, "connection refused")
 	})
 
 	t.Run("shows flash message", func(t *testing.T) {
 		_, w := makeTestSetup(5)
 		w.SetFlash("already allowed")
-		view := w.View()
+		view := w.View().Content
 		assert.Contains(t, view, "already allowed")
 	})
 
@@ -299,7 +294,7 @@ func TestMonitorScreen_Footer(t *testing.T) {
 		_, w := makeTestSetup(5)
 		w.SetError(fmt.Errorf("connection refused"))
 		w.SetFlash("already allowed")
-		view := w.View()
+		view := w.View().Content
 		assert.Contains(t, view, "connection refused")
 		assert.NotContains(t, view, "already allowed")
 	})
@@ -326,7 +321,7 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 		s, w := makeTestSetup(5)
 		s.cursor.Pos = 2
 		s.newCount = 10
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'G', Text: "G"}, w)
 		assert.Equal(t, 0, s.newCount)
 		assert.Equal(t, 4, s.cursor.Pos)
 	})
@@ -445,14 +440,14 @@ func TestMonitorScreen_EscReturnsSessionScreen(t *testing.T) {
 	stub := &testStubScreen{}
 	s.onBack = func() tui.Screen { return stub }
 
-	screen, _ := s.Update(tea.KeyMsg{Type: tea.KeyEscape}, w)
+	screen, _ := s.Update(tea.KeyPressMsg{Code: tea.KeyEscape}, w)
 	assert.Equal(t, stub, screen, "Esc should return the onBack screen")
 }
 
 func TestMonitorScreen_EscWithoutOnBack(t *testing.T) {
 	s, w := makeTestSetup(5)
 	// onBack is nil — Esc should be ignored.
-	screen, _ := s.Update(tea.KeyMsg{Type: tea.KeyEscape}, w)
+	screen, _ := s.Update(tea.KeyPressMsg{Code: tea.KeyEscape}, w)
 	assert.Equal(t, s, screen, "Esc without onBack should stay on monitor")
 }
 
@@ -502,10 +497,10 @@ func TestMonitorScreen_EscResetsHeader(t *testing.T) {
 	s.onBack = func() tui.Screen { return stub }
 
 	// Header currently shows session info.
-	s.Update(tea.KeyMsg{Type: tea.KeyEscape}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyEscape}, w)
 
 	// After Esc, header should be reset to selector mode.
-	view := w.View()
+	view := w.View().Content
 	assert.Contains(t, view, "session selector")
 }
 

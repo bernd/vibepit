@@ -3,63 +3,63 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCursor_HandleKey_Down(t *testing.T) {
 	c := Cursor{Pos: 2, ItemCount: 10, VpHeight: 5}
-	handled := c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	handled := c.HandleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	assert.True(t, handled)
 	assert.Equal(t, 3, c.Pos)
 }
 
 func TestCursor_HandleKey_Up(t *testing.T) {
 	c := Cursor{Pos: 3, ItemCount: 10, VpHeight: 5}
-	handled := c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	handled := c.HandleKey(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	assert.True(t, handled)
 	assert.Equal(t, 2, c.Pos)
 }
 
 func TestCursor_HandleKey_JumpEnd(t *testing.T) {
 	c := Cursor{Pos: 0, ItemCount: 10, VpHeight: 5}
-	c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	c.HandleKey(tea.KeyPressMsg{Code: 'G', Text: "G"})
 	assert.Equal(t, 9, c.Pos)
 }
 
 func TestCursor_HandleKey_JumpStart(t *testing.T) {
 	c := Cursor{Pos: 8, ItemCount: 10, VpHeight: 5}
-	c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	c.HandleKey(tea.KeyPressMsg{Code: 'g', Text: "g"})
 	assert.Equal(t, 0, c.Pos)
 }
 
 func TestCursor_HandleKey_PageDown(t *testing.T) {
 	c := Cursor{Pos: 0, ItemCount: 20, VpHeight: 5}
-	c.HandleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	c.HandleKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	assert.Equal(t, 5, c.Pos)
 }
 
 func TestCursor_HandleKey_PageUp(t *testing.T) {
 	c := Cursor{Pos: 8, ItemCount: 20, VpHeight: 5}
-	c.HandleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	c.HandleKey(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	assert.Equal(t, 3, c.Pos)
 }
 
 func TestCursor_HandleKey_BoundsDown(t *testing.T) {
 	c := Cursor{Pos: 9, ItemCount: 10, VpHeight: 5}
-	c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	c.HandleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	assert.Equal(t, 9, c.Pos)
 }
 
 func TestCursor_HandleKey_BoundsUp(t *testing.T) {
 	c := Cursor{Pos: 0, ItemCount: 10, VpHeight: 5}
-	c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	c.HandleKey(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	assert.Equal(t, 0, c.Pos)
 }
 
 func TestCursor_HandleKey_UnknownKey(t *testing.T) {
 	c := Cursor{Pos: 3, ItemCount: 10, VpHeight: 5}
-	handled := c.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	handled := c.HandleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	assert.False(t, handled)
 	assert.Equal(t, 3, c.Pos)
 }

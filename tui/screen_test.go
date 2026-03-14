@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -74,7 +74,7 @@ func TestWindow_ScreenSwitch(t *testing.T) {
 
 	w := NewWindow(&HeaderInfo{ProjectDir: "/test", SessionID: "abc123"}, s2)
 	w.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, _ := w.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := w.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	win := updated.(*Window)
 	assert.IsType(t, &stubScreen{}, win.screen)
 }

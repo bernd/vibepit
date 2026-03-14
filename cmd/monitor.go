@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	tea "charm.land/bubbletea/v2"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/urfave/cli/v3"
 )
 
@@ -91,7 +91,7 @@ func selectorHeader() *tui.HeaderInfo {
 
 func runTUI(header *tui.HeaderInfo, screen tui.Screen) error {
 	w := tui.NewWindow(header, screen)
-	p := tea.NewProgram(w, tea.WithAltScreen())
+	p := tea.NewProgram(w)
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("monitor UI: %w", err)
 	}

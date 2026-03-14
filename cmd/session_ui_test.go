@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,21 +67,21 @@ func TestSessionScreen_Navigation(t *testing.T) {
 	t.Run("j moves down", func(t *testing.T) {
 		s, w := makeSessionTestSetup(5)
 		assert.Equal(t, 0, s.Pos)
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 		assert.Equal(t, 1, s.Pos)
 	})
 
 	t.Run("k moves up from pos 1", func(t *testing.T) {
 		s, w := makeSessionTestSetup(5)
 		s.Pos = 1
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'k', Text: "k"}, w)
 		assert.Equal(t, 0, s.Pos)
 	})
 
 	t.Run("G jumps to end", func(t *testing.T) {
 		s, w := makeSessionTestSetup(5)
 		assert.Equal(t, 0, s.Pos)
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'G', Text: "G"}, w)
 		assert.Equal(t, 4, s.Pos)
 	})
 }
@@ -90,7 +90,7 @@ func TestSessionScreen_Selection(t *testing.T) {
 	t.Run("enter selects session and quits in standalone mode", func(t *testing.T) {
 		s, w := makeSessionTestSetup(3)
 		s.Pos = 1
-		_, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+		_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, w)
 		require.NotNil(t, s.selected)
 		assert.Equal(t, "/home/user/project1", s.selected.ProjectDir)
 		assert.Equal(t, "session1-abcdef12", s.selected.SessionID)
@@ -111,7 +111,7 @@ func TestSessionScreen_Selection(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 		s.Pos = 2
-		screen, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+		screen, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, w)
 		assert.Equal(t, s, screen, "screen should not switch until async callback returns")
 		require.NotNil(t, cmd)
 		require.Nil(t, gotInfo, "onSelect callback should run asynchronously via tea.Cmd")
@@ -136,7 +136,7 @@ func TestSessionScreen_Footer(t *testing.T) {
 
 func TestSessionScreen_View(t *testing.T) {
 	_, w := makeSessionTestSetup(3)
-	view := w.View()
+	view := w.View().Content
 	assert.Contains(t, view, "/home/user/project0")
 	assert.Contains(t, view, "/home/user/project1")
 	assert.Contains(t, view, "/home/user/project2")
@@ -160,7 +160,7 @@ func TestSessionScreen_OnSelectError(t *testing.T) {
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	s.Pos = 0
-	newScreen, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+	newScreen, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, w)
 	// Should stay on session screen while async callback is pending
 	assert.Equal(t, s, newScreen)
 	require.NotNil(t, cmd)

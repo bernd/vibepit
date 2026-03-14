@@ -6,10 +6,10 @@ import (
 	"slices"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // presetItem is either a section header or a toggleable preset entry.
@@ -204,11 +204,11 @@ func (s *presetScreen) includedBy(name string) string {
 
 func (s *presetScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		lines := s.buildVisibleLines()
 
 		switch msg.String() {
-		case " ":
+		case "space":
 			if s.Pos >= 0 && s.Pos < len(lines) && lines[s.Pos].kind == linePreset {
 				item := s.items[lines[s.Pos].itemIdx]
 				if parent := s.includedBy(item.presetName); parent != "" {
@@ -439,7 +439,7 @@ func runPresetSelectorTUI(preChecked map[string]bool, detected []string) ([]stri
 	s := newPresetScreen(preChecked, detected)
 	header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "setup"}
 	w := tui.NewWindow(header, s)
-	p := tea.NewProgram(w, tea.WithAltScreen())
+	p := tea.NewProgram(w)
 	if _, err := p.Run(); err != nil {
 		return nil, fmt.Errorf("preset selector: %w", err)
 	}

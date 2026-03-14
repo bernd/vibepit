@@ -4,9 +4,9 @@ import (
 	"maps"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,7 +114,7 @@ func TestPresetScreen_NavigationVisitsHeaders(t *testing.T) {
 			visitedHeader = true
 			break
 		}
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 	}
 	assert.True(t, visitedHeader, "should visit section headers")
 }
@@ -128,7 +128,7 @@ func TestPresetScreen_NavigationVisitsAllVisibleLines(t *testing.T) {
 	visited := make(map[int]bool)
 	for range len(lines) + 5 {
 		visited[s.Pos] = true
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 	}
 
 	for i := range lines {
@@ -139,10 +139,10 @@ func TestPresetScreen_NavigationVisitsAllVisibleLines(t *testing.T) {
 func TestPresetScreen_GJumps(t *testing.T) {
 	s, w := makePresetTestSetup()
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}}, w)
+	s.Update(tea.KeyPressMsg{Code: 'G', Text: "G"}, w)
 	assert.Equal(t, s.ItemCount-1, s.Pos)
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}, w)
+	s.Update(tea.KeyPressMsg{Code: 'g', Text: "g"}, w)
 	assert.Equal(t, 0, s.Pos)
 }
 
@@ -157,17 +157,17 @@ func TestPresetScreen_Toggle(t *testing.T) {
 	name := s.items[lines[s.Pos].itemIdx].presetName
 	wasChecked := s.checked[name]
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)
+	s.Update(tea.KeyPressMsg{Code: ' ', Text: " "}, w)
 	assert.NotEqual(t, wasChecked, s.checked[name])
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)
+	s.Update(tea.KeyPressMsg{Code: ' ', Text: " "}, w)
 	assert.Equal(t, wasChecked, s.checked[name])
 }
 
 func TestPresetScreen_Confirm(t *testing.T) {
 	s, w := makePresetTestSetup()
 
-	_, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+	_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, w)
 	assert.NotNil(t, cmd, "enter should return quit cmd")
 	assert.NotNil(t, s.selected)
 	assert.Contains(t, s.selected, "default")
@@ -177,14 +177,14 @@ func TestPresetScreen_Confirm(t *testing.T) {
 func TestPresetScreen_QuitWithoutSelection(t *testing.T) {
 	s, w := makePresetTestSetup()
 
-	_, cmd := s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}}, w)
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'q', Text: "q"}, w)
 	assert.NotNil(t, cmd, "q should return quit cmd")
 	assert.Nil(t, s.selected)
 }
 
 func TestPresetScreen_View(t *testing.T) {
 	_, w := makePresetTestSetup()
-	view := w.View()
+	view := w.View().Content
 	assert.Contains(t, view, "Select network presets")
 	assert.Contains(t, view, "Detected")
 	assert.Contains(t, view, "pkg-go")
@@ -200,7 +200,7 @@ func TestPresetScreen_IncludedByBlocksToggle(t *testing.T) {
 
 	assert.False(t, s.checked["anthropic"])
 	assert.NotEmpty(t, s.includedBy("anthropic"))
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)
+	s.Update(tea.KeyPressMsg{Code: ' ', Text: " "}, w)
 	assert.False(t, s.checked["anthropic"], "should not toggle implicitly included preset")
 	assert.Contains(t, w.Flash(), "included via default")
 }
@@ -215,14 +215,14 @@ func TestPresetScreen_IncludedByTogglesWhenParentUnchecked(t *testing.T) {
 	require.GreaterOrEqual(t, idx, 0)
 	s.Pos = idx
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)
+	s.Update(tea.KeyPressMsg{Code: ' ', Text: " "}, w)
 	assert.True(t, s.checked["anthropic"], "should toggle when parent unchecked")
 }
 
 func TestPresetScreen_ConfirmIncludesImplicit(t *testing.T) {
 	s, w := makePresetTestSetup()
 
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyEnter}, w)
 
 	assert.Contains(t, s.selected, "default")
 	assert.Contains(t, s.selected, "anthropic", "implicitly included presets should be in selected")
@@ -231,7 +231,7 @@ func TestPresetScreen_ConfirmIncludesImplicit(t *testing.T) {
 
 func TestPresetScreen_ViewShowsViaIndicator(t *testing.T) {
 	_, w := makePresetTestSetup()
-	view := w.View()
+	view := w.View().Content
 	assert.Contains(t, view, "via default")
 }
 
@@ -298,7 +298,7 @@ func TestPresetScreen_ExpandPreset(t *testing.T) {
 		}
 	}
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyRight}, w)
 	name := s.items[lines[s.Pos].itemIdx].presetName
 	assert.True(t, s.expanded[name], "preset should be expanded after right arrow")
 
@@ -312,7 +312,7 @@ func TestPresetScreen_ExpandPreset(t *testing.T) {
 	}
 	assert.True(t, hasDomain, "should have domain detail lines after expanding")
 
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyLeft}, w)
 	assert.False(t, s.expanded[name], "preset should be collapsed after left arrow")
 }
 
@@ -323,7 +323,7 @@ func TestPresetScreen_LeftOnDomainCollapsesParent(t *testing.T) {
 	idx := findPresetLine(s, "pkg-go")
 	require.GreaterOrEqual(t, idx, 0)
 	s.Pos = idx
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyRight}, w)
 	assert.True(t, s.expanded["pkg-go"])
 
 	// Navigate to a domain line.
@@ -339,7 +339,7 @@ func TestPresetScreen_LeftOnDomainCollapsesParent(t *testing.T) {
 	s.Pos = domainIdx
 
 	// Press left on domain line.
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyLeft}, w)
 
 	// Preset should be collapsed and cursor should be on the preset row.
 	assert.False(t, s.expanded["pkg-go"], "preset should collapse when left pressed on domain line")
@@ -362,17 +362,17 @@ func TestPresetScreen_CollapseResetsOffset(t *testing.T) {
 	idx := findPresetLine(s, "pkg-go")
 	require.GreaterOrEqual(t, idx, 0)
 	s.Pos = idx
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyRight}, w)
 
 	// Scroll down past the start.
 	for range 20 {
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}, w)
+		s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 	}
 	assert.Greater(t, s.Offset, 0, "should have scrolled down")
 
 	// Collapse the preset.
 	s.Pos = idx
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyLeft}, w)
 
 	// If everything fits, offset should be 0.
 	lines := s.buildVisibleLines()
@@ -391,13 +391,13 @@ func TestPresetScreen_ExpandCollapseSection(t *testing.T) {
 	assert.True(t, s.expanded[sectionName])
 
 	s.Pos = 0
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyLeft}, w)
 	assert.False(t, s.expanded[sectionName], "section should collapse on left arrow")
 
 	collapsedLines := s.buildVisibleLines()
 	assert.Less(t, len(collapsedLines), len(lines))
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyRight}, w)
 	assert.True(t, s.expanded[sectionName])
 }
 
@@ -412,7 +412,7 @@ func TestPresetScreen_SpaceOnlyTogglesPresets(t *testing.T) {
 	s.Pos = 0
 	lines := s.buildVisibleLines()
 	assert.Equal(t, lineSection, lines[0].kind)
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)
+	s.Update(tea.KeyPressMsg{Code: ' ', Text: " "}, w)
 	assert.Equal(t, checkedBefore, s.checked, "space on section header should not change checked state")
 
 	// Expand a preset and navigate to a domain line.
@@ -422,7 +422,7 @@ func TestPresetScreen_SpaceOnlyTogglesPresets(t *testing.T) {
 			break
 		}
 	}
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyRight}, w)
 	newLines := s.buildVisibleLines()
 	for i, l := range newLines {
 		if l.kind == lineDomain {
@@ -436,7 +436,7 @@ func TestPresetScreen_SpaceOnlyTogglesPresets(t *testing.T) {
 	maps.Copy(checkedBefore, s.checked)
 
 	// Space on domain line should not change checked state.
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}}, w)
+	s.Update(tea.KeyPressMsg{Code: ' ', Text: " "}, w)
 	assert.Equal(t, checkedBefore, s.checked, "space on domain line should not change checked state")
 }
 

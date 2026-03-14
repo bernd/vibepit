@@ -2,11 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 )
@@ -84,7 +85,7 @@ func buildWordmark(word string) [3]string {
 }
 
 // applyGradient colors a string with a linear gradient from colorA to colorB.
-func applyGradient(s string, colorA, colorB lipgloss.Color) string {
+func applyGradient(s string, colorA, colorB color.Color) string {
 	runes := []rune(s)
 	n := len(runes)
 	if n == 0 {

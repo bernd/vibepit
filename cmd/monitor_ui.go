@@ -2,14 +2,15 @@ package cmd
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // allowStatus tracks whether a log entry has been temporarily or permanently
@@ -127,7 +128,7 @@ func (s *monitorScreen) pollLogsCmd(afterID uint64) tea.Cmd {
 
 func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "a", "A":
 			if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
@@ -294,7 +295,7 @@ func renderLogLine(item logItem, highlighted bool) string {
 	base, marker := tui.LineStyle(highlighted)
 
 	var symbol string
-	var sourceColor lipgloss.Color
+	var sourceColor color.Color
 	switch {
 	case item.status == statusTemp:
 		symbol = base.Foreground(tui.ColorOrange).Render("a")

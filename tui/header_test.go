@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bernd/vibepit/tui"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,12 +16,13 @@ func TestRenderHeader_CompactWhenShort(t *testing.T) {
 		ProjectDir: "myproject",
 	}, 80, 10)
 
+	plain := ansi.Strip(header)
 	lines := strings.Split(header, "\n")
 	assert.Equal(t, 1, len(lines), "compact header should be a single line")
-	assert.Contains(t, header, "VIBEPIT")
-	assert.Contains(t, header, "I pity the vibes")
-	assert.Contains(t, header, "abc123")
-	assert.Contains(t, header, "myproject")
+	assert.Contains(t, plain, "VIBEPIT")
+	assert.Contains(t, plain, "I pity the vibes")
+	assert.Contains(t, plain, "abc123")
+	assert.Contains(t, plain, "myproject")
 }
 
 func TestRenderHeader_FullWhenTall(t *testing.T) {
@@ -57,9 +59,10 @@ func TestRenderHeader_CompactFieldFill(t *testing.T) {
 		ProjectDir: "p",
 	}, 80, 10)
 
+	plain := ansi.Strip(header)
 	// The line should span the full width with field chars filling the gap.
 	// Just verify it contains multiple consecutive field chars in the middle.
-	assert.Contains(t, header, "╱╱╱")
+	assert.Contains(t, plain, "╱╱╱")
 }
 
 func TestRenderHeader_ContainsWordmark(t *testing.T) {
@@ -68,9 +71,10 @@ func TestRenderHeader_ContainsWordmark(t *testing.T) {
 		ProjectDir: "/home/user/myproject",
 	}, 80, 30)
 
+	plain := ansi.Strip(header)
 	lines := strings.Split(header, "\n")
 	assert.GreaterOrEqual(t, len(lines), 3, "header should have at least 3 lines")
-	assert.Contains(t, header, "I PITY THE VIBES")
+	assert.Contains(t, plain, "I PITY THE VIBES")
 }
 
 func TestRenderHeader_ContainsSessionInfo(t *testing.T) {
@@ -79,23 +83,26 @@ func TestRenderHeader_ContainsSessionInfo(t *testing.T) {
 		ProjectDir: "/home/user/myproject",
 	}, 120, 30)
 
-	assert.Contains(t, header, "abc123")
-	assert.Contains(t, header, "myproject")
+	plain := ansi.Strip(header)
+	assert.Contains(t, plain, "abc123")
+	assert.Contains(t, plain, "myproject")
 }
 
 func TestRenderBanner_CompactWhenShort(t *testing.T) {
 	banner := tui.RenderBanner(80, 10)
+	plain := ansi.Strip(banner)
 	lines := strings.Split(banner, "\n")
 	assert.Equal(t, 1, len(lines), "compact banner should be a single line")
-	assert.Contains(t, banner, "VIBEPIT")
-	assert.Contains(t, banner, "I pity the vibes")
+	assert.Contains(t, plain, "VIBEPIT")
+	assert.Contains(t, plain, "I pity the vibes")
 }
 
 func TestRenderBanner_FullWhenTall(t *testing.T) {
 	banner := tui.RenderBanner(80, 30)
+	plain := ansi.Strip(banner)
 	lines := strings.Split(banner, "\n")
 	assert.GreaterOrEqual(t, len(lines), 4, "full banner should have at least 4 lines")
-	assert.Contains(t, banner, "I PITY THE VIBES")
+	assert.Contains(t, plain, "I PITY THE VIBES")
 }
 
 func TestRenderBanner_NoSessionInfo(t *testing.T) {
@@ -103,10 +110,11 @@ func TestRenderBanner_NoSessionInfo(t *testing.T) {
 	compact := tui.RenderBanner(80, 10)
 	// Banner lines should end with field chars, not session info
 	for line := range strings.SplitSeq(full, "\n") {
-		if strings.Contains(line, "PITY") {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "PITY") {
 			continue // tagline line
 		}
-		assert.True(t, strings.HasSuffix(line, "╱"), "wordmark lines should end with field chars")
+		assert.True(t, strings.HasSuffix(plain, "╱"), "wordmark lines should end with field chars")
 	}
 	_ = compact // compact is tested separately
 }

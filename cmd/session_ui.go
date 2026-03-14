@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // sortSessions sorts proxy sessions by SessionID for stable display order.
@@ -119,7 +119,7 @@ func (s *sessionScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 		s.firstTickSeen = true
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "enter":
 			if s.Pos >= 0 && s.Pos < len(s.sessions) {
@@ -225,7 +225,7 @@ func selectSession(sessions []ctr.ProxySession) (*SessionInfo, error) {
 	s := newSessionScreen(sessions, nil, nil)
 	header := selectorHeader()
 	w := tui.NewWindow(header, s)
-	p := tea.NewProgram(w, tea.WithAltScreen())
+	p := tea.NewProgram(w)
 	if _, err := p.Run(); err != nil {
 		return nil, fmt.Errorf("session selector: %w", err)
 	}

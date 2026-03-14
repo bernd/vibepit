@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -78,7 +78,7 @@ func doTick() tea.Cmd {
 }
 
 func (w *Window) Init() tea.Cmd {
-	return tea.Batch(doTick(), tea.WindowSize())
+	return doTick()
 }
 
 func (w *Window) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -121,16 +121,19 @@ func (w *Window) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return w, tea.Batch(cmds...)
 }
 
-func (w *Window) View() string {
+func (w *Window) View() tea.View {
+	view := tea.NewView("Starting...")
+	view.AltScreen = true
 	if w.width == 0 {
-		return "Starting..."
+		return view
 	}
 
 	header := RenderHeader(w.header, w.width, w.height)
 	content := w.screen.View(w)
 	footer := w.renderFooter()
 
-	return header + "\n" + content + "\n" + footer
+	view.SetContent(header + "\n" + content + "\n" + footer)
+	return view
 }
 
 func (w *Window) renderFooter() string {

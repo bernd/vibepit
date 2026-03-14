@@ -5,16 +5,13 @@ import (
 	"io"
 	"os"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 var (
-	stdoutRenderer = lipgloss.NewRenderer(os.Stdout)
-	stderrRenderer = lipgloss.NewRenderer(os.Stderr)
-
-	statusStyle = stdoutRenderer.NewStyle().Bold(true).Foreground(ColorCyan)
-	errorStyle  = stderrRenderer.NewStyle().Bold(true).Foreground(ColorOrange)
-	debugStyle  = stderrRenderer.NewStyle().Bold(true).Foreground(ColorPurple)
+	statusStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
+	errorStyle  = lipgloss.NewStyle().Bold(true).Foreground(ColorOrange)
+	debugStyle  = lipgloss.NewStyle().Bold(true).Foreground(ColorPurple)
 )
 
 func writeStatus(w io.Writer, verb string, style lipgloss.Style, format string, args ...any) {

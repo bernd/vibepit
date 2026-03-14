@@ -1,6 +1,6 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import tea "charm.land/bubbletea/v2"
 
 // Cursor provides scrollable list navigation. Screens that need a navigable
 // list embed this struct and call HandleKey in their Update method.
@@ -28,7 +28,7 @@ func (c *Cursor) EnsureVisible() {
 
 // HandleKey processes navigation keys (j/k/G/g/arrows/pgdn/pgup).
 // Returns true if the key was handled.
-func (c *Cursor) HandleKey(msg tea.KeyMsg) bool {
+func (c *Cursor) HandleKey(msg tea.KeyPressMsg) bool {
 	switch msg.String() {
 	case "j", "down":
 		if c.Pos < c.ItemCount-1 {
