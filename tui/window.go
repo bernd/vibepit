@@ -10,7 +10,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-const tickInterval = 250 * time.Millisecond
+// TickInterval is the base tick rate for the TUI event loop.
+const TickInterval = 250 * time.Millisecond
 
 // TickMsg is sent on every tick interval. Screens receive it after Window
 // increments the frame counter and expires flash messages.
@@ -47,7 +48,7 @@ func (w *Window) Err() error     { return w.err }
 
 // IntervalElapsed returns true if the given interval has elapsed since the last tick.
 func (w *Window) IntervalElapsed(interval time.Duration) bool {
-	n := int(interval / tickInterval)
+	n := int(interval / TickInterval)
 	if n <= 1 {
 		return true
 	}
@@ -71,7 +72,7 @@ func (w *Window) headerHeight() int {
 }
 
 func doTick() tea.Cmd {
-	return tea.Tick(tickInterval, func(time.Time) tea.Msg {
+	return tea.Tick(TickInterval, func(time.Time) tea.Msg {
 		return TickMsg{}
 	})
 }

@@ -29,7 +29,7 @@ func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 	s := newMonitorScreen(&SessionInfo{
 		SessionID:  "test123456",
 		ProjectDir: "/home/user/project",
-	}, nil)
+	}, nil, nil)
 	header := &tui.HeaderInfo{ProjectDir: "/home/user/project", SessionID: "test123456"}
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -355,7 +355,7 @@ func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
 	s := newMonitorScreen(&SessionInfo{
 		SessionID:  "test123456",
 		ProjectDir: "/home/user/project",
-	}, client)
+	}, client, nil)
 	header := &tui.HeaderInfo{ProjectDir: "/home/user/project", SessionID: "test123456"}
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -393,7 +393,7 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		screen := newMonitorScreen(&SessionInfo{
 			SessionID:  "test123456",
 			ProjectDir: projectDir,
-		}, client)
+		}, client, nil)
 
 		return screen, httpAllowlist, dnsAllowlist, projectPath
 	}
@@ -438,4 +438,83 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		assert.Contains(t, cfg.Project.AllowDNS, "internal.example.com")
 		assert.NotContains(t, cfg.Project.AllowHTTP, "internal.example.com")
 	})
+}
+
+func TestMonitorScreen_EscReturnsSessionScreen(t *testing.T) {
+	s, w := makeTestSetup(5)
+	stub := &testStubScreen{}
+	s.onBack = func() tui.Screen { return stub }
+
+	screen, _ := s.Update(tea.KeyMsg{Type: tea.KeyEscape}, w)
+	assert.Equal(t, stub, screen, "Esc should return the onBack screen")
+}
+
+func TestMonitorScreen_EscWithoutOnBack(t *testing.T) {
+	s, w := makeTestSetup(5)
+	// onBack is nil — Esc should be ignored.
+	screen, _ := s.Update(tea.KeyMsg{Type: tea.KeyEscape}, w)
+	assert.Equal(t, s, screen, "Esc without onBack should stay on monitor")
+}
+
+func TestMonitorScreen_DisconnectTransition(t *testing.T) {
+	t.Run("poll error starts disconnect timer", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		stub := &testStubScreen{}
+		s.onBack = func() tui.Screen { return stub }
+
+		s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+		assert.Equal(t, 0, s.disconnectTick, "disconnectTick should be 0 on first error")
+	})
+
+	t.Run("transitions after 12 ticks (3s)", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		stub := &testStubScreen{}
+		s.onBack = func() tui.Screen { return stub }
+
+		s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+
+		// Simulate 11 ticks — should stay on monitor.
+		for range 11 {
+			screen, _ := s.Update(tui.TickMsg{}, w)
+			assert.Equal(t, s, screen, "should not transition before 3s")
+		}
+
+		// 12th tick — should transition.
+		screen, _ := s.Update(tui.TickMsg{}, w)
+		assert.Equal(t, stub, screen, "should transition to session selector after 3s")
+	})
+
+	t.Run("no transition without onBack", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		// onBack is nil.
+		s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+
+		for range 20 {
+			screen, _ := s.Update(tui.TickMsg{}, w)
+			assert.Equal(t, s, screen, "should not transition without onBack")
+		}
+	})
+}
+
+func TestMonitorScreen_EscResetsHeader(t *testing.T) {
+	s, w := makeTestSetup(5)
+	stub := &testStubScreen{}
+	s.onBack = func() tui.Screen { return stub }
+
+	// Header currently shows session info.
+	s.Update(tea.KeyMsg{Type: tea.KeyEscape}, w)
+
+	// After Esc, header should be reset to selector mode.
+	view := w.View()
+	assert.Contains(t, view, "session selector")
+}
+
+func TestMonitorScreen_DisconnectFooterMessage(t *testing.T) {
+	s, w := makeTestSetup(5)
+	s.onBack = func() tui.Screen { return &testStubScreen{} }
+
+	s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+	require.Error(t, w.Err())
+	assert.Contains(t, w.Err().Error(), "test123456")
+	assert.Contains(t, w.Err().Error(), "disconnected")
 }

@@ -34,6 +34,11 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	}, nil
 }
 
+// Close releases idle connections held by the underlying HTTP transport.
+func (c *ControlClient) Close() {
+	c.http.CloseIdleConnections()
+}
+
 func (c *ControlClient) Logs() ([]proxy.LogEntry, error) {
 	var entries []proxy.LogEntry
 	if err := c.get("/logs", &entries); err != nil {

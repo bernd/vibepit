@@ -35,7 +35,7 @@ func makeSessions(n int) []ctr.ProxySession {
 
 func makeSessionTestSetup(n int) (*sessionScreen, *tui.Window) {
 	sessions := makeSessions(n)
-	s := newSessionScreen(sessions, nil)
+	s := newSessionScreen(sessions, nil, nil)
 	header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -105,7 +105,7 @@ func TestSessionScreen_Selection(t *testing.T) {
 		s := newSessionScreen(sessions, func(info *SessionInfo) (tui.Screen, tea.Cmd) {
 			gotInfo = info
 			return stub, nil
-		})
+		}, nil)
 		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
 		w := tui.NewWindow(header, s)
 		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -154,7 +154,7 @@ func TestSessionScreen_OnSelectError(t *testing.T) {
 	onSelect := func(info *SessionInfo) (tui.Screen, tea.Cmd) {
 		return nil, func() tea.Msg { return sessionErrorMsg{err: fmt.Errorf("connect failed")} }
 	}
-	s := newSessionScreen(sessions, onSelect)
+	s := newSessionScreen(sessions, onSelect, nil)
 	header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
@@ -174,4 +174,132 @@ func TestSessionScreen_OnSelectError(t *testing.T) {
 	s.Update(cmd(), w)
 	require.Error(t, w.Err())
 	assert.Contains(t, w.Err().Error(), "connect failed")
+}
+
+func TestSessionScreen_Polling(t *testing.T) {
+	t.Run("tick triggers session poll", func(t *testing.T) {
+		sessions := makeSessions(3)
+		pollCalled := false
+		pollFn := func() ([]ctr.ProxySession, error) {
+			pollCalled = true
+			return sessions, nil
+		}
+		s := newSessionScreen(sessions, nil, pollFn)
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+		_, cmd := s.Update(tui.TickMsg{}, w)
+		require.NotNil(t, cmd, "tick should return poll command")
+		assert.True(t, s.pollInFlight, "pollInFlight should be set")
+
+		msg := cmd()
+		result, ok := msg.(sessionPollResultMsg)
+		require.True(t, ok)
+		assert.Len(t, result.sessions, 3)
+		assert.NoError(t, result.err)
+		assert.True(t, pollCalled, "pollSessions callback should have been called")
+	})
+
+	t.Run("no double poll while in-flight", func(t *testing.T) {
+		sessions := makeSessions(3)
+		s := newSessionScreen(sessions, nil, func() ([]ctr.ProxySession, error) {
+			return sessions, nil
+		})
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+		s.Update(tui.TickMsg{}, w)
+		_, cmd := s.Update(tui.TickMsg{}, w)
+		assert.Nil(t, cmd, "should not start second poll while in-flight")
+	})
+
+	t.Run("poll result updates session list", func(t *testing.T) {
+		sessions := makeSessions(3)
+		s := newSessionScreen(sessions, nil, nil)
+		s.pollInFlight = true
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+		newSessions := makeSessions(5)
+		s.Update(sessionPollResultMsg{sessions: newSessions}, w)
+		assert.Len(t, s.sessions, 5)
+		assert.Equal(t, 5, s.ItemCount)
+		assert.False(t, s.pollInFlight)
+	})
+
+	t.Run("cursor clamped when list shrinks", func(t *testing.T) {
+		sessions := makeSessions(5)
+		s := newSessionScreen(sessions, nil, nil)
+		s.pollInFlight = true
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+		s.Pos = 3
+
+		smaller := makeSessions(2)
+		s.Update(sessionPollResultMsg{sessions: smaller}, w)
+		assert.Equal(t, 1, s.Pos, "cursor should clamp to last item")
+	})
+
+	t.Run("empty list sets cursor to 0", func(t *testing.T) {
+		sessions := makeSessions(3)
+		s := newSessionScreen(sessions, nil, nil)
+		s.pollInFlight = true
+		s.Pos = 2
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+		s.Update(sessionPollResultMsg{sessions: nil}, w)
+		assert.Len(t, s.sessions, 0)
+		assert.Equal(t, 0, s.Pos)
+		assert.Equal(t, 0, s.ItemCount)
+	})
+
+	t.Run("poll error shows in footer and continues polling", func(t *testing.T) {
+		sessions := makeSessions(3)
+		s := newSessionScreen(sessions, nil, func() ([]ctr.ProxySession, error) {
+			return nil, fmt.Errorf("docker unavailable")
+		})
+		s.pollInFlight = true
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+		s.Update(sessionPollResultMsg{err: fmt.Errorf("docker unavailable")}, w)
+		assert.Error(t, w.Err())
+		assert.Contains(t, w.Err().Error(), "docker unavailable")
+		assert.False(t, s.pollInFlight, "should allow next poll")
+	})
+
+	t.Run("repeated identical errors are suppressed", func(t *testing.T) {
+		sessions := makeSessions(3)
+		s := newSessionScreen(sessions, nil, func() ([]ctr.ProxySession, error) {
+			return nil, fmt.Errorf("docker unavailable")
+		})
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "selector"}
+		w := tui.NewWindow(header, s)
+		w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+		s.pollInFlight = true
+		s.Update(sessionPollResultMsg{err: fmt.Errorf("docker unavailable")}, w)
+		assert.Error(t, w.Err())
+
+		s.pollInFlight = true
+		s.Update(sessionPollResultMsg{err: fmt.Errorf("docker unavailable")}, w)
+		assert.Error(t, w.Err())
+
+		s.pollInFlight = true
+		s.Update(sessionPollResultMsg{sessions: makeSessions(2)}, w)
+		assert.NoError(t, w.Err())
+	})
+
+	t.Run("no polling without pollSessions callback", func(t *testing.T) {
+		s, w := makeSessionTestSetup(3)
+		_, cmd := s.Update(tui.TickMsg{}, w)
+		assert.Nil(t, cmd, "should not poll without callback")
+	})
 }

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,6 +12,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// sortSessions sorts proxy sessions by SessionID for stable display order.
+func sortSessions(sessions []ctr.ProxySession) {
+	slices.SortFunc(sessions, func(a, b ctr.ProxySession) int {
+		return cmp.Compare(a.SessionID, b.SessionID)
+	})
+}
 
 // formatUptime returns a human-readable duration between started and now.
 func formatUptime(started, now time.Time) string {
@@ -32,12 +41,23 @@ func formatUptime(started, now time.Time) string {
 	return fmt.Sprintf("%dm", minutes)
 }
 
+// sessionPollResultMsg is returned by async session list polling.
+type sessionPollResultMsg struct {
+	sessions []ctr.ProxySession
+	err      error
+}
+
 // sessionScreen implements tui.Screen for selecting a proxy session.
 type sessionScreen struct {
 	tui.Cursor
-	sessions []ctr.ProxySession
-	selected *SessionInfo
-	onSelect func(*SessionInfo) (tui.Screen, tea.Cmd)
+	sessions      []ctr.ProxySession
+	selected      *SessionInfo
+	onSelect      func(*SessionInfo) (tui.Screen, tea.Cmd)
+	pollSessions  func() ([]ctr.ProxySession, error)
+	pollInFlight  bool
+	firstTickSeen bool
+	firstPollDone bool
+	lastPollErr   string
 }
 
 // sessionErrorMsg is sent when the onSelect callback fails.
@@ -50,16 +70,55 @@ type sessionSelectResultMsg struct {
 	cmd      tea.Cmd
 }
 
-func newSessionScreen(sessions []ctr.ProxySession, onSelect func(*SessionInfo) (tui.Screen, tea.Cmd)) *sessionScreen {
+func newSessionScreen(sessions []ctr.ProxySession, onSelect func(*SessionInfo) (tui.Screen, tea.Cmd), pollSessions func() ([]ctr.ProxySession, error)) *sessionScreen {
+	sortSessions(sessions)
 	return &sessionScreen{
-		Cursor:   tui.Cursor{ItemCount: len(sessions)},
-		sessions: sessions,
-		onSelect: onSelect,
+		Cursor:        tui.Cursor{ItemCount: len(sessions)},
+		sessions:      sessions,
+		onSelect:      onSelect,
+		pollSessions:  pollSessions,
+		firstPollDone: len(sessions) > 0,
+	}
+}
+
+func (s *sessionScreen) pollSessionsCmd() tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := s.pollSessions()
+		return sessionPollResultMsg{sessions: sessions, err: err}
 	}
 }
 
 func (s *sessionScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
+	case sessionPollResultMsg:
+		s.pollInFlight = false
+		if msg.err != nil {
+			errStr := msg.err.Error()
+			if errStr != s.lastPollErr {
+				s.lastPollErr = errStr
+				w.SetError(msg.err)
+			}
+			break
+		}
+		s.firstPollDone = true
+		s.lastPollErr = ""
+		w.ClearError()
+		sortSessions(msg.sessions)
+		s.sessions = msg.sessions
+		s.ItemCount = len(s.sessions)
+		if s.Pos >= s.ItemCount {
+			s.Pos = max(s.ItemCount-1, 0)
+		}
+		s.EnsureVisible()
+
+	case tui.TickMsg:
+		if s.pollSessions != nil && (w.IntervalElapsed(time.Second) || !s.firstTickSeen) && !s.pollInFlight {
+			s.firstTickSeen = true
+			s.pollInFlight = true
+			return s, s.pollSessionsCmd()
+		}
+		s.firstTickSeen = true
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "enter":
@@ -110,15 +169,23 @@ func (s *sessionScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 func (s *sessionScreen) View(w *tui.Window) string {
 	var lines []string
-	note := lipgloss.NewStyle().Foreground(tui.ColorField).
-		Render("Multiple sessions running. Select one:")
-	lines = append(lines, note, "")
 
-	end := s.Offset + s.VpHeight
-	end = min(end, len(s.sessions))
-	now := time.Now()
-	for i := s.Offset; i < end; i++ {
-		lines = append(lines, renderSessionLine(s.sessions[i], i == s.Pos, now))
+	if len(s.sessions) == 0 && s.firstPollDone {
+		note := lipgloss.NewStyle().Foreground(tui.ColorField).
+			Render("No sessions running. Waiting...")
+		lines = append(lines, note)
+	} else if len(s.sessions) > 0 {
+		note := lipgloss.NewStyle().Foreground(tui.ColorField).
+			Render("Select a session:")
+		lines = append(lines, note, "")
+
+		headerLines := 2 // note + blank line
+		end := s.Offset + s.VpHeight - headerLines
+		end = min(end, len(s.sessions))
+		now := time.Now()
+		for i := s.Offset; i < end; i++ {
+			lines = append(lines, renderSessionLine(s.sessions[i], i == s.Pos, now))
+		}
 	}
 	for len(lines) < s.VpHeight {
 		lines = append(lines, "")
@@ -138,21 +205,25 @@ func renderSessionLine(ps ctr.ProxySession, highlighted bool, now time.Time) str
 }
 
 func (s *sessionScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
-	keys := []tui.FooterKey{
-		{Key: "enter", Desc: "select"},
+	var keys []tui.FooterKey
+	if len(s.sessions) > 0 {
+		keys = append(keys, tui.FooterKey{Key: "enter", Desc: "select"})
 	}
 	keys = append(keys, s.Cursor.FooterKeys()...)
 	return keys
 }
 
 func (s *sessionScreen) FooterStatus(w *tui.Window) string {
+	if len(s.sessions) == 0 {
+		return "waiting"
+	}
 	return fmt.Sprintf("%d sessions", len(s.sessions))
 }
 
 // selectSession runs a temporary TUI for the user to pick a session.
 func selectSession(sessions []ctr.ProxySession) (*SessionInfo, error) {
-	s := newSessionScreen(sessions, nil)
-	header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
+	s := newSessionScreen(sessions, nil, nil)
+	header := selectorHeader()
 	w := tui.NewWindow(header, s)
 	p := tea.NewProgram(w, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

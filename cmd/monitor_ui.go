@@ -24,6 +24,10 @@ const (
 
 const pollInterval = time.Second
 
+const disconnectGracePeriod = 3 * time.Second
+
+var disconnectGraceTicks = int(disconnectGracePeriod / tui.TickInterval)
+
 // logItem wraps a proxy log entry with its allow-list status.
 type logItem struct {
 	entry  proxy.LogEntry
@@ -32,20 +36,24 @@ type logItem struct {
 
 // monitorScreen implements tui.Screen for the log monitor.
 type monitorScreen struct {
-	session       *SessionInfo
-	client        *ControlClient
-	cursor        tui.Cursor
-	pollCursor    uint64
-	pollInFlight  bool
-	items         []logItem
-	newCount      int
-	firstTickSeen bool
+	session        *SessionInfo
+	client         *ControlClient
+	onBack         func() tui.Screen
+	cursor         tui.Cursor
+	pollCursor     uint64
+	pollInFlight   bool
+	items          []logItem
+	newCount       int
+	firstTickSeen  bool
+	disconnectTick int // -1 = connected, 0+ = ticks since disconnect
 }
 
-func newMonitorScreen(session *SessionInfo, client *ControlClient) *monitorScreen {
+func newMonitorScreen(session *SessionInfo, client *ControlClient, onBack func() tui.Screen) *monitorScreen {
 	return &monitorScreen{
-		session: session,
-		client:  client,
+		session:        session,
+		client:         client,
+		onBack:         onBack,
+		disconnectTick: -1,
 	}
 }
 
@@ -102,6 +110,14 @@ func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea
 	}
 }
 
+func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
+	if s.client != nil {
+		s.client.Close()
+	}
+	w.SetHeader(selectorHeader())
+	return s.onBack()
+}
+
 func (s *monitorScreen) pollLogsCmd(afterID uint64) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := s.client.LogsAfter(afterID)
@@ -120,6 +136,10 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 					return s, s.allowCmd(s.cursor.Pos, item.entry, msg.String() == "A")
 				}
 				w.SetFlash("already allowed")
+			}
+		case "esc":
+			if s.onBack != nil {
+				return s.transitionBack(w), nil
 			}
 		case "q", "ctrl+c":
 			return s, tea.Quit
@@ -159,9 +179,17 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 	case logsPollResultMsg:
 		s.pollInFlight = false
 		if msg.err != nil {
-			w.SetError(msg.err)
+			if s.onBack != nil {
+				if s.disconnectTick < 0 {
+					s.disconnectTick = 0
+				}
+				w.SetError(fmt.Errorf("session %s disconnected", s.session.SessionID))
+			} else {
+				w.SetError(msg.err)
+			}
 			break
 		}
+		s.disconnectTick = -1
 		w.ClearError()
 
 		wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
@@ -180,6 +208,15 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 
 	case tui.TickMsg:
+		if s.onBack != nil && s.disconnectTick >= 0 {
+			s.disconnectTick++
+			if s.disconnectTick >= disconnectGraceTicks {
+				return s.transitionBack(w), nil
+			}
+			s.firstTickSeen = true
+			return s, nil // Don't poll while disconnected.
+		}
+
 		if (w.IntervalElapsed(pollInterval) || !s.firstTickSeen) && !s.pollInFlight {
 			s.firstTickSeen = true
 			if s.client == nil {
@@ -242,6 +279,10 @@ func (s *monitorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
 				tui.FooterKey{Key: "A", Desc: "save"},
 			)
 		}
+	}
+
+	if s.onBack != nil {
+		keys = append(keys, tui.FooterKey{Key: "esc", Desc: "sessions"})
 	}
 
 	keys = append(keys, s.cursor.FooterKeys()...)

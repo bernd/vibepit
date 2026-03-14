@@ -26,6 +26,12 @@ func sessionDir(sessionID string) (string, error) {
 	return filepath.Join(base, sessionID), nil
 }
 
+// matchSession reports whether a proxy session matches the given filter string,
+// comparing against both SessionID and ProjectDir.
+func matchSession(ps ctr.ProxySession, filter string) bool {
+	return ps.SessionID == filter || ps.ProjectDir == filter
+}
+
 // discoverSession finds running vibepit proxy containers and returns connection
 // info. If multiple sessions are running, prompts the user to select one.
 // If filter is non-empty, it matches against SessionID or ProjectDir.
@@ -46,7 +52,7 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 
 	if filter != "" {
 		for _, s := range sessions {
-			if s.SessionID == filter || s.ProjectDir == filter {
+			if matchSession(s, filter) {
 				return sessionInfoFromProxy(s), nil
 			}
 		}
@@ -59,39 +65,6 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 
 	// Multiple sessions — interactive selection.
 	return selectSession(sessions)
-}
-
-// discoverSessionOrAll returns a single SessionInfo if a filter matches or only
-// one session exists, or the full list of ProxySessions for interactive selection.
-func discoverSessionOrAll(ctx context.Context, filter string) (*SessionInfo, []ctr.ProxySession, error) {
-	client, err := ctr.NewClient()
-	if err != nil {
-		return nil, nil, err
-	}
-	defer client.Close()
-
-	sessions, err := client.ListProxySessions(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(sessions) == 0 {
-		return nil, nil, fmt.Errorf("no running vibepit sessions found")
-	}
-
-	if filter != "" {
-		for _, s := range sessions {
-			if s.SessionID == filter || s.ProjectDir == filter {
-				return sessionInfoFromProxy(s), nil, nil
-			}
-		}
-		return nil, nil, fmt.Errorf("no session matching %q found", filter)
-	}
-
-	if len(sessions) == 1 {
-		return sessionInfoFromProxy(sessions[0]), nil, nil
-	}
-
-	return nil, sessions, nil
 }
 
 // sessionInfoFromProxy converts a container.ProxySession to a SessionInfo.

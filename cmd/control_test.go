@@ -185,6 +185,16 @@ func TestControlClient_AllowDNS(t *testing.T) {
 	})
 }
 
+func TestControlClient_Close(t *testing.T) {
+	log := proxy.NewLogBuffer(100)
+	api := proxy.NewControlAPI(log, nil, nil, nil)
+	client := testControlClient(t, api)
+
+	// Should not panic and should be safe to call multiple times.
+	client.Close()
+	client.Close()
+}
+
 func TestControlClient_ServerError(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
 	allowlist, err := proxy.NewHTTPAllowlist(nil)

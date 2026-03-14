@@ -211,6 +211,8 @@ If no sessions are running, the output is `No active sessions.`
 
 ## `monitor`
 
+Aliases: `m`, `tv`
+
 Open an interactive terminal UI for viewing proxy logs and performing admin
 actions on a running session.
 
