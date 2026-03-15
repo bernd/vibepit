@@ -55,6 +55,7 @@ func DownloadArchive(url, dir string, isTTY bool) (string, error) {
 	reader := io.LimitReader(resp.Body, maxArchiveSizeLimit+1)
 
 	var written int64
+	var lastMilestone int
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := reader.Read(buf)
@@ -74,8 +75,12 @@ func DownloadArchive(url, dir string, isTTY bool) (string, error) {
 				pct := float64(written) / float64(totalSize) * 100
 				if isTTY {
 					fmt.Fprintf(os.Stderr, "\rDownloading... %.1f%% (%d / %d bytes)", pct, written, totalSize)
-				} else if int(pct)%25 == 0 {
-					fmt.Fprintf(os.Stderr, "Downloading... %.0f%%\n", pct)
+				} else {
+					milestone := int(pct) / 25
+					if milestone > lastMilestone {
+						lastMilestone = milestone
+						fmt.Fprintf(os.Stderr, "Downloading... %d%%\n", milestone*25)
+					}
 				}
 			}
 		}
