@@ -17,11 +17,16 @@ pointer to the latest version.
 
 ```json
 {
-  "version": "0.2.0",
-  "previous": "0.1.0",
-  "url": "https://vibepit.dev/releases/v0.2.0.json"
+  "stable": "0.2.0",
+  "prerelease": "0.3.0-alpha.1",
+  "url": "https://vibepit.dev/releases/v0.3.0-alpha.1.json"
 }
 ```
+
+- `stable` and `prerelease` point to the latest version in each channel.
+- `url` points to the most recently published release (stable or prerelease,
+  whichever is newer).
+- Either field may be null if no release exists in that channel yet.
 
 **`vibepit.dev/releases/v0.2.0.json`:**
 
@@ -46,33 +51,40 @@ pointer to the latest version.
 - `latest.json` enables quick version comparison without downloading full
   metadata.
 - Each version file links to its predecessor via the `previous` field, forming a
-  linked list for rollback navigation.
+  linked list for rollback navigation. The `previous` field points to the
+  chronologically preceding published release, regardless of channel. For
+  example, if the publish order is `0.1.0`, `0.2.0-alpha.1`, `0.2.0-alpha.2`,
+  then `0.2.0-alpha.2.previous` is `0.2.0-alpha.1` and
+  `0.2.0-alpha.1.previous` is `0.1.0`.
 - First release has `"previous": null`.
 
 ### Generation
 
-Release metadata generation happens as the final step of the release workflow in
-`build.yml`, after the GitHub release is published (not while it is still a
-draft). The publish order is:
+Release metadata generation is decoupled from the build workflow. The existing
+`build.yml` creates a draft prerelease. When a maintainer publishes the release
+from the GitHub UI, a separate workflow generates and deploys the metadata.
+
+**`build.yml` (existing, unchanged):**
 
 1. Build and sign archives (`release-build`, cosign signing).
-2. Create GitHub release and upload assets (`release-archive`,
-   `release-publish`). The release must be published (not draft) before
-   proceeding.
-3. Generate release metadata:
-   a. Read the changelog from `docs/changelogs/v{VERSION}.yml`.
-   b. Get the timestamp from the git tag.
-   c. Collect asset URLs, SHA256 checksums, and cosign bundle URLs from the
-      published release assets.
-   d. Write `docs/content/releases/v{VERSION}.json` and update
-      `docs/content/releases/latest.json`.
-   e. Commit to `main` and push. This triggers the `pages.yml` workflow to
-      deploy the updated metadata to `vibepit.dev/releases/`.
+2. Create draft prerelease and upload assets (`release-archive`,
+   `release-publish`).
 
-The `pages.yml` workflow must be updated to also trigger on changes to
-`docs/content/releases/**`. MkDocs serves files in `docs/content/` as static
-assets, so JSON files placed there are deployed as-is without needing nav
-entries.
+**New `release-metadata.yml` workflow**, triggered by `release: published`:
+
+1. Read the changelog from `docs/changelogs/v{VERSION}.yml`.
+2. Get the timestamp from the git tag.
+3. Collect asset URLs, SHA256 checksums, and cosign bundle URLs from the
+   published release assets.
+4. Write `docs/content/releases/v{VERSION}.json` and update
+   `docs/content/releases/latest.json`.
+5. Commit to `main` and push. This triggers the `pages.yml` workflow to
+   deploy the updated metadata to `vibepit.dev/releases/`.
+
+The existing `pages.yml` trigger on `docs/content/**` already covers the
+`docs/content/releases/` path, so no workflow change is needed for deployment.
+MkDocs serves files in `docs/content/` as static assets, so JSON files placed
+there are deployed as-is without needing nav entries.
 
 ## Changelog Files
 
@@ -109,21 +121,12 @@ which may produce non-semver strings for dev builds (e.g.,
 
 ### Release Channels
 
-`latest.json` contains two optional pointers:
-
-```json
-{
-  "stable": "0.2.0",
-  "prerelease": "0.3.0-alpha.1",
-  "url": "https://vibepit.dev/releases/v0.2.0.json"
-}
-```
+`latest.json` contains channel pointers (see Structure above for the full
+schema):
 
 - **Stable channel:** versions without prerelease suffixes (e.g., `0.2.0`).
 - **Prerelease channel:** versions with prerelease suffixes (e.g.,
   `0.3.0-alpha.1`).
-- The `url` field always points to the latest release metadata (stable or
-  prerelease, whichever is newer).
 
 Channel selection:
 
@@ -179,8 +182,9 @@ Binary and image updates are independent paths. Neither gates the other.
    c. Prompt for confirmation ("Update vibepit to v0.2.0? [y/N]"). Skipped with
       `--yes`.
    d. Download the platform-appropriate archive with a progress bar. Degrade to
-      line-based progress when stdout is not a TTY. Enforce a maximum archive
-      size of 256 MB.
+      line-based progress when stdout is not a TTY. Check the `Content-Length`
+      header before downloading and reject archives over 256 MB. Also cap the
+      reader during streaming as a defense-in-depth measure.
    e. Verify SHA256 checksum.
    f. Verify cosign bundle against Sigstore public good instance (Rekor +
       Fulcio).
@@ -245,7 +249,8 @@ This check only applies to binary self-update. Image updates proceed regardless.
    -- reject any path containing separators or traversal components.
 6. `os.Rename` the temp file over the current binary (atomic on POSIX).
 7. Preserve original file permissions via `os.Chmod`.
-8. Clean up temp files on failure.
+8. Clean up the archive temp file after successful extraction.
+9. Clean up all temp files on failure.
 
 ### Windows
 
