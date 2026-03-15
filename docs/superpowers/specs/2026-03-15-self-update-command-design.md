@@ -73,7 +73,9 @@ pointer files to the latest version.
 - **Version string convention:** Version strings in JSON payloads are bare (e.g.,
   `0.2.0`). File paths and git tags use the `v` prefix (e.g., `v0.2.0.json`,
   `v0.2.0` tag). The client constructs file paths by prepending `v` to the bare
-  version string.
+  version string. Since `golang.org/x/mod/semver` requires a `v` prefix for all
+  operations, the implementation prepends `v` to bare version strings before
+  comparison.
 
 ### Generation
 
@@ -95,7 +97,9 @@ from the GitHub UI, a separate workflow generates and deploys the metadata.
 
 **New `release-metadata.yml` workflow**, triggered by `release: published`:
 
-Permissions: `contents: write` (to push to `main`).
+Permissions: `contents: write` (to push to `main`). If branch protection rules
+are enabled on `main`, the workflow must use a GitHub App token or PAT with
+bypass permissions, since `GITHUB_TOKEN` cannot push to a protected branch.
 Concurrency group: `release-metadata` with no cancel-in-progress, so concurrent
 releases are serialized rather than racing.
 
@@ -184,9 +188,9 @@ Channel selection:
   the one being checked (e.g., on prerelease `0.3.0-alpha.1` but checking
   stable), always offer the channel's latest version regardless of semver
   ordering. The user explicitly chose to switch channels.
-- **Dev builds:** If `config.Version` contains a `git describe` suffix (e.g.,
-  `-3-gabcdef`) or is the default `0.0`, always offer the channel's latest
-  release as an update.
+- **Dev builds:** If `config.Version` is not a valid semver string (e.g., the
+  default `0.0`, or a `git describe` output like `0.1.0-alpha.7-3-gabcdef`),
+  always offer the channel's latest release as an update.
 
 ## Platform Detection
 
@@ -209,7 +213,8 @@ metadata uses Go conventions for matching.
 | `--check` | Check for updates without applying |
 | `--pre` | Use the prerelease channel instead of stable |
 
-When neither `--bin` nor `--images` is specified, both are updated.
+When neither `--bin` nor `--images` is specified (and `--use` is not set), both
+are updated.
 
 **Flag rules:**
 
@@ -335,8 +340,12 @@ replacement strategy is:
 - Verify against Sigstore's public good instance (Rekor + Fulcio).
 - Certificate issuer must match
   `https://token.actions.githubusercontent.com`.
-- Certificate SAN (identity) must match
-  `https://github.com/bernd/vibepit/.github/workflows/build.yml`.
+- Certificate SAN (identity) must match the workflow path
+  `https://github.com/bernd/vibepit/.github/workflows/build.yml` as a prefix.
+  GitHub Actions OIDC subjects include a `@refs/...` suffix (e.g.,
+  `@refs/tags/v0.2.0`) that varies per release. Use `sigstore-go`'s
+  `CertificateIdentity` with a SAN regex or issuer-based matching to verify the
+  workflow path while allowing any ref.
 - Verification runs after SHA256 check -- fail fast on checksum mismatch before
   the more expensive signature verification.
 - Verification is mandatory. No `--skip-verify` flag.
