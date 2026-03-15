@@ -86,6 +86,25 @@ fixed:
 No `date` field -- the timestamp is derived from the git tag when generating
 release metadata.
 
+## Version Comparison
+
+Release versions follow semver (e.g., `0.2.0`). At build time, `config.Version`
+is set via `git describe --tags`, which may produce non-semver strings for dev
+builds (e.g., `0.1.0-3-gabcdef`). Version comparison rules:
+
+- **Tagged release builds:** Compare semver components. If the local version
+  equals or exceeds the latest, report "already up to date."
+- **Dev builds:** If `config.Version` cannot be parsed as a clean semver tag
+  (contains `-` suffixes like `-3-gabcdef`, or is the default `0.0`), always
+  offer the latest release as an update.
+
+## Platform Detection
+
+The `os` and `arch` fields in release metadata use Go's naming convention
+(`runtime.GOOS` and `runtime.GOARCH`): `linux`, `darwin`, `amd64`, `arm64`.
+Archive filenames may differ (e.g., `x86_64` instead of `amd64`) but the JSON
+metadata uses Go conventions for matching.
+
 ## Update Command
 
 ### Flags
@@ -95,24 +114,26 @@ release metadata.
 | `--yes` / `-y` | Skip confirmation prompt |
 | `--bin` | Update binary only |
 | `--images` | Update images only |
-| `--rollback [version]` | Fetch previous version (or a specific version) |
+| `--rollback` | Fetch previous version |
+| `--version` | Target version for rollback (used with `--rollback`) |
 | `--check` | Check for updates without applying |
 
 When neither `--bin` nor `--images` is specified, both are updated.
 
 ### Update Flow
 
-1. Fetch `vibepit.dev/releases/latest.json`.
-2. Compare `latest.version` with `config.Version`. If already up to date, print
+1. Fetch `vibepit.dev/releases/latest.json` (HTTP timeout: 30s).
+2. Compare versions (see Version Comparison above). If already up to date, print
    message and exit.
 3. Fetch version-specific metadata (`releases/v{VERSION}.json`).
 4. Display current version, new version, timestamp, and changelog.
 5. Prompt for confirmation ("Update vibepit to v0.2.0? [y/N]"). Skipped with
    `--yes`.
-6. Download the platform-appropriate archive with a progress bar.
+6. Download the platform-appropriate archive with a progress bar. Degrade to
+   line-based progress when stdout is not a TTY. Enforce a maximum archive size
+   of 256 MB.
 7. Verify SHA256 checksum.
 8. Verify cosign bundle against Sigstore public good instance (Rekor + Fulcio).
-   Check that the OIDC identity matches the expected GitHub Actions workflow.
 9. Replace the binary (see Binary Replacement below).
 10. Pull latest container images (existing image update logic).
 11. Print summary: "Updated vibepit v0.1.0 -> v0.2.0".
@@ -120,10 +141,15 @@ When neither `--bin` nor `--images` is specified, both are updated.
 ### Rollback Flow
 
 - `vibepit update --rollback` -- fetch `releases/v{config.Version}.json`, read
-  its `previous` field, fetch and install that version.
-- `vibepit update --rollback v0.1.0` -- fetch `releases/v0.1.0.json` directly.
+  its `previous` field, fetch and install that version. If the current version
+  has no release metadata (dev build), fail with an error suggesting
+  `--rollback --version v0.1.0`.
+- `vibepit update --rollback --version v0.1.0` -- fetch
+  `releases/v0.1.0.json` directly.
 - Same download, verify, and replace flow as a normal update.
-- `--bin` and `--images` flags apply to rollback as well.
+- Rollback applies to the binary only. `--images` is not supported with
+  `--rollback` (container image tags are mutable and previous images may not be
+  locally cached). Using both flags together is an error.
 
 ### Check Flow
 
@@ -142,7 +168,8 @@ the result without downloading or applying anything.
    same filesystem for atomic rename).
 4. Verify checksum and cosign signature.
 5. Extract the `vibepit` binary from the tarball to a temp file in the same
-   directory.
+   directory. Validate that the extracted path is exactly the expected filename
+   -- reject any path containing separators or traversal components.
 6. `os.Rename` the temp file over the current binary (atomic on POSIX).
 7. Preserve original file permissions via `os.Chmod`.
 8. Clean up temp files on failure.
@@ -164,9 +191,11 @@ the result without downloading or applying anything.
 
 ### Verification (Client)
 
-- Use `sigstore/cosign-go` to verify bundles programmatically.
+- Use `sigstore/sigstore-go` to verify bundles programmatically.
 - Verify against Sigstore's public good instance (Rekor + Fulcio).
-- Check that the OIDC identity matches
+- Certificate issuer must match
+  `https://token.actions.githubusercontent.com`.
+- Certificate SAN (identity) must match
   `https://github.com/bernd/vibepit/.github/workflows/build.yml`.
 - Verification runs after SHA256 check -- fail fast on checksum mismatch before
   the more expensive signature verification.
@@ -181,6 +210,12 @@ the result without downloading or applying anything.
 - **Checksum mismatch:** Abort with error, do not attempt signature
   verification.
 - **Signature verification failure:** Hard stop, do not replace binary.
+- **Dev build rollback without version:** Error with guidance to use
+  `--rollback --version v{VERSION}`.
+- **Release metadata not found (404):** Report the version and suggest using
+  `--rollback --version` with a known version.
+- **`--rollback` combined with `--images`:** Error explaining that image
+  rollback is not supported.
 
 ## Package Structure
 
@@ -199,7 +234,7 @@ binary update and `container/` for image updates.
 
 ### Dependencies
 
-- `sigstore/cosign-go` -- cosign signature verification (new dependency).
+- `sigstore/sigstore-go` -- Sigstore bundle verification (new dependency).
 - No other new dependencies.
 
 ## No Automatic Update Checks
