@@ -45,21 +45,53 @@ func DownloadArchive(url, dir string, isTTY bool) (string, error) {
 	}
 	path := f.Name()
 
+	// Parse total size for progress display.
+	var totalSize int64
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		totalSize, _ = strconv.ParseInt(cl, 10, 64)
+	}
+
 	// Cap the reader at maxArchiveSize as defense-in-depth.
 	reader := io.LimitReader(resp.Body, maxArchiveSizeLimit+1)
 
-	// TODO: Add progress bar (isTTY) or line-based progress (!isTTY).
-	// For now, just copy.
-	n, err := io.Copy(f, reader)
+	var written int64
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			if _, err := f.Write(buf[:n]); err != nil {
+				f.Close()
+				os.Remove(path)
+				return "", fmt.Errorf("write archive: %w", err)
+			}
+			written += int64(n)
+			if written > maxArchiveSizeLimit {
+				f.Close()
+				os.Remove(path)
+				return "", fmt.Errorf("archive size exceeds maximum %d bytes", maxArchiveSizeLimit)
+			}
+			if totalSize > 0 {
+				pct := float64(written) / float64(totalSize) * 100
+				if isTTY {
+					fmt.Fprintf(os.Stderr, "\rDownloading... %.1f%% (%d / %d bytes)", pct, written, totalSize)
+				} else if int(pct)%25 == 0 {
+					fmt.Fprintf(os.Stderr, "Downloading... %.0f%%\n", pct)
+				}
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			f.Close()
+			os.Remove(path)
+			return "", fmt.Errorf("download archive: %w", readErr)
+		}
+	}
+	if isTTY {
+		fmt.Fprintln(os.Stderr)
+	}
 	f.Close()
-	if err != nil {
-		os.Remove(path)
-		return "", fmt.Errorf("write archive: %w", err)
-	}
-	if n > maxArchiveSizeLimit {
-		os.Remove(path)
-		return "", fmt.Errorf("archive size exceeds maximum %d bytes", maxArchiveSizeLimit)
-	}
 
 	return path, nil
 }
