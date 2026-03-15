@@ -157,7 +157,7 @@ which may produce non-semver strings for dev builds (e.g.,
 
 ### Release Channels
 
-Each channel has its own pointer file (see Structure above):
+Each channel has its own index file (see Structure above):
 
 - **`stable.json`:** versions without prerelease suffixes (e.g., `0.2.0`).
 - **`prerelease.json`:** versions with prerelease suffixes (e.g.,
@@ -165,21 +165,25 @@ Each channel has its own pointer file (see Structure above):
 
 Channel selection:
 
-- If the current binary is a prerelease version, fetch `prerelease.json`.
-- If the current binary is a stable version, fetch `stable.json`.
-- Override with `--channel stable` or `--channel prerelease` to switch channels.
-- Default channel (for dev builds) is `stable`.
-- **Fallback:** If the selected channel file does not exist (HTTP 404), fall back
-  to the other channel. This handles the case where only prerelease versions
-  have been published (as is the case early in the project lifecycle). If both
-  channel files are missing, report that no releases are available.
+- The default channel is always `stable`.
+- Use `--pre` to select the prerelease channel instead.
+- **Implicit fallback (default channel only):** If `stable.json` does not exist
+  (HTTP 404) and the user did not explicitly pass `--pre`, fall back to
+  `prerelease.json`. This handles the early project lifecycle where only
+  prerelease versions exist. If both are missing, report that no releases are
+  available.
+- **Explicit `--pre`:** No fallback. If `prerelease.json` does not exist, report
+  that no prerelease versions are available.
 
 ### Comparison Rules
 
-- **Tagged release builds (stable or prerelease):** Compare using full semver
-  ordering (prerelease versions sort lower than their release counterpart per
-  semver spec). If the local version equals or exceeds the channel's latest,
-  report "already up to date."
+- **Same-channel comparison:** If the current binary's version belongs to the
+  same channel being checked, compare using full semver ordering. If the local
+  version equals or exceeds the channel's latest, report "already up to date."
+- **Cross-channel switch:** If the current binary is on a different channel than
+  the one being checked (e.g., on prerelease `0.3.0-alpha.1` but checking
+  stable), always offer the channel's latest version regardless of semver
+  ordering. The user explicitly chose to switch channels.
 - **Dev builds:** If `config.Version` contains a `git describe` suffix (e.g.,
   `-3-gabcdef`) or is the default `0.0`, always offer the channel's latest
   release as an update.
@@ -203,7 +207,7 @@ metadata uses Go conventions for matching.
 | `--use` | Install a specific version (e.g., `--use 0.1.0`); implies `--bin` |
 | `--list` | List available releases |
 | `--check` | Check for updates without applying |
-| `--channel` | Override channel: `stable` or `prerelease` |
+| `--pre` | Use the prerelease channel instead of stable |
 
 When neither `--bin` nor `--images` is specified, both are updated.
 
@@ -215,7 +219,7 @@ When neither `--bin` nor `--images` is specified, both are updated.
   directly regardless of whether it is stable or prerelease.
 - `--list` and `--check` are mutually exclusive with each other and with
   `--use`. They are informational and do not perform updates.
-- `--yes` and `--channel` can be combined with any non-informational flag.
+- `--yes` and `--pre` can be combined with any non-informational flag.
 
 ### Update Flow
 
@@ -224,8 +228,9 @@ Binary and image updates are independent paths. Neither gates the other.
 **Binary update** (when `--bin` is set or no filter flags are given):
 
 1. If `--use` is set, fetch `releases/v{VERSION}.json` directly and skip
-   the version comparison. Otherwise, fetch the channel pointer file (e.g.,
-   `vibepit.dev/releases/stable.json`) with a 30s HTTP timeout and compare
+   the version comparison. Otherwise, fetch the channel index file
+   (`stable.json` by default, or `prerelease.json` with `--pre`) with a 30s
+   HTTP timeout and compare
    versions (see Version Comparison above).
 2. If a newer version is available (or `--use` was specified):
    a. Display current version, target version, timestamp, and changelog.
@@ -263,12 +268,13 @@ VERSION         TIMESTAMP
 
 - Single fetch of the channel index file — no additional requests needed.
 - Marks the currently installed version with `(installed)`.
-- Respects `--channel` to list a specific channel's releases.
+- Use `--pre` to list prerelease versions instead of stable.
 
 ### Check Flow
 
-`vibepit update --check` fetches the channel pointer file, compares versions,
-and prints the result without downloading or applying anything.
+`vibepit update --check` fetches the channel index file (`stable.json` by
+default, or `prerelease.json` with `--pre`), compares versions, and prints the
+result without downloading or applying anything.
 
 ## Package Manager Detection
 
@@ -344,8 +350,10 @@ replacement strategy is:
 - **Checksum mismatch:** Abort with error, do not attempt signature
   verification.
 - **Signature verification failure:** Hard stop, do not replace binary.
-- **Channel file not found (404):** Fall back to the other channel. If both are
-  missing, report that no releases are available.
+- **Channel file not found (404):** If using the default stable channel, fall
+  back to prerelease. If `--pre` was explicit, report that no prerelease
+  versions are available. If both channels are missing, report that no releases
+  are available.
 - **Version metadata not found (404):** Report the requested version and suggest
   `vibepit update --list` to see available releases.
 - **Package-managed binary:** Refuse self-update with guidance to use the
