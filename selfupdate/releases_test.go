@@ -147,3 +147,50 @@ func TestFetchVersionMetadata(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+func TestEndToEndUpdateFlow(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /stable.json", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ChannelIndex{
+			Latest: "0.2.0",
+			Releases: []ReleaseEntry{
+				{Version: "0.2.0", Timestamp: "2026-03-10T14:32:00Z"},
+				{Version: "0.1.0", Timestamp: "2026-02-20T09:00:00Z"},
+			},
+		})
+	})
+	mux.HandleFunc("GET /v0.2.0.json", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(VersionMetadata{
+			Version:   "0.2.0",
+			Timestamp: "2026-03-10T14:32:00Z",
+			Changelog: "- New feature",
+			Assets: []Asset{
+				{OS: "linux", Arch: "amd64", URL: "https://example.com/linux.tar.gz", SHA256: "abc"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := &Client{HTTPClient: srv.Client(), BaseURL: srv.URL}
+
+	// Resolve channel.
+	idx, channel, err := client.ResolveChannel(false)
+	require.NoError(t, err)
+	assert.Equal(t, ChannelStable, channel)
+	assert.Equal(t, "0.2.0", idx.Latest)
+
+	// Check should update.
+	assert.True(t, ShouldUpdate("0.1.0", idx.Latest, false))
+	assert.False(t, ShouldUpdate("0.2.0", idx.Latest, false))
+
+	// Fetch version metadata.
+	meta, err := client.FetchVersionMetadata(idx.Latest)
+	require.NoError(t, err)
+	assert.Equal(t, "0.2.0", meta.Version)
+
+	// Find asset.
+	asset, err := meta.FindAsset("linux", "amd64")
+	require.NoError(t, err)
+	assert.Equal(t, "abc", asset.SHA256)
+}
