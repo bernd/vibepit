@@ -17,8 +17,11 @@ pointer files to the latest version.
 
 ```json
 {
-  "version": "0.2.0",
-  "url": "https://vibepit.dev/releases/v0.2.0.json"
+  "latest": "0.2.0",
+  "releases": [
+    {"version": "0.2.0", "timestamp": "2026-03-10T14:32:00Z"},
+    {"version": "0.1.0", "timestamp": "2026-02-20T09:00:00Z"}
+  ]
 }
 ```
 
@@ -26,12 +29,19 @@ pointer files to the latest version.
 
 ```json
 {
-  "version": "0.3.0-alpha.1",
-  "url": "https://vibepit.dev/releases/v0.3.0-alpha.1.json"
+  "latest": "0.3.0-alpha.1",
+  "releases": [
+    {"version": "0.3.0-alpha.1", "timestamp": "2026-03-12T10:00:00Z"},
+    {"version": "0.2.0-alpha.1", "timestamp": "2026-02-18T08:00:00Z"},
+    {"version": "0.1.0-alpha.7", "timestamp": "2026-02-15T12:00:00Z"}
+  ]
 }
 ```
 
-- Each channel has its own pointer file. The default channel is `stable`.
+- Each channel has its own index file. The default channel is `stable`.
+- `latest` field enables quick version comparison without parsing the list.
+- `releases` array is sorted newest-first with version and timestamp per entry,
+  sufficient for `--list` and `--check` in a single fetch.
 - Additional channels can be added in the future (e.g., `nightly.json`) without
   schema changes.
 - A channel file may not exist if no release has been published in that channel
@@ -42,7 +52,6 @@ pointer files to the latest version.
 ```json
 {
   "version": "0.2.0",
-  "previous": "0.1.0",
   "timestamp": "2026-03-10T14:32:00Z",
   "changelog": "- Added self-update command\n- Fixed proxy DNS resolution on macOS",
   "assets": [
@@ -57,15 +66,10 @@ pointer files to the latest version.
 }
 ```
 
-- Channel pointer files enable quick version comparison without downloading full
-  metadata.
-- Each version file links to its predecessor via the `previous` field, forming a
-  linked list that enables walking the release history. The `previous` field
-  points to the chronologically preceding published release, regardless of
-  channel. For example, if the publish order is `0.1.0`, `0.2.0-alpha.1`,
-  `0.2.0-alpha.2`, then `0.2.0-alpha.2.previous` is `0.2.0-alpha.1` and
-  `0.2.0-alpha.1.previous` is `0.1.0`.
-- First release has `"previous": null`.
+- Per-version files contain the full release metadata (changelog, assets,
+  checksums) and are only fetched when actually updating.
+- The channel index file provides the version list and timestamps, so per-version
+  files do not need to link to each other.
 
 ### Generation
 
@@ -86,9 +90,10 @@ from the GitHub UI, a separate workflow generates and deploys the metadata.
 3. Collect asset URLs, SHA256 checksums, and cosign bundle URLs from the
    published release assets.
 4. Write `docs/content/releases/v{VERSION}.json` and update the appropriate
-   channel pointer file (`docs/content/releases/stable.json` or
+   channel index file (`docs/content/releases/stable.json` or
    `docs/content/releases/prerelease.json`) based on whether the version has a
-   prerelease suffix.
+   prerelease suffix: set `latest` to the new version and prepend the new
+   release entry to the `releases` array.
 5. Commit to `main` and push. This triggers the `pages.yml` workflow to
    deploy the updated metadata to `vibepit.dev/releases/`.
 
@@ -212,22 +217,18 @@ Binary and image updates are independent paths. Neither gates the other.
 
 ### List Flow
 
-`vibepit update --list` walks the release linked list starting from the
-channel's latest version and prints available releases:
+`vibepit update --list` fetches the channel index file and prints available
+releases:
 
 ```
-VERSION         DATE                 CHANNEL
-0.3.0-alpha.1   2026-03-12T10:00:00Z prerelease
-0.2.0           2026-03-10T14:32:00Z stable
-0.1.0           2026-02-20T09:00:00Z stable
-0.1.0-alpha.7   2026-02-15T12:00:00Z prerelease
-  ...
+VERSION         TIMESTAMP
+0.2.0           2026-03-10T14:32:00Z
+0.1.0           2026-02-20T09:00:00Z  (installed)
 ```
 
-- Walks the `previous` linked list, fetching each version's metadata.
-- Marks the currently installed version (e.g., with `*` or `(installed)`).
-- Limits to the 20 most recent releases by default.
-- Respects `--channel` to start from a specific channel's latest.
+- Single fetch of the channel index file — no additional requests needed.
+- Marks the currently installed version with `(installed)`.
+- Respects `--channel` to list a specific channel's releases.
 
 ### Check Flow
 
