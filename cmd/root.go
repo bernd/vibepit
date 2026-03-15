@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
+	"github.com/bernd/vibepit/config"
 	"github.com/urfave/cli/v3"
+	"os"
 )
 
 var sessionFlag = &cli.StringFlag{
@@ -10,6 +14,7 @@ var sessionFlag = &cli.StringFlag{
 }
 
 const debugFlag = "debug"
+const versionFlag = "version"
 
 func RootCommand() *cli.Command {
 	return &cli.Command{
@@ -23,6 +28,17 @@ func RootCommand() *cli.Command {
 				Name:  debugFlag,
 				Usage: "Enable debug output",
 			},
+			&cli.BoolFlag{
+				Name:  versionFlag,
+				Usage: "Show version",
+			},
+		},
+		Before: func(ctx context.Context, command *cli.Command) (context.Context, error) {
+			if command.Bool(versionFlag) {
+				fmt.Printf("%s (%s)\n", config.Version, config.CommitID)
+				os.Exit(0)
+			}
+			return ctx, nil
 		},
 		Commands: []*cli.Command{
 			// Order matters here!

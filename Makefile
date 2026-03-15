@@ -1,8 +1,11 @@
 .PHONY: build test test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve
 
 BINARY := vibepit
-LDFLAGS := -s -w
 VERSION ?= $(shell git describe --tags 2>/dev/null | sed 's/^v//')
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+LDFLAGS := -s -w \
+	-X github.com/bernd/vibepit/config.Version=$(VERSION) \
+	-X github.com/bernd/vibepit/config.CommitID=$(COMMIT)
 
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 
