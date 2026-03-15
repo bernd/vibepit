@@ -371,6 +371,7 @@ golang.org:443
 www.golang.org:443
 goproxy.io:443
 pkg.go.dev:443
+vuln.go.dev:443
 ```
 
 ### `pkg-jvm`
