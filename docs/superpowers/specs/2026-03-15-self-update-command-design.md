@@ -77,11 +77,16 @@ Release metadata generation is decoupled from the build workflow. The existing
 `build.yml` creates a draft prerelease. When a maintainer publishes the release
 from the GitHub UI, a separate workflow generates and deploys the metadata.
 
-**`build.yml` (existing, unchanged):**
+**`build.yml` (requires changes):**
 
-1. Build and sign archives (`release-build`, cosign signing).
-2. Create draft prerelease and upload assets (`release-archive`,
-   `release-publish`).
+1. Build archives (`release-build`).
+2. Sign each platform archive with cosign using keyless OIDC signing. This
+   requires adding `id-token: write` permission to the workflow (similar to
+   `docker-publish.yml`) and a new cosign signing step after `release-build`.
+   Each signing produces a `.bundle` file alongside the archive.
+3. Create draft prerelease and upload assets including `.bundle` files
+   (`release-archive`, `release-publish`). The `release-archive` Makefile target
+   must be updated to include `.bundle` files in the release assets.
 
 **New `release-metadata.yml` workflow**, triggered by `release: published`:
 
@@ -149,6 +154,10 @@ Channel selection:
 - If the current binary is a stable version, fetch `stable.json`.
 - Override with `--channel stable` or `--channel prerelease` to switch channels.
 - Default channel (for dev builds) is `stable`.
+- **Fallback:** If the selected channel file does not exist (HTTP 404), fall back
+  to the other channel. This handles the case where only prerelease versions
+  have been published (as is the case early in the project lifecycle). If both
+  channel files are missing, report that no releases are available.
 
 ### Comparison Rules
 
@@ -306,7 +315,9 @@ This check only applies to binary self-update. Image updates proceed regardless.
 - **Checksum mismatch:** Abort with error, do not attempt signature
   verification.
 - **Signature verification failure:** Hard stop, do not replace binary.
-- **Release metadata not found (404):** Report the requested version and suggest
+- **Channel file not found (404):** Fall back to the other channel. If both are
+  missing, report that no releases are available.
+- **Version metadata not found (404):** Report the requested version and suggest
   `vibepit update --list` to see available releases.
 - **Package-managed binary:** Refuse self-update with guidance to use the
   package manager instead.
