@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ func VerifySHA256(path, expected string) error {
 	}
 
 	actual := hex.EncodeToString(h.Sum(nil))
-	if actual != expected {
+	if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actual)
 	}
 	return nil

@@ -106,7 +106,7 @@ func ExtractBinary(archivePath, outDir, binaryName string) (string, error) {
 			return "", fmt.Errorf("create temp file: %w", err)
 		}
 
-		if _, err := io.Copy(outPath, tr); err != nil {
+		if _, err := io.Copy(outPath, io.LimitReader(tr, maxArchiveSizeLimit)); err != nil {
 			outPath.Close()
 			os.Remove(outPath.Name())
 			return "", fmt.Errorf("extract binary: %w", err)
