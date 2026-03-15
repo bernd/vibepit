@@ -70,6 +70,10 @@ pointer files to the latest version.
   checksums) and are only fetched when actually updating.
 - The channel index file provides the version list and timestamps, so per-version
   files do not need to link to each other.
+- **Version string convention:** Version strings in JSON payloads are bare (e.g.,
+  `0.2.0`). File paths and git tags use the `v` prefix (e.g., `v0.2.0.json`,
+  `v0.2.0` tag). The client constructs file paths by prepending `v` to the bare
+  version string.
 
 ### Generation
 
@@ -84,22 +88,33 @@ from the GitHub UI, a separate workflow generates and deploys the metadata.
    requires adding `id-token: write` permission to the workflow (similar to
    `docker-publish.yml`) and a new cosign signing step after `release-build`.
    Each signing produces a `.bundle` file alongside the archive.
-3. Create draft prerelease and upload assets including `.bundle` files
-   (`release-archive`, `release-publish`). The `release-archive` Makefile target
-   must be updated to include `.bundle` files in the release assets.
+3. Create draft prerelease (`release-archive`, `release-publish`). The
+   `release-publish` Makefile target must be updated to upload `.bundle` files
+   alongside the archive tarballs. The `.bundle` files are not included inside
+   the tarballs -- they are separate release assets.
 
 **New `release-metadata.yml` workflow**, triggered by `release: published`:
 
+Permissions: `contents: write` (to push to `main`).
+Concurrency group: `release-metadata` with no cancel-in-progress, so concurrent
+releases are serialized rather than racing.
+
 1. Read the changelog from `docs/changelogs/v{VERSION}.yml`.
 2. Get the timestamp from the git tag.
-3. Collect asset URLs, SHA256 checksums, and cosign bundle URLs from the
-   published release assets.
-4. Write `docs/content/releases/v{VERSION}.json` and update the appropriate
+3. Parse SHA256 checksums from the `checksums.txt` release asset (already
+   produced by `release-archive`). Collect asset URLs and cosign bundle URLs
+   from the published release assets.
+4. Render the changelog YAML into a plain text string for the version JSON.
+   Rendering rules: group entries under category headers (`Added`, `Changed`,
+   `Fixed`, etc.), each entry as `- {description}`. PR and issue references are
+   omitted from the rendered string (they are for documentation, not the update
+   CLI output).
+5. Write `docs/content/releases/v{VERSION}.json` and update the appropriate
    channel index file (`docs/content/releases/stable.json` or
    `docs/content/releases/prerelease.json`) based on whether the version has a
    prerelease suffix: set `latest` to the new version and prepend the new
    release entry to the `releases` array.
-5. Commit to `main` and push. This triggers the `pages.yml` workflow to
+6. Commit to `main` and push. This triggers the `pages.yml` workflow to
    deploy the updated metadata to `vibepit.dev/releases/`.
 
 The existing `pages.yml` trigger on `docs/content/**` already covers the
@@ -185,12 +200,22 @@ metadata uses Go conventions for matching.
 | `--yes` / `-y` | Skip confirmation prompt |
 | `--bin` | Update binary only |
 | `--images` | Update images only |
-| `--version` | Install a specific version (e.g., `--version 0.1.0`) |
+| `--use` | Install a specific version (e.g., `--use 0.1.0`); implies `--bin` |
 | `--list` | List available releases |
 | `--check` | Check for updates without applying |
 | `--channel` | Override channel: `stable` or `prerelease` |
 
 When neither `--bin` nor `--images` is specified, both are updated.
+
+**Flag rules:**
+
+- `--use` implies `--bin` -- it only affects the binary, not images. Using
+  `--use` with `--images` is an error.
+- `--use` bypasses channel logic entirely -- it fetches the version file
+  directly regardless of whether it is stable or prerelease.
+- `--list` and `--check` are mutually exclusive with each other and with
+  `--use`. They are informational and do not perform updates.
+- `--yes` and `--channel` can be combined with any non-informational flag.
 
 ### Update Flow
 
@@ -198,18 +223,19 @@ Binary and image updates are independent paths. Neither gates the other.
 
 **Binary update** (when `--bin` is set or no filter flags are given):
 
-1. If `--version` is set, fetch `releases/v{VERSION}.json` directly and skip
+1. If `--use` is set, fetch `releases/v{VERSION}.json` directly and skip
    the version comparison. Otherwise, fetch the channel pointer file (e.g.,
    `vibepit.dev/releases/stable.json`) with a 30s HTTP timeout and compare
    versions (see Version Comparison above).
-2. If a newer version is available (or `--version` was specified):
+2. If a newer version is available (or `--use` was specified):
    a. Display current version, target version, timestamp, and changelog.
    b. Prompt for confirmation ("Install vibepit v0.2.0? [y/N]"). Skipped with
       `--yes`.
    c. Download the platform-appropriate archive with a progress bar. Degrade to
       line-based progress when stdout is not a TTY. Check the `Content-Length`
-      header before downloading and reject archives over 256 MB. Also cap the
-      reader during streaming as a defense-in-depth measure.
+      header before downloading and reject archives over 256 MB. If the header
+      is absent, proceed but cap the reader at 256 MB during streaming as a
+      defense-in-depth measure.
    d. Verify SHA256 checksum.
    e. Verify cosign bundle against Sigstore public good instance (Rekor +
       Fulcio).
@@ -279,7 +305,10 @@ This check only applies to binary self-update. Image updates proceed regardless.
 8. Clean up the archive temp file after successful extraction.
 9. Clean up all temp files on failure.
 
-### Windows
+### Windows (future work)
+
+No Windows build target exists yet. When Windows support is added, the
+replacement strategy is:
 
 1. Rename current binary to `vibepit.old` (Windows allows renaming a locked
    file but not deleting it).
@@ -340,6 +369,8 @@ binary update and `container/` for image updates.
 ### Dependencies
 
 - `sigstore/sigstore-go` -- Sigstore bundle verification (new dependency).
+- `golang.org/x/mod/semver` -- already an indirect dependency in `go.mod`,
+  promoted to direct for version comparison.
 - No other new dependencies.
 
 ## No Automatic Update Checks
