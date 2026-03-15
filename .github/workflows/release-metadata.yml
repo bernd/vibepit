@@ -1,0 +1,150 @@
+name: "Release Metadata"
+
+on:
+  release:
+    types: ["published"]
+
+permissions:
+  contents: "write"
+
+concurrency:
+  group: "release-metadata"
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: "bash"
+
+jobs:
+  generate:
+    runs-on: "ubuntu-slim"
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@v6"
+        with:
+          ref: "main"
+          fetch-depth: 0
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Setup Python"
+        uses: "actions/setup-python@v6"
+        with:
+          python-version: "3.x"
+
+      - name: "Install PyYAML"
+        run: "pip install pyyaml"
+
+      - name: "Generate release metadata"
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          VERSION: "${{ github.event.release.tag_name }}"
+        run: |
+          # Strip v prefix for bare version.
+          BARE_VERSION="${VERSION#v}"
+
+          # Get timestamp from git tag.
+          TIMESTAMP=$(git log -1 --format=%aI "$VERSION")
+
+          # Download checksums.txt from release assets.
+          gh release download "$VERSION" --pattern "checksums.txt" --dir /tmp
+
+          # Parse changelog YAML and render to plain text.
+          CHANGELOG_FILE="docs/changelogs/${VERSION}.yml"
+          if [ -f "$CHANGELOG_FILE" ]; then
+            CHANGELOG=$(python3 -c "
+          import yaml, json
+          with open('$CHANGELOG_FILE') as f:
+              data = yaml.safe_load(f)
+          lines = []
+          for category in ['added', 'changed', 'fixed', 'deprecated', 'removed', 'security']:
+              entries = data.get(category, [])
+              if entries:
+                  lines.append(category.capitalize() + ':')
+                  for entry in entries:
+                      lines.append('- ' + entry['description'])
+          print(json.dumps('\n'.join(lines)))
+          ")
+          else
+            CHANGELOG='""'
+          fi
+
+          # Build assets array from release assets.
+          ASSETS=$(python3 -c "
+          import json, sys
+
+          checksums = {}
+          with open('/tmp/checksums.txt') as f:
+              for line in f:
+                  parts = line.strip().split()
+                  if len(parts) == 2:
+                      checksums[parts[1]] = parts[0]
+
+          platform_map = {
+              'linux-x86_64': ('linux', 'amd64'),
+              'linux-aarch64': ('linux', 'arm64'),
+              'darwin-x86_64': ('darwin', 'amd64'),
+              'darwin-aarch64': ('darwin', 'arm64'),
+          }
+
+          assets = []
+          base_url = 'https://github.com/bernd/vibepit/releases/download/${VERSION}'
+          for suffix, (os_name, arch) in platform_map.items():
+              tarball = 'vibepit-${BARE_VERSION}-' + suffix + '.tar.gz'
+              if tarball in checksums:
+                  assets.append({
+                      'os': os_name,
+                      'arch': arch,
+                      'url': base_url + '/' + tarball,
+                      'sha256': checksums[tarball],
+                      'cosign_bundle_url': base_url + '/' + tarball + '.bundle',
+                  })
+
+          print(json.dumps(assets, indent=2))
+          ")
+
+          # Write version metadata file.
+          mkdir -p docs/content/releases
+          python3 -c "
+          import json
+          meta = {
+              'version': '${BARE_VERSION}',
+              'timestamp': '${TIMESTAMP}',
+              'changelog': ${CHANGELOG},
+              'assets': json.loads('''${ASSETS}'''),
+          }
+          with open('docs/content/releases/v${BARE_VERSION}.json', 'w') as f:
+              json.dump(meta, f, indent=2)
+          "
+
+          # Update channel index file.
+          python3 -c "
+          import json, sys
+
+          version = '${BARE_VERSION}'
+          timestamp = '${TIMESTAMP}'
+
+          # Determine channel.
+          channel = 'prerelease' if '-' in version else 'stable'
+          channel_file = f'docs/content/releases/{channel}.json'
+
+          try:
+              with open(channel_file) as f:
+                  idx = json.load(f)
+          except FileNotFoundError:
+              idx = {'latest': '', 'releases': []}
+
+          idx['latest'] = version
+          idx['releases'].insert(0, {'version': version, 'timestamp': timestamp})
+
+          with open(channel_file, 'w') as f:
+              json.dump(idx, f, indent=2)
+          "
+
+      - name: "Commit and push metadata"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/content/releases/
+          git commit -m "chore: generate release metadata for ${{ github.event.release.tag_name }}"
+          git push
