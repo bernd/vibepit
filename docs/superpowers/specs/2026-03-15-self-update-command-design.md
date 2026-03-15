@@ -10,23 +10,32 @@ container image updates. The binary update uses release metadata served from
 
 ### Structure
 
-Per-version JSON files served from `vibepit.dev/releases/`, with a lightweight
-pointer to the latest version.
+Per-version JSON files served from `vibepit.dev/releases/`, with per-channel
+pointer files to the latest version.
 
-**`vibepit.dev/releases/latest.json`:**
+**`vibepit.dev/releases/stable.json`:**
 
 ```json
 {
-  "stable": "0.2.0",
-  "prerelease": "0.3.0-alpha.1",
+  "version": "0.2.0",
+  "url": "https://vibepit.dev/releases/v0.2.0.json"
+}
+```
+
+**`vibepit.dev/releases/prerelease.json`:**
+
+```json
+{
+  "version": "0.3.0-alpha.1",
   "url": "https://vibepit.dev/releases/v0.3.0-alpha.1.json"
 }
 ```
 
-- `stable` and `prerelease` point to the latest version in each channel.
-- `url` points to the most recently published release (stable or prerelease,
-  whichever is newer).
-- Either field may be null if no release exists in that channel yet.
+- Each channel has its own pointer file. The default channel is `stable`.
+- Additional channels can be added in the future (e.g., `nightly.json`) without
+  schema changes.
+- A channel file may not exist if no release has been published in that channel
+  yet.
 
 **`vibepit.dev/releases/v0.2.0.json`:**
 
@@ -48,7 +57,7 @@ pointer to the latest version.
 }
 ```
 
-- `latest.json` enables quick version comparison without downloading full
+- Channel pointer files enable quick version comparison without downloading full
   metadata.
 - Each version file links to its predecessor via the `previous` field, forming a
   linked list for rollback navigation. The `previous` field points to the
@@ -76,8 +85,10 @@ from the GitHub UI, a separate workflow generates and deploys the metadata.
 2. Get the timestamp from the git tag.
 3. Collect asset URLs, SHA256 checksums, and cosign bundle URLs from the
    published release assets.
-4. Write `docs/content/releases/v{VERSION}.json` and update
-   `docs/content/releases/latest.json`.
+4. Write `docs/content/releases/v{VERSION}.json` and update the appropriate
+   channel pointer file (`docs/content/releases/stable.json` or
+   `docs/content/releases/prerelease.json`) based on whether the version has a
+   prerelease suffix.
 5. Commit to `main` and push. This triggers the `pages.yml` workflow to
    deploy the updated metadata to `vibepit.dev/releases/`.
 
@@ -121,19 +132,18 @@ which may produce non-semver strings for dev builds (e.g.,
 
 ### Release Channels
 
-`latest.json` contains channel pointers (see Structure above for the full
-schema):
+Each channel has its own pointer file (see Structure above):
 
-- **Stable channel:** versions without prerelease suffixes (e.g., `0.2.0`).
-- **Prerelease channel:** versions with prerelease suffixes (e.g.,
+- **`stable.json`:** versions without prerelease suffixes (e.g., `0.2.0`).
+- **`prerelease.json`:** versions with prerelease suffixes (e.g.,
   `0.3.0-alpha.1`).
 
 Channel selection:
 
-- If the current binary is a prerelease version, compare against the
-  `prerelease` field.
-- If the current binary is a stable version, compare against the `stable` field.
+- If the current binary is a prerelease version, fetch `prerelease.json`.
+- If the current binary is a stable version, fetch `stable.json`.
 - Override with `--channel stable` or `--channel prerelease` to switch channels.
+- Default channel (for dev builds) is `stable`.
 
 ### Comparison Rules
 
@@ -174,7 +184,8 @@ Binary and image updates are independent paths. Neither gates the other.
 
 **Binary update** (when `--bin` is set or no filter flags are given):
 
-1. Fetch `vibepit.dev/releases/latest.json` (HTTP timeout: 30s).
+1. Fetch the channel pointer file (e.g., `vibepit.dev/releases/stable.json`)
+   with a 30s HTTP timeout.
 2. Compare versions (see Version Comparison above).
 3. If a newer version is available:
    a. Fetch version-specific metadata (`releases/v{VERSION}.json`).
@@ -214,8 +225,8 @@ Binary and image updates are independent paths. Neither gates the other.
 
 ### Check Flow
 
-`vibepit update --check` fetches `latest.json`, compares versions, and prints
-the result without downloading or applying anything.
+`vibepit update --check` fetches the channel pointer file, compares versions,
+and prints the result without downloading or applying anything.
 
 ## Package Manager Detection
 
@@ -303,7 +314,7 @@ New `selfupdate/` package:
 
 | File | Responsibility |
 |---|---|
-| `selfupdate/releases.go` | Fetch and parse `latest.json` and version metadata |
+| `selfupdate/releases.go` | Fetch and parse channel pointer files and version metadata |
 | `selfupdate/download.go` | Download archive with progress bar |
 | `selfupdate/verify.go` | SHA256 checksum and cosign bundle verification |
 | `selfupdate/replace.go` | Binary replacement (POSIX and Windows strategies) |
