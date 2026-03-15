@@ -60,10 +60,10 @@ pointer files to the latest version.
 - Channel pointer files enable quick version comparison without downloading full
   metadata.
 - Each version file links to its predecessor via the `previous` field, forming a
-  linked list for rollback navigation. The `previous` field points to the
-  chronologically preceding published release, regardless of channel. For
-  example, if the publish order is `0.1.0`, `0.2.0-alpha.1`, `0.2.0-alpha.2`,
-  then `0.2.0-alpha.2.previous` is `0.2.0-alpha.1` and
+  linked list that enables walking the release history. The `previous` field
+  points to the chronologically preceding published release, regardless of
+  channel. For example, if the publish order is `0.1.0`, `0.2.0-alpha.1`,
+  `0.2.0-alpha.2`, then `0.2.0-alpha.2.previous` is `0.2.0-alpha.1` and
   `0.2.0-alpha.1.previous` is `0.1.0`.
 - First release has `"previous": null`.
 
@@ -171,8 +171,8 @@ metadata uses Go conventions for matching.
 | `--yes` / `-y` | Skip confirmation prompt |
 | `--bin` | Update binary only |
 | `--images` | Update images only |
-| `--rollback` | Fetch previous version |
-| `--version` | Target version for rollback (used with `--rollback`) |
+| `--version` | Install a specific version (e.g., `--version 0.1.0`) |
+| `--list` | List available releases |
 | `--check` | Check for updates without applying |
 | `--channel` | Override channel: `stable` or `prerelease` |
 
@@ -184,44 +184,50 @@ Binary and image updates are independent paths. Neither gates the other.
 
 **Binary update** (when `--bin` is set or no filter flags are given):
 
-1. Fetch the channel pointer file (e.g., `vibepit.dev/releases/stable.json`)
-   with a 30s HTTP timeout.
-2. Compare versions (see Version Comparison above).
-3. If a newer version is available:
-   a. Fetch version-specific metadata (`releases/v{VERSION}.json`).
-   b. Display current version, new version, timestamp, and changelog.
-   c. Prompt for confirmation ("Update vibepit to v0.2.0? [y/N]"). Skipped with
+1. If `--version` is set, fetch `releases/v{VERSION}.json` directly and skip
+   the version comparison. Otherwise, fetch the channel pointer file (e.g.,
+   `vibepit.dev/releases/stable.json`) with a 30s HTTP timeout and compare
+   versions (see Version Comparison above).
+2. If a newer version is available (or `--version` was specified):
+   a. Display current version, target version, timestamp, and changelog.
+   b. Prompt for confirmation ("Install vibepit v0.2.0? [y/N]"). Skipped with
       `--yes`.
-   d. Download the platform-appropriate archive with a progress bar. Degrade to
+   c. Download the platform-appropriate archive with a progress bar. Degrade to
       line-based progress when stdout is not a TTY. Check the `Content-Length`
       header before downloading and reject archives over 256 MB. Also cap the
       reader during streaming as a defense-in-depth measure.
-   e. Verify SHA256 checksum.
-   f. Verify cosign bundle against Sigstore public good instance (Rekor +
+   d. Verify SHA256 checksum.
+   e. Verify cosign bundle against Sigstore public good instance (Rekor +
       Fulcio).
-   g. Replace the binary (see Binary Replacement below).
-4. If already up to date, print "binary is up to date" and continue.
+   f. Replace the binary (see Binary Replacement below).
+3. If already up to date, print "binary is up to date" and continue.
 
 **Image update** (when `--images` is set or no filter flags are given):
 
-5. Pull latest container images (existing image update logic).
+4. Pull latest container images (existing image update logic).
 
 **Summary:**
 
-6. Print results for each step that ran.
+5. Print results for each step that ran.
 
-### Rollback Flow
+### List Flow
 
-- `vibepit update --rollback` -- fetch `releases/v{config.Version}.json`, read
-  its `previous` field, fetch and install that version. If the current version
-  has no release metadata (dev build), fail with an error suggesting
-  `--rollback --version v0.1.0`.
-- `vibepit update --rollback --version v0.1.0` -- fetch
-  `releases/v0.1.0.json` directly.
-- Same download, verify, and replace flow as a normal update.
-- Rollback applies to the binary only. `--images` is not supported with
-  `--rollback` (container image tags are mutable and previous images may not be
-  locally cached). Using both flags together is an error.
+`vibepit update --list` walks the release linked list starting from the
+channel's latest version and prints available releases:
+
+```
+VERSION         DATE                 CHANNEL
+0.3.0-alpha.1   2026-03-12T10:00:00Z prerelease
+0.2.0           2026-03-10T14:32:00Z stable
+0.1.0           2026-02-20T09:00:00Z stable
+0.1.0-alpha.7   2026-02-15T12:00:00Z prerelease
+  ...
+```
+
+- Walks the `previous` linked list, fetching each version's metadata.
+- Marks the currently installed version (e.g., with `*` or `(installed)`).
+- Limits to the 20 most recent releases by default.
+- Respects `--channel` to start from a specific channel's latest.
 
 ### Check Flow
 
@@ -299,12 +305,8 @@ This check only applies to binary self-update. Image updates proceed regardless.
 - **Checksum mismatch:** Abort with error, do not attempt signature
   verification.
 - **Signature verification failure:** Hard stop, do not replace binary.
-- **Dev build rollback without version:** Error with guidance to use
-  `--rollback --version v{VERSION}`.
-- **Release metadata not found (404):** Report the version and suggest using
-  `--rollback --version` with a known version.
-- **`--rollback` combined with `--images`:** Error explaining that image
-  rollback is not supported.
+- **Release metadata not found (404):** Report the requested version and suggest
+  `vibepit update --list` to see available releases.
 - **Package-managed binary:** Refuse self-update with guidance to use the
   package manager instead.
 
