@@ -65,21 +65,25 @@ func runUpdate(ctx context.Context, cmd *cli.Command) error {
 	doBin := !imagesOnly
 	doImages := !binOnly
 
-	// Binary update path.
+	// Binary and image updates are independent paths. Neither gates the other.
+	var binErr, imgErr error
+
 	if doBin {
-		if err := runBinaryUpdate(ctx, client, useVersion, pre, yes); err != nil {
-			return err
-		}
+		binErr = runBinaryUpdate(ctx, client, useVersion, pre, yes)
 	}
 
-	// Image update path.
 	if doImages {
-		if err := runImageUpdate(ctx); err != nil {
-			return err
-		}
+		imgErr = runImageUpdate(ctx)
 	}
 
-	return nil
+	// Report errors from both paths.
+	if binErr != nil && imgErr != nil {
+		return fmt.Errorf("binary update: %w; image update: %v", binErr, imgErr)
+	}
+	if binErr != nil {
+		return binErr
+	}
+	return imgErr
 }
 
 func validateUpdateFlags(cmd *cli.Command) error {

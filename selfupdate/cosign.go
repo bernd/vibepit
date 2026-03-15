@@ -40,8 +40,11 @@ func VerifyCosignBundle(archivePath, bundleURL string) error {
 	return fmt.Errorf("cosign verification not yet implemented")
 }
 
+const maxBundleSize = 10 * 1024 * 1024 // 10 MB — bundles are typically a few KB
+
 func downloadBundle(url string) (string, error) {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: httpTimeout}
+	resp, err := client.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("download cosign bundle: %w", err)
 	}
@@ -56,7 +59,7 @@ func downloadBundle(url string) (string, error) {
 		return "", fmt.Errorf("create temp bundle file: %w", err)
 	}
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, maxBundleSize)); err != nil {
 		f.Close()
 		os.Remove(f.Name())
 		return "", fmt.Errorf("write bundle: %w", err)
