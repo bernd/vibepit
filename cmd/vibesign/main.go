@@ -23,6 +23,8 @@ const (
 	envSignerToken   = "VIBESIGN_TOKEN"
 	envSignerTimeout = "VIBESIGN_TIMEOUT"
 	defaultTimeout   = 10 * time.Second
+	maxResponseSize  = 1 << 20 // 1 MiB
+	maxErrorBodyLen  = 512
 )
 
 type signerArgs struct {
@@ -63,16 +65,14 @@ func execute(args []string, getenv func(string) string, stdout, stderr io.Writer
 
 func newRootCommand(getenv func(string) string, stdout, stderr io.Writer) *cli.Command {
 	return &cli.Command{
-		Name:            "vibesign",
-		Usage:           "Git SSH signing helper for Vibepit sandboxes",
-		HideHelp:        true,
-		HideHelpCommand: true,
-		Writer:          stdout,
-		ErrWriter:       stderr,
-		Flags:           signFlags(),
+		Name:      "vibesign",
+		Usage:     "Git SSH signing helper for Vibepit sandboxes",
+		Writer:    stdout,
+		ErrWriter: stderr,
+		Flags:     signFlags(),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			parsed := signArgsFromCommand(cmd)
-			if err := validateSignArgs(parsed, cmd.Args().Slice()); err != nil {
+			if err := validateSignArgs(parsed, cmd.NArg()); err != nil {
 				return err
 			}
 			return runSignParsed(parsed, getenv)
@@ -85,12 +85,10 @@ func newRootCommand(getenv func(string) string, stdout, stderr io.Writer) *cli.C
 
 func newPubKeyCommand(getenv func(string) string, stdout, stderr io.Writer) *cli.Command {
 	return &cli.Command{
-		Name:            "pubkey",
-		Usage:           "Fetch the SSH public key for Git defaultKeyCommand",
-		HideHelp:        true,
-		HideHelpCommand: true,
-		Writer:          stdout,
-		ErrWriter:       stderr,
+		Name:      "pubkey",
+		Usage:     "Fetch the SSH public key for Git defaultKeyCommand",
+		Writer:    stdout,
+		ErrWriter: stderr,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 0 {
 				return errors.New("pubkey does not accept arguments")
@@ -120,7 +118,7 @@ func runSignParsed(parsed *signerArgs, getenv func(string) string) error {
 		return fmt.Errorf("read payload %q: %w", parsed.payloadFile, err)
 	}
 
-	signature, err := requestSignature(http.DefaultClient, url, payload, parsed, strings.TrimSpace(getenv(envSignerToken)), timeout)
+	signature, err := requestSignature(&http.Client{}, url, payload, parsed, strings.TrimSpace(getenv(envSignerToken)), timeout)
 	if err != nil {
 		return err
 	}
@@ -131,42 +129,27 @@ func runSignParsed(parsed *signerArgs, getenv func(string) string) error {
 	return nil
 }
 
-func newSignCommand() *cli.Command {
-	return &cli.Command{
-		Name:  "vibesign",
-		Flags: signFlags(),
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			return nil
-		},
-	}
-}
-
 func signFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
 			Name:    "operation",
 			Aliases: []string{"Y"},
-			Hidden:  true,
 		},
 		&cli.StringFlag{
 			Name:    "namespace",
 			Aliases: []string{"n"},
-			Hidden:  true,
 		},
 		&cli.StringFlag{
 			Name:    "key-file",
 			Aliases: []string{"f"},
-			Hidden:  true,
 		},
 		&cli.StringSliceFlag{
 			Name:    "option",
 			Aliases: []string{"O"},
-			Hidden:  true,
 		},
 		&cli.BoolFlag{
 			Name:    "use-agent",
 			Aliases: []string{"U"},
-			Hidden:  true,
 		},
 	}
 }
@@ -182,7 +165,7 @@ func runPubKey(getenv func(string) string, stdout io.Writer) error {
 		return err
 	}
 
-	publicKey, err := requestPublicKey(http.DefaultClient, url, strings.TrimSpace(getenv(envSignerToken)), timeout)
+	publicKey, err := requestPublicKey(&http.Client{}, url, strings.TrimSpace(getenv(envSignerToken)), timeout)
 	if err != nil {
 		return err
 	}
@@ -212,7 +195,7 @@ func firstArg(args []string) string {
 	return args[0]
 }
 
-func validateSignArgs(parsed *signerArgs, extraArgs []string) error {
+func validateSignArgs(parsed *signerArgs, nargs int) error {
 	switch {
 	case parsed.operation == "":
 		return errors.New("missing -Y operation")
@@ -222,7 +205,7 @@ func validateSignArgs(parsed *signerArgs, extraArgs []string) error {
 		return errors.New("missing -f key file")
 	case parsed.payloadFile == "":
 		return errors.New("missing payload file")
-	case len(extraArgs) > 1:
+	case nargs > 1:
 		return errors.New("multiple payload files provided")
 	}
 
@@ -257,6 +240,7 @@ func requestSignature(client *http.Client, url string, payload []byte, parsed *s
 		return "", fmt.Errorf("marshal sign request: %w", err)
 	}
 
+	// Shallow copy so we can set Timeout without mutating the caller's client.
 	httpClient := *client
 	httpClient.Timeout = timeout
 
@@ -278,13 +262,13 @@ func requestSignature(client *http.Client, url string, payload []byte, parsed *s
 		_ = resp.Body.Close()
 	}()
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := readBounded(resp.Body, maxResponseSize)
 	if err != nil {
 		return "", fmt.Errorf("read sign response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("sign request failed: %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+		return "", fmt.Errorf("sign request failed: %s: %s", resp.Status, truncate(strings.TrimSpace(string(responseBody)), maxErrorBodyLen))
 	}
 
 	signature, err := decodeSignature(resp.Header.Get("Content-Type"), responseBody)
@@ -300,6 +284,7 @@ func requestSignature(client *http.Client, url string, payload []byte, parsed *s
 }
 
 func requestPublicKey(client *http.Client, url, token string, timeout time.Duration) (string, error) {
+	// Shallow copy so we can set Timeout without mutating the caller's client.
 	httpClient := *client
 	httpClient.Timeout = timeout
 
@@ -320,13 +305,13 @@ func requestPublicKey(client *http.Client, url, token string, timeout time.Durat
 		_ = resp.Body.Close()
 	}()
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := readBounded(resp.Body, maxResponseSize)
 	if err != nil {
 		return "", fmt.Errorf("read pubkey response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("pubkey request failed: %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+		return "", fmt.Errorf("pubkey request failed: %s: %s", resp.Status, truncate(strings.TrimSpace(string(responseBody)), maxErrorBodyLen))
 	}
 
 	publicKey, err := decodePublicKey(resp.Header.Get("Content-Type"), responseBody)
@@ -375,8 +360,33 @@ func looksLikeSSHPublicKey(publicKey string) bool {
 	return strings.HasPrefix(fields[0], "ssh-") || strings.HasPrefix(fields[0], "ecdsa-") || strings.HasPrefix(fields[0], "sk-")
 }
 
+// trimKeyPrefix strips an optional "key::" prefix and surrounding whitespace.
+// The inner TrimSpace handles leading whitespace before the prefix; the outer
+// handles any remaining whitespace after stripping it.
 func trimKeyPrefix(value string) string {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "key::"))
+}
+
+// readBounded reads up to limit bytes and returns an error if the reader
+// contains more data, ensuring oversized responses are rejected rather than
+// silently truncated.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit))
+	if err != nil {
+		return nil, err
+	}
+	// Try to read one more byte to detect overflow.
+	if n, _ := r.Read(make([]byte, 1)); n > 0 {
+		return nil, fmt.Errorf("response exceeds %d byte limit", limit)
+	}
+	return data, nil
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func writeSignatureFile(path, signature string) error {
