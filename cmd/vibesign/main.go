@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -37,10 +38,11 @@ type signerArgs struct {
 }
 
 type signRequest struct {
-	Namespace string   `json:"namespace"`
-	Payload   string   `json:"payload"`
-	UseAgent  bool     `json:"use_agent,omitempty"`
-	Options   []string `json:"options,omitempty"`
+	Namespace    string   `json:"namespace"`
+	Payload      string   `json:"payload"`
+	OriginRemote string   `json:"origin_remote,omitempty"`
+	UseAgent     bool     `json:"use_agent,omitempty"`
+	Options      []string `json:"options,omitempty"`
 }
 
 type signResponse struct {
@@ -50,6 +52,8 @@ type signResponse struct {
 type publicKeyResponse struct {
 	PublicKey string `json:"public_key"`
 }
+
+var getOriginRemote = originRemoteURL
 
 func main() {
 	if err := execute(os.Args[1:], os.Getenv, os.Stdout, os.Stderr); err != nil {
@@ -118,7 +122,7 @@ func runSignParsed(parsed *signerArgs, getenv func(string) string) error {
 		return fmt.Errorf("read payload %q: %w", parsed.payloadFile, err)
 	}
 
-	signature, err := requestSignature(&http.Client{}, url, payload, parsed, strings.TrimSpace(getenv(envSignerToken)), timeout)
+	signature, err := requestSignature(&http.Client{}, url, payload, parsed, getOriginRemote(), strings.TrimSpace(getenv(envSignerToken)), timeout)
 	if err != nil {
 		return err
 	}
@@ -227,12 +231,13 @@ func loadTimeout(raw string) (time.Duration, error) {
 	return timeout, nil
 }
 
-func requestSignature(client *http.Client, url string, payload []byte, parsed *signerArgs, token string, timeout time.Duration) (string, error) {
+func requestSignature(client *http.Client, url string, payload []byte, parsed *signerArgs, originRemote, token string, timeout time.Duration) (string, error) {
 	requestBody := signRequest{
-		Namespace: parsed.namespace,
-		Payload:   base64.StdEncoding.EncodeToString(payload),
-		UseAgent:  parsed.useAgent,
-		Options:   parsed.options,
+		Namespace:    parsed.namespace,
+		Payload:      base64.StdEncoding.EncodeToString(payload),
+		OriginRemote: originRemote,
+		UseAgent:     parsed.useAgent,
+		Options:      parsed.options,
 	}
 
 	body, err := json.Marshal(requestBody)
@@ -365,6 +370,18 @@ func looksLikeSSHPublicKey(publicKey string) bool {
 // handles any remaining whitespace after stripping it.
 func trimKeyPrefix(value string) string {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "key::"))
+}
+
+func originRemoteURL() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "config", "--get", "remote.origin.url")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 // readBounded reads up to limit bytes and returns an error if the reader

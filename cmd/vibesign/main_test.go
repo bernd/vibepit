@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,8 @@ import (
 
 func TestSignArgsParsing(t *testing.T) {
 	t.Run("sign request with agent", func(t *testing.T) {
+		mockOriginRemote(t, "git@github.com:example/repo.git")
+
 		dir := t.TempDir()
 		keyPath := filepath.Join(dir, "key.pub")
 		payloadPath := filepath.Join(dir, "payload")
@@ -76,6 +79,8 @@ func TestValidateSignArgs(t *testing.T) {
 }
 
 func TestRunWritesSignatureFile(t *testing.T) {
+	mockOriginRemote(t, "git@github.com:example/repo.git")
+
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "key.pub")
 	payloadPath := filepath.Join(dir, "payload")
@@ -111,10 +116,13 @@ func TestRunWritesSignatureFile(t *testing.T) {
 
 	assert.Equal(t, "git", received.Namespace)
 	assert.Equal(t, "payload-to-sign", decodePayload(t, received.Payload))
+	assert.Equal(t, "git@github.com:example/repo.git", received.OriginRemote)
 	assert.True(t, received.UseAgent)
 }
 
 func TestRunSignPlainTextResponse(t *testing.T) {
+	mockOriginRemote(t, "https://github.com/example/repo.git")
+
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "key.pub")
 	payloadPath := filepath.Join(dir, "payload")
@@ -124,7 +132,8 @@ func TestRunSignPlainTextResponse(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "-----BEGIN SSH SIGNATURE-----\nPLAIN\n-----END SSH SIGNATURE-----")
+		_, err := fmt.Fprint(w, "-----BEGIN SSH SIGNATURE-----\nPLAIN\n-----END SSH SIGNATURE-----")
+		require.NoError(t, err)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -138,6 +147,8 @@ func TestRunSignPlainTextResponse(t *testing.T) {
 }
 
 func TestRunSignServerError(t *testing.T) {
+	mockOriginRemote(t, "git@github.com:example/repo.git")
+
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "key.pub")
 	payloadPath := filepath.Join(dir, "payload")
@@ -184,7 +195,8 @@ func TestRunPubKey(t *testing.T) {
 func TestRunPubKeyPlainText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest comment")
+		_, err := fmt.Fprint(w, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest comment")
+		require.NoError(t, err)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -308,6 +320,8 @@ func TestWriteSignatureFile(t *testing.T) {
 }
 
 func TestErrorBodyTruncation(t *testing.T) {
+	mockOriginRemote(t, "git@github.com:example/repo.git")
+
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, "key.pub")
 	payloadPath := filepath.Join(dir, "payload")
@@ -318,7 +332,8 @@ func TestErrorBodyTruncation(t *testing.T) {
 	longBody := strings.Repeat("x", 2000)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, longBody)
+		_, err := fmt.Fprint(w, longBody)
+		require.NoError(t, err)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -328,6 +343,23 @@ func TestErrorBodyTruncation(t *testing.T) {
 	// Error message should be truncated, not contain the full 2000-char body.
 	assert.Less(t, len(err.Error()), 700)
 	assert.Contains(t, err.Error(), "...")
+}
+
+func TestOriginRemoteURL(t *testing.T) {
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init")
+	runGit(t, repoDir, "remote", "add", "origin", "git@github.com:example/repo.git")
+
+	t.Setenv("GIT_DIR", filepath.Join(repoDir, ".git"))
+	assert.Equal(t, "git@github.com:example/repo.git", originRemoteURL())
+}
+
+func TestOriginRemoteURLEmptyWhenMissing(t *testing.T) {
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init")
+
+	t.Setenv("GIT_DIR", filepath.Join(repoDir, ".git"))
+	assert.Equal(t, "", originRemoteURL())
 }
 
 func decodePayload(t *testing.T, payload string) string {
@@ -343,3 +375,20 @@ func envMap(m map[string]string) func(string) string {
 }
 
 var noenv = envMap(map[string]string{})
+
+func mockOriginRemote(t *testing.T, url string) {
+	t.Helper()
+
+	orig := getOriginRemote
+	getOriginRemote = func() string { return url }
+	t.Cleanup(func() { getOriginRemote = orig })
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+}
