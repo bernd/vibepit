@@ -273,6 +273,13 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	// Find the published SSH port.
 	sshPort, err := client.FindPublishedPort(ctx, sandboxContainerID, ctr.SSHContainerPort)
 	if err != nil {
+		status := client.ContainerStatus(ctx, sandboxContainerID)
+		logs, _ := client.ContainerLogs(ctx, sandboxContainerID, 20)
+		if logs != "" {
+			tui.Error("sandbox container %s — logs:\n%s", status, logs)
+		} else {
+			tui.Error("sandbox container %s (no logs available)", status)
+		}
 		return fmt.Errorf("find SSH port: %w", err)
 	}
 

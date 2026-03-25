@@ -866,6 +866,37 @@ func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 	return c.docker.VolumeRemove(ctx, name, false)
 }
 
+// ContainerLogs returns the last n lines of a container's log output.
+func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int) (string, error) {
+	reader, err := c.docker.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       fmt.Sprintf("%d", tail),
+	})
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ContainerStatus returns a short status string for a container (e.g. "running", "exited (1)").
+func (c *Client) ContainerStatus(ctx context.Context, containerID string) string {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "unknown"
+	}
+	state := info.State
+	if state.ExitCode != 0 {
+		return fmt.Sprintf("%s (exit %d)", state.Status, state.ExitCode)
+	}
+	return state.Status
+}
+
 // StreamLogs follows the container log output and copies it to the given writer.
 func (c *Client) StreamLogs(ctx context.Context, containerID string, w io.Writer) error {
 	reader, err := c.docker.ContainerLogs(ctx, containerID, container.LogsOptions{
