@@ -228,6 +228,12 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*Ru
 	return nil, nil
 }
 
+// SessionContainer describes a container belonging to a session.
+type SessionContainer struct {
+	ID   string
+	Role string // "proxy" or "sandbox"
+}
+
 // FindContainersBySessionID returns the IDs of all containers labelled with
 // the given session ID.
 func (c *Client) FindContainersBySessionID(ctx context.Context, sessionID string) ([]string, error) {
@@ -244,6 +250,27 @@ func (c *Client) FindContainersBySessionID(ctx context.Context, sessionID string
 		ids = append(ids, ctr.ID)
 	}
 	return ids, nil
+}
+
+// SessionContainers returns all containers for a session with their roles.
+func (c *Client) SessionContainers(ctx context.Context, sessionID string) ([]SessionContainer, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
+		),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result []SessionContainer
+	for _, ctr := range containers {
+		result = append(result, SessionContainer{
+			ID:   ctr.ID,
+			Role: ctr.Labels[LabelRole],
+		})
+	}
+	return result, nil
 }
 
 // SessionIDFromContainer inspects a container and returns its session ID label.
@@ -882,6 +909,21 @@ func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int
 		return "", err
 	}
 	return string(b), nil
+}
+
+// ContainerStartedAt returns the time a container was started, as reported by
+// the container runtime. Returns the zero time if the container cannot be
+// inspected or has not been started.
+func (c *Client) ContainerStartedAt(ctx context.Context, containerID string) time.Time {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil || info.State == nil {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // ContainerStatus returns a short status string for a container (e.g. "running", "exited (1)").
