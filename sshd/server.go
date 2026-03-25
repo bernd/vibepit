@@ -121,8 +121,7 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 		io.Copy(sess, ptmx) //nolint:errcheck
 	})
 
-	var exitErr *exec.ExitError
-	if err := cmd.Wait(); errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](cmd.Wait()); ok {
 		sess.Exit(exitErr.ExitCode()) //nolint:errcheck
 		ptmx.Close()
 		wg.Wait()
@@ -147,9 +146,8 @@ func handleExecSession(sess charmssh.Session) {
 	cmd.Stderr = sess.Stderr()
 	cmd.Stdin = sess
 
-	var exitErr *exec.ExitError
 	if err := cmd.Run(); err != nil {
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			sess.Exit(exitErr.ExitCode()) //nolint:errcheck
 			return
 		}
