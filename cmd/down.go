@@ -38,15 +38,19 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	sessionID := session.SessionID
 
-	containers, err := client.FindContainersBySessionID(ctx, sessionID)
+	containers, err := client.SessionContainers(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("find session containers: %w", err)
 	}
 
-	for _, id := range containers {
-		tui.Status("Stopping", "container %s", id[:12])
-		if err := client.StopAndRemove(ctx, id); err != nil {
-			tui.Error("stop container %s: %v", id[:12], err)
+	for _, c := range containers {
+		name := c.Role
+		if name == "" {
+			name = c.ID[:12]
+		}
+		tui.Status("Stopping", "%s", name)
+		if err := client.StopAndRemove(ctx, c.ID); err != nil {
+			tui.Error("stop %s: %v", name, err)
 		}
 	}
 
