@@ -211,9 +211,14 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Write(proxyConfig)
-	tmpFile.Close()
+	defer os.Remove(tmpFile.Name()) //nolint:errcheck
+	if _, err := tmpFile.Write(proxyConfig); err != nil {
+		tmpFile.Close() //nolint:errcheck
+		return fmt.Errorf("write proxy config: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close proxy config: %w", err)
+	}
 
 	// Generate ephemeral mTLS credentials for the control API.
 	tui.Status("Generating", "mTLS credentials")

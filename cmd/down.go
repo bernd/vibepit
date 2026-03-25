@@ -25,7 +25,7 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	// Resolve project root — same logic as RunAction/UpAction.
 	projectRoot := cmd.Args().First()

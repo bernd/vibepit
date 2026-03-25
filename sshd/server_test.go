@@ -18,7 +18,7 @@ func TestServerAcceptsAuthorizedKey(t *testing.T) {
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck
 
 	srv, err := NewServer(Config{
 		HostKeyPEM:    hostPriv,
@@ -26,7 +26,7 @@ func TestServerAcceptsAuthorizedKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close()
+	defer srv.Close() //nolint:errcheck
 
 	signer, err := gossh.ParsePrivateKey(clientPriv)
 	require.NoError(t, err)
@@ -37,11 +37,11 @@ func TestServerAcceptsAuthorizedKey(t *testing.T) {
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec
 	})
 	require.NoError(t, err)
-	defer client.Close()
+	defer client.Close() //nolint:errcheck
 
 	session, err := client.NewSession()
 	require.NoError(t, err)
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	output, err := session.Output("echo hello")
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestServerRejectsUnauthorizedKey(t *testing.T) {
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close()
+	defer listener.Close() //nolint:errcheck
 
 	srv, err := NewServer(Config{
 		HostKeyPEM:    hostPriv,
@@ -66,7 +66,7 @@ func TestServerRejectsUnauthorizedKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close()
+	defer srv.Close() //nolint:errcheck
 
 	signer, err := gossh.ParsePrivateKey(unauthorizedPriv)
 	require.NoError(t, err)

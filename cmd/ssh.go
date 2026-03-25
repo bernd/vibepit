@@ -23,8 +23,8 @@ func shellescape(s string) string {
 	}
 	safe := true
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			c == '-' || c == '_' || c == '.' || c == '/' || c == ':' || c == ',' || c == '+' || c == '=') {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
+			c != '-' && c != '_' && c != '.' && c != '/' && c != ':' && c != ',' && c != '+' && c != '=' {
 			safe = false
 			break
 		}
@@ -116,13 +116,13 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("ssh connect: %w", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	session, err := conn.NewSession()
 	if err != nil {
 		return fmt.Errorf("ssh session: %w", err)
 	}
-	defer session.Close()
+	defer session.Close() //nolint:errcheck
 
 	// Command mode — argv semantics via shell-quoting.
 	cmdArgs := cmd.Args().Slice()
@@ -149,7 +149,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("raw terminal: %w", err)
 	}
-	defer term.Restore(fd, oldState)
+	defer term.Restore(fd, oldState) //nolint:errcheck
 
 	w, h, err := term.GetSize(fd)
 	if err != nil {
@@ -186,7 +186,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	go func() {
 		for range sigCh {
 			if w, h, err := term.GetSize(fd); err == nil {
-				session.WindowChange(h, w)
+				session.WindowChange(h, w) //nolint:errcheck
 			}
 		}
 	}()
