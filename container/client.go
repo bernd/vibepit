@@ -251,6 +251,7 @@ func (c *Client) FindAnySessionContainer(ctx context.Context, projectDir string)
 // SessionContainer describes a container belonging to a session.
 type SessionContainer struct {
 	ID   string
+	Name string
 	Role string // "proxy" or "sandbox"
 }
 
@@ -285,8 +286,13 @@ func (c *Client) SessionContainers(ctx context.Context, sessionID string) ([]Ses
 	}
 	var result []SessionContainer
 	for _, ctr := range containers {
+		name := ""
+		if len(ctr.Names) > 0 {
+			name = strings.TrimPrefix(ctr.Names[0], "/")
+		}
 		result = append(result, SessionContainer{
 			ID:   ctr.ID,
+			Name: name,
 			Role: ctr.Labels[LabelRole],
 		})
 	}
