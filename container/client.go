@@ -228,6 +228,26 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*Ru
 	return nil, nil
 }
 
+// FindAnySessionContainer returns the session ID for any container (sandbox or
+// proxy) matching the given project directory. This is useful for cleanup when
+// the sandbox may have crashed but the proxy is still running.
+func (c *Client) FindAnySessionContainer(ctx context.Context, projectDir string) (string, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
+			filters.Arg("label", LabelSessionID),
+		),
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(containers) > 0 {
+		return containers[0].Labels[LabelSessionID], nil
+	}
+	return "", nil
+}
+
 // SessionContainer describes a container belonging to a session.
 type SessionContainer struct {
 	ID   string

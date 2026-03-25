@@ -29,14 +29,24 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
+	// Try sandbox first, fall back to any session container (handles
+	// partial failures where sandbox crashed but proxy is still running).
+	var sessionID string
 	session, err := client.FindRunningSession(ctx, projectRoot)
 	if err != nil {
 		return err
 	}
-	if session == nil {
-		return fmt.Errorf("no running session found for %s", projectRoot)
+	if session != nil {
+		sessionID = session.SessionID
+	} else {
+		sessionID, err = client.FindAnySessionContainer(ctx, projectRoot)
+		if err != nil {
+			return err
+		}
+		if sessionID == "" {
+			return fmt.Errorf("no running session found for %s", projectRoot)
+		}
 	}
-	sessionID := session.SessionID
 
 	containers, err := client.SessionContainers(ctx, sessionID)
 	if err != nil {
