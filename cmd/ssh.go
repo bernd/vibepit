@@ -35,6 +35,19 @@ func shellescape(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+func findProxyForSession(ctx context.Context, client *ctr.Client, sessionID string) (string, error) {
+	containers, err := client.SessionContainers(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, c := range containers {
+		if c.Role == ctr.RoleProxy {
+			return c.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no proxy container found for session %s", sessionID)
+}
+
 func SSHCommand() *cli.Command {
 	return &cli.Command{
 		Name:   "ssh",
@@ -69,9 +82,14 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("no running sandbox found — run 'vibepit up' first")
 	}
 
-	port, err := client.FindPublishedPort(ctx, sandbox.ContainerID, ctr.SSHContainerPort)
+	// SSH port is published on the proxy container (forwarded to sandbox).
+	proxyID, err := findProxyForSession(ctx, client, sandbox.SessionID)
 	if err != nil {
 		return err
+	}
+	port, err := client.FindPublishedPort(ctx, proxyID, ctr.SSHContainerPort)
+	if err != nil {
+		return fmt.Errorf("find SSH port: %w", err)
 	}
 
 	sessDir, err := sessionDir(sandbox.SessionID)

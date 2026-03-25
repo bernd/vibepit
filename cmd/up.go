@@ -191,6 +191,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	merged.ProxyPort = proxyPort
 	merged.ControlAPIPort = controlAPIPort
+	merged.SSHForwardAddr = fmt.Sprintf("%s:2222", netInfo.SandboxIP)
 
 	proxyConfig, err := json.Marshal(merged)
 	if err != nil {
@@ -258,6 +259,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		CACertPEM:      string(creds.CACertPEM()),
 		ProjectDir:     projectRoot,
 		NoRestart:      true,
+		SSHPort:        2222,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy container: %w", err)
@@ -277,6 +279,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		LinuxbrewVolumeName: linuxbrewVolumeName,
 		NetworkID:           netInfo.ID,
 		ProxyIP:             proxyIP,
+		SandboxIP:           netInfo.SandboxIP,
 		ProxyPort:           proxyPort,
 		Name:                "vibepit-sandbox-" + sessionID,
 		Term:                containerTerm(),
@@ -304,9 +307,11 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("start sandbox container: %w", err)
 	}
 
-	// Find the published SSH port.
-	sshPort, err := client.FindPublishedPort(ctx, sandboxContainerID, ctr.SSHContainerPort)
+	// Find the published SSH port on the proxy container (SSH is forwarded
+	// through the proxy to preserve sandbox network isolation).
+	sshPort, err := client.FindPublishedPort(ctx, proxyContainerID, ctr.SSHContainerPort)
 	if err != nil {
+		// If port isn't published, check if sandbox is healthy.
 		status := client.ContainerStatus(ctx, sandboxContainerID)
 		logs, _ := client.ContainerLogs(ctx, sandboxContainerID, 20)
 		if logs != "" {

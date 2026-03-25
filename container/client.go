@@ -441,8 +441,9 @@ func (c *Client) ExecSession(ctx context.Context, containerID string) error {
 
 // NetworkInfo is returned by CreateNetwork with the Docker-assigned addresses.
 type NetworkInfo struct {
-	ID      string
-	ProxyIP string
+	ID        string
+	ProxyIP   string
+	SandboxIP string
 }
 
 // CreateNetwork creates an internal Docker network with a random /24 subnet
@@ -471,9 +472,11 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 	}
 
 	proxyIP := nextIP(gateway)
+	sandboxIP := nextIP(proxyIP)
 	return NetworkInfo{
-		ID:      resp.ID,
-		ProxyIP: proxyIP.String(),
+		ID:        resp.ID,
+		ProxyIP:   proxyIP.String(),
+		SandboxIP: sandboxIP.String(),
 	}, nil
 }
 
@@ -522,6 +525,7 @@ type ProxyContainerConfig struct {
 	CACertPEM      string
 	ProjectDir     string
 	NoRestart      bool // when true, omits the restart policy so the proxy stops with the session
+	SSHPort        int  // when > 0, publish this port for SSH forwarding to sandbox
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
@@ -553,6 +557,20 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 
 	containerPort, _ := nat.NewPort("tcp", portStr)
 
+	exposedPorts := nat.PortSet{
+		containerPort: struct{}{},
+	}
+	portBindings := nat.PortMap{
+		containerPort: []nat.PortBinding{
+			{HostIP: "127.0.0.1", HostPort: portStr},
+		},
+	}
+	if cfg.SSHPort > 0 {
+		sshPort := nat.Port(SSHContainerPort)
+		exposedPorts[sshPort] = struct{}{}
+		portBindings[sshPort] = []nat.PortBinding{{HostIP: "127.0.0.1"}}
+	}
+
 	hostConfig := &container.HostConfig{
 		// Use bridge as the primary network so HostIP/HostPort publishing is
 		// actually activated by the runtime.
@@ -561,12 +579,8 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
 			cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
 		},
-		ExtraHosts: []string{"host-gateway:host-gateway"},
-		PortBindings: nat.PortMap{
-			containerPort: []nat.PortBinding{
-				{HostIP: "127.0.0.1", HostPort: portStr},
-			},
-		},
+		ExtraHosts:   []string{"host-gateway:host-gateway"},
+		PortBindings: portBindings,
 	}
 	if !cfg.NoRestart {
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
@@ -574,14 +588,12 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 
 	resp, err := c.docker.ContainerCreate(ctx,
 		&container.Config{
-			Image:      ProxyImage,
-			Cmd:        []string{ProxyBinaryPath, "proxy", "--config", ProxyConfigPath},
-			Labels:     labels,
-			Env:        env,
-			WorkingDir: "/",
-			ExposedPorts: nat.PortSet{
-				containerPort: struct{}{},
-			},
+			Image:        ProxyImage,
+			Cmd:          []string{ProxyBinaryPath, "proxy", "--config", ProxyConfigPath},
+			Labels:       labels,
+			Env:          env,
+			WorkingDir:   "/",
+			ExposedPorts: exposedPorts,
 		},
 		hostConfig,
 		nil,
@@ -708,6 +720,7 @@ type SandboxContainerConfig struct {
 	LinuxbrewVolumeName string
 	NetworkID           string
 	ProxyIP             string
+	SandboxIP           string // static IP on the session network (for SSH forwarding)
 	ProxyPort           int
 	Name                string
 	Term                string
@@ -817,37 +830,30 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		containerConfig.Env = append(containerConfig.Env,
 			fmt.Sprintf("%s=%s", SSHPubKeyEnv, cfg.DaemonAuthorizedKey),
 		)
-		sshPort := nat.Port(SSHContainerPort)
-		containerConfig.ExposedPorts = nat.PortSet{
-			sshPort: struct{}{},
-		}
-		hostConfig.NetworkMode = "bridge"
-		hostConfig.PortBindings = nat.PortMap{
-			sshPort: []nat.PortBinding{{HostIP: "127.0.0.1"}},
-		}
 		hostConfig.Binds = append(hostConfig.Binds,
 			cfg.DaemonBinaryPath+":"+ProxyBinaryPath+":ro",
 			cfg.DaemonHostKeyPath+":"+SSHHostKeyPath+":ro",
 			cfg.DaemonHostPubPath+":"+SSHHostPubPath+":ro",
 		)
-		// NetworkingConfig left empty for bridge mode; network connected below after create.
-	} else {
-		networkingConfig = &network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				cfg.NetworkID: {},
-			},
+		// Daemon sandbox stays on the isolated network only — SSH access
+		// is forwarded through the proxy container to preserve isolation.
+	}
+
+	endpointSettings := &network.EndpointSettings{}
+	if cfg.SandboxIP != "" {
+		endpointSettings.IPAMConfig = &network.EndpointIPAMConfig{
+			IPv4Address: cfg.SandboxIP,
 		}
+	}
+	networkingConfig = &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			cfg.NetworkID: endpointSettings,
+		},
 	}
 
 	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, nil, cfg.Name)
 	if err != nil {
 		return "", fmt.Errorf("create sandbox container: %w", err)
-	}
-
-	if cfg.Daemon {
-		if err := c.docker.NetworkConnect(ctx, cfg.NetworkID, resp.ID, &network.EndpointSettings{}); err != nil {
-			return "", fmt.Errorf("connect sandbox to session network: %w", err)
-		}
 	}
 
 	return resp.ID, nil
