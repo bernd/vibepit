@@ -77,6 +77,16 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
+	// Check for orphaned containers from a previous failed attempt (e.g.
+	// proxy still running after sandbox crashed).
+	orphanedSessionID, err := client.FindAnySessionContainer(ctx, projectRoot)
+	if err != nil {
+		return err
+	}
+	if orphanedSessionID != "" {
+		return fmt.Errorf("a previous session (%s) left orphaned containers — run 'vibepit down' first", orphanedSessionID)
+	}
+
 	globalPath := config.DefaultGlobalPath()
 	projectPath := config.DefaultProjectPath(projectRoot)
 
