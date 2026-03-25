@@ -16,13 +16,20 @@ var sessionFlag = &cli.StringFlag{
 const debugFlag = "debug"
 const versionFlag = "version"
 
+func defaultCommand() string {
+	if cmd := os.Getenv("VIBEPIT_DEFAULT_COMMAND"); cmd != "" {
+		return cmd
+	}
+	return "run"
+}
+
 func RootCommand() *cli.Command {
 	return &cli.Command{
 		Name:            "vibepit",
 		Usage:           "Run agents in isolated container sandboxes",
 		Description:     "I pity the vibes.",
 		HideHelpCommand: true,
-		DefaultCommand:  "run",
+		DefaultCommand:  defaultCommand(),
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  debugFlag,

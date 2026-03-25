@@ -41,8 +41,9 @@ const (
 	RoleProxy   = "proxy"
 	RoleSandbox = "sandbox"
 
-	ProxyBinaryPath    = "/vibepit"
-	ProxyConfigPath    = "/config.json"
+	ProxyBinaryPath   = "/vibepit"
+	SandboxBinaryPath = "/vibed"
+	ProxyConfigPath   = "/config.json"
 	HomeMountPath      = "/home/code"
 	LinuxbrewMountPath = "/home/linuxbrew"
 	ContainerHostname  = "vibes"
@@ -829,9 +830,10 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		containerConfig.Cmd = nil
 		containerConfig.Env = append(containerConfig.Env,
 			fmt.Sprintf("%s=%s", SSHPubKeyEnv, cfg.DaemonAuthorizedKey),
+			"VIBEPIT_DEFAULT_COMMAND=vibed",
 		)
 		hostConfig.Binds = append(hostConfig.Binds,
-			cfg.DaemonBinaryPath+":"+ProxyBinaryPath+":ro",
+			cfg.DaemonBinaryPath+":"+SandboxBinaryPath+":ro",
 			cfg.DaemonHostKeyPath+":"+SSHHostKeyPath+":ro",
 			cfg.DaemonHostPubPath+":"+SSHHostPubPath+":ro",
 		)
