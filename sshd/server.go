@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 
 	"github.com/creack/pty"
 	gossh "golang.org/x/crypto/ssh"
@@ -105,31 +104,38 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 		sess.Exit(1) //nolint:errcheck
 		return
 	}
-	var wg sync.WaitGroup
-	wg.Go(func() {
+	// Window resize handler — runs until winCh is closed (session end).
+	go func() {
 		for win := range winCh {
 			pty.Setsize(ptmx, &pty.Winsize{ //nolint:errcheck
 				Rows: uint16(win.Height),
 				Cols: uint16(win.Width),
 			})
 		}
-	})
-	wg.Go(func() {
-		io.Copy(ptmx, sess) //nolint:errcheck
-	})
-	wg.Go(func() {
-		io.Copy(sess, ptmx) //nolint:errcheck
-	})
+	}()
 
+	// Copy SSH stdin to PTY. This goroutine will be unblocked when the
+	// session is closed after sess.Exit().
+	go func() {
+		io.Copy(ptmx, sess) //nolint:errcheck
+	}()
+
+	// Copy PTY output to SSH session. This goroutine exits when ptmx is
+	// closed after the shell process ends.
+	done := make(chan struct{})
+	go func() {
+		io.Copy(sess, ptmx) //nolint:errcheck
+		close(done)
+	}()
+
+	// Wait for shell to exit, then close PTY to flush remaining output.
+	exitCode := 0
 	if exitErr, ok := errors.AsType[*exec.ExitError](cmd.Wait()); ok {
-		sess.Exit(exitErr.ExitCode()) //nolint:errcheck
-		ptmx.Close()               //nolint:errcheck
-		wg.Wait()
-		return
+		exitCode = exitErr.ExitCode()
 	}
 	ptmx.Close() //nolint:errcheck
-	wg.Wait()
-	sess.Exit(0) //nolint:errcheck
+	<-done                      // wait for output to drain
+	sess.Exit(exitCode) //nolint:errcheck
 }
 
 func handleExecSession(sess charmssh.Session) {
