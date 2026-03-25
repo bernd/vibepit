@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
@@ -50,41 +49,25 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close()
 
-	// Resolve project root from working directory.
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	projectRoot, err := filepath.Abs(wd)
-	if err != nil {
-		return err
-	}
-	projectRoot, err = config.FindProjectRoot(projectRoot)
+	projectRoot, err := resolveProjectRoot(cmd)
 	if err != nil {
 		return err
 	}
 
-	// Discover sandbox.
-	sandboxID, err := client.FindRunningSession(ctx, projectRoot)
+	sandbox, err := client.FindRunningSession(ctx, projectRoot)
 	if err != nil {
 		return err
 	}
-	if sandboxID == "" {
+	if sandbox == nil {
 		return fmt.Errorf("no running sandbox found — run 'vibepit up' first")
 	}
 
-	// Get session ID and published SSH port.
-	sessionID, err := client.SessionIDFromContainer(ctx, sandboxID)
-	if err != nil {
-		return err
-	}
-	port, err := client.FindPublishedPort(ctx, sandboxID, "2222/tcp")
+	port, err := client.FindPublishedPort(ctx, sandbox.ContainerID, ctr.SSHContainerPort)
 	if err != nil {
 		return err
 	}
 
-	// Load credentials from session dir.
-	sessDir, err := sessionDir(sessionID)
+	sessDir, err := sessionDir(sandbox.SessionID)
 	if err != nil {
 		return err
 	}

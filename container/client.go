@@ -49,6 +49,11 @@ const (
 
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
 	LabelControlPort = "vibepit.control-port"
+
+	SSHContainerPort  = "2222/tcp"
+	SSHHostKeyPath    = "/etc/vibepit/sshd/host-key"
+	SSHHostPubPath    = "/etc/vibepit/sshd/host-key.pub"
+	SSHPubKeyEnv      = "VIBEPIT_SSH_PUBKEY"
 )
 
 // Client wraps the Docker/Podman API, trying Docker first then falling back
@@ -196,9 +201,15 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	return nil
 }
 
-// FindRunningSession returns the ID of an already-running sandbox container for
-// the given project directory, or empty string if none is found.
-func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (string, error) {
+// RunningSession describes a running sandbox container found by FindRunningSession.
+type RunningSession struct {
+	ContainerID string
+	SessionID   string
+}
+
+// FindRunningSession returns a running sandbox container for the given project
+// directory, or nil if none is found.
+func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*RunningSession, error) {
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
 		Filters: filters.NewArgs(
 			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
@@ -206,12 +217,15 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (str
 		),
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(containers) > 0 {
-		return containers[0].ID, nil
+		return &RunningSession{
+			ContainerID: containers[0].ID,
+			SessionID:   containers[0].Labels[LabelSessionID],
+		}, nil
 	}
-	return "", nil
+	return nil, nil
 }
 
 // FindContainersBySessionID returns the IDs of all containers labelled with
@@ -748,20 +762,20 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		containerConfig.Entrypoint = cfg.DaemonEntrypoint
 		containerConfig.Cmd = nil
 		containerConfig.Env = append(containerConfig.Env,
-			fmt.Sprintf("VIBEPIT_SSH_PUBKEY=%s", cfg.DaemonAuthorizedKey),
+			fmt.Sprintf("%s=%s", SSHPubKeyEnv, cfg.DaemonAuthorizedKey),
 		)
+		sshPort := nat.Port(SSHContainerPort)
 		containerConfig.ExposedPorts = nat.PortSet{
-			"2222/tcp": struct{}{},
+			sshPort: struct{}{},
 		}
 		hostConfig.NetworkMode = "bridge"
 		hostConfig.PortBindings = nat.PortMap{
-			"2222/tcp": []nat.PortBinding{{HostIP: "127.0.0.1"}},
+			sshPort: []nat.PortBinding{{HostIP: "127.0.0.1"}},
 		}
-		// Add daemon-specific bind mounts
 		hostConfig.Binds = append(hostConfig.Binds,
 			cfg.DaemonBinaryPath+":"+ProxyBinaryPath+":ro",
-			cfg.DaemonHostKeyPath+":/etc/vibepit/sshd/host-key:ro",
-			cfg.DaemonHostPubPath+":/etc/vibepit/sshd/host-key.pub:ro",
+			cfg.DaemonHostKeyPath+":"+SSHHostKeyPath+":ro",
+			cfg.DaemonHostPubPath+":"+SSHHostPubPath+":ro",
 		)
 		// NetworkingConfig left empty for bridge mode; network connected below after create.
 	} else {

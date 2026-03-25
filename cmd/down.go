@@ -3,10 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
-	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
@@ -27,46 +24,25 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close() //nolint:errcheck
 
-	// Resolve project root — same logic as RunAction/UpAction.
-	projectRoot := cmd.Args().First()
-	if projectRoot == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		projectRoot = wd
-	}
-	projectRoot, err = filepath.Abs(projectRoot)
-	if err != nil {
-		return err
-	}
-	projectRoot, err = config.FindProjectRoot(projectRoot)
+	projectRoot, err := resolveProjectRoot(cmd)
 	if err != nil {
 		return err
 	}
 
-	// Find sandbox for this project.
-	sandboxID, err := client.FindRunningSession(ctx, projectRoot)
+	session, err := client.FindRunningSession(ctx, projectRoot)
 	if err != nil {
 		return err
 	}
-	if sandboxID == "" {
+	if session == nil {
 		return fmt.Errorf("no running session found for %s", projectRoot)
 	}
+	sessionID := session.SessionID
 
-	// Get session ID from sandbox.
-	sessionID, err := client.SessionIDFromContainer(ctx, sandboxID)
-	if err != nil {
-		return fmt.Errorf("get session ID: %w", err)
-	}
-
-	// Find all containers (sandbox + proxy) with this session ID.
 	containers, err := client.FindContainersBySessionID(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("find session containers: %w", err)
 	}
 
-	// Best-effort cleanup: stop and remove all containers.
 	for _, id := range containers {
 		tui.Status("Stopping", "container %s", id[:12])
 		if err := client.StopAndRemove(ctx, id); err != nil {
@@ -74,13 +50,11 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	// Remove network by name.
 	networkName := networkNamePrefix + sessionID
 	if err := client.RemoveNetwork(ctx, networkName); err != nil {
 		tui.Error("remove network %s: %v", networkName, err)
 	}
 
-	// Remove credentials.
 	if err := CleanupSessionCredentials(sessionID); err != nil {
 		tui.Error("cleanup credentials: %v", err)
 	}

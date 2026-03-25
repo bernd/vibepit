@@ -157,6 +157,9 @@ func WriteSSHCredentials(sessionID string, clientPriv, clientPub, hostPriv, host
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return fmt.Errorf("chmod session dir: %w", err)
+	}
 	files := map[string]struct {
 		data []byte
 		perm os.FileMode

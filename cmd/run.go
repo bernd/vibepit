@@ -39,32 +39,68 @@ const (
 	reconfigureFlag = "reconfigure"
 )
 
+// resolveProjectRoot determines the project root from the first CLI argument
+// or the current working directory, then finds the Git root if available.
+func resolveProjectRoot(cmd *cli.Command) (string, error) {
+	projectRoot := cmd.Args().First()
+	if projectRoot == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		projectRoot = wd
+	}
+	projectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return config.FindProjectRoot(projectRoot)
+}
+
+// containerTerm returns a TERM value suitable for the sandbox container.
+func containerTerm() string {
+	t := os.Getenv("TERM")
+	switch t {
+	case "":
+		return "linux"
+	case "xterm-ghostty":
+		return "xterm-256color"
+	default:
+		return t
+	}
+}
+
+// sandboxFlags returns the shared flag definitions used by both run and up commands.
+func sandboxFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.BoolFlag{
+			Name:    localFlag,
+			Aliases: []string{"L"},
+			Usage:   fmt.Sprintf("Use local %q image instead of the published one", localImage),
+		},
+		&cli.StringSliceFlag{
+			Name:    allowFlag,
+			Aliases: []string{"a"},
+			Usage:   "Additional domain:port to allow (e.g. api.example.com:443)",
+		},
+		&cli.StringSliceFlag{
+			Name:    presetFlag,
+			Aliases: []string{"p"},
+			Usage:   "Additional presets to activate",
+		},
+		&cli.BoolFlag{
+			Name:    reconfigureFlag,
+			Aliases: []string{"r"},
+			Usage:   "Re-run the network preset selector",
+		},
+	}
+}
+
 func RunCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "run",
-		Usage: "Start the sandbox",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:    localFlag,
-				Aliases: []string{"L"},
-				Usage:   fmt.Sprintf("Use local %q image instead of the published one", localImage),
-			},
-			&cli.StringSliceFlag{
-				Name:    allowFlag,
-				Aliases: []string{"a"},
-				Usage:   "Additional domain:port to allow (e.g. api.example.com:443)",
-			},
-			&cli.StringSliceFlag{
-				Name:    presetFlag,
-				Aliases: []string{"p"},
-				Usage:   "Additional presets to activate",
-			},
-			&cli.BoolFlag{
-				Name:    reconfigureFlag,
-				Aliases: []string{"r"},
-				Usage:   "Re-run the network preset selector",
-			},
-		},
+		Name:   "run",
+		Usage:  "Start the sandbox",
+		Flags:  sandboxFlags(),
 		Action: RunAction,
 	}
 }
@@ -76,15 +112,7 @@ func imageName(u *user.User) string {
 func RunAction(ctx context.Context, cmd *cli.Command) error {
 	tui.PrintHeader()
 
-	projectRoot := cmd.Args().First()
-	if projectRoot == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		projectRoot = wd
-	}
-	projectRoot, err := filepath.Abs(projectRoot)
+	projectRoot, err := resolveProjectRoot(cmd)
 	if err != nil {
 		return err
 	}
@@ -106,12 +134,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("refusing to run in your home directory — point me to a project folder")
 	}
 
-	// Use Git root if available.
-	projectRoot, err = config.FindProjectRoot(projectRoot)
-	if err != nil {
-		return err
-	}
-
 	image := imageName(u)
 	if cmd.Bool(localFlag) {
 		image = localImage
@@ -127,9 +149,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	if existing != "" {
+	if existing != nil {
 		tui.Status("Attaching", "to running session in %s", projectRoot)
-		return client.ExecSession(ctx, existing)
+		return client.ExecSession(ctx, existing.ContainerID)
 	}
 
 	globalPath := config.DefaultGlobalPath()
@@ -277,14 +299,6 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		client.StopAndRemove(ctx, proxyContainerID)
 	}()
 
-	term := os.Getenv("TERM")
-	switch term {
-	case "":
-		term = "linux"
-	case "xterm-ghostty": // Ghostty terminfo is not available in the container
-		term = "xterm-256color"
-	}
-
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
 	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
 		Image:               image,
@@ -297,7 +311,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		ProxyIP:             proxyIP,
 		ProxyPort:           proxyPort,
 		Name:                "vibepit-sandbox-" + sessionID,
-		Term:                term,
+		Term:                containerTerm(),
 		ColorTerm:           os.Getenv("COLORTERM"),
 		UID:                 uid,
 		User:                u.Username,

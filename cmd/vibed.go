@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 
+	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/sshd"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
@@ -21,14 +22,14 @@ func VibedCommand() *cli.Command {
 }
 
 func VibedAction(ctx context.Context, cmd *cli.Command) error {
-	hostKey, err := os.ReadFile("/etc/vibepit/sshd/host-key")
+	hostKey, err := os.ReadFile(ctr.SSHHostKeyPath)
 	if err != nil {
 		return fmt.Errorf("read host key: %w", err)
 	}
 
-	authorizedKey := os.Getenv("VIBEPIT_SSH_PUBKEY")
+	authorizedKey := os.Getenv(ctr.SSHPubKeyEnv)
 	if authorizedKey == "" {
-		return fmt.Errorf("VIBEPIT_SSH_PUBKEY not set")
+		return fmt.Errorf("%s not set", ctr.SSHPubKeyEnv)
 	}
 
 	srv, err := sshd.NewServer(sshd.Config{
