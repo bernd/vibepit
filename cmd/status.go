@@ -61,11 +61,14 @@ func StatusAction(ctx context.Context, cmd *cli.Command) error {
 		tui.Status(label, "%s", status)
 	}
 
-	// Show SSH address.
+	// Show SSH address (published on proxy container, not sandbox).
 	sshAddr := "N/A"
-	port, err := client.FindPublishedPort(ctx, session.ContainerID, ctr.SSHContainerPort)
-	if err == nil {
-		sshAddr = fmt.Sprintf("127.0.0.1:%d", port)
+	proxyID, proxyErr := findProxyForSession(ctx, client, session.SessionID)
+	if proxyErr == nil {
+		port, portErr := client.FindPublishedPort(ctx, proxyID, ctr.SSHContainerPort)
+		if portErr == nil {
+			sshAddr = fmt.Sprintf("127.0.0.1:%d", port)
+		}
 	}
 	tui.Status("SSH", "%s", sshAddr)
 

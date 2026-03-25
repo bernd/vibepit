@@ -18,12 +18,27 @@ func sessionBaseDir() (string, error) {
 	return filepath.Join(xdg.StateHome, config.RuntimeDirName, "sessions"), nil
 }
 
+// legacySessionBaseDir returns the pre-migration credential path
+// ($XDG_RUNTIME_DIR/vibepit/{sessionID}).
+func legacySessionBaseDir() string {
+	return filepath.Join(xdg.RuntimeDir, config.RuntimeDirName)
+}
+
 func sessionDir(sessionID string) (string, error) {
 	base, err := sessionBaseDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, sessionID), nil
+	dir := filepath.Join(base, sessionID)
+	// Fall back to legacy path for sessions created before the credential
+	// directory migration.
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		legacy := filepath.Join(legacySessionBaseDir(), sessionID)
+		if _, err := os.Stat(legacy); err == nil {
+			return legacy, nil
+		}
+	}
+	return dir, nil
 }
 
 // matchSession reports whether a proxy session matches the given filter string,

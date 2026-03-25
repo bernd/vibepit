@@ -158,12 +158,19 @@ func forwardTCP(client net.Conn, targetAddr string) {
 	done := make(chan struct{}, 2)
 	go func() {
 		io.Copy(target, client) //nolint:errcheck
+		// Half-close the write side so the target sees EOF while keeping
+		// the read side open for remaining output.
+		if tc, ok := target.(*net.TCPConn); ok {
+			tc.CloseWrite() //nolint:errcheck
+		}
 		done <- struct{}{}
 	}()
 	go func() {
 		io.Copy(client, target) //nolint:errcheck
 		done <- struct{}{}
 	}()
+	// Wait for both directions to finish.
+	<-done
 	<-done
 }
 
