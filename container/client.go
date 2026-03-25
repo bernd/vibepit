@@ -423,6 +423,7 @@ type ProxyContainerConfig struct {
 	TLSCertPEM     string
 	CACertPEM      string
 	ProjectDir     string
+	NoRestart      bool // when true, omits the restart policy so the proxy stops with the session
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
@@ -454,6 +455,25 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 
 	containerPort, _ := nat.NewPort("tcp", portStr)
 
+	hostConfig := &container.HostConfig{
+		// Use bridge as the primary network so HostIP/HostPort publishing is
+		// actually activated by the runtime.
+		NetworkMode: "bridge",
+		Binds: []string{
+			cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
+			cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
+		},
+		ExtraHosts: []string{"host-gateway:host-gateway"},
+		PortBindings: nat.PortMap{
+			containerPort: []nat.PortBinding{
+				{HostIP: "127.0.0.1", HostPort: portStr},
+			},
+		},
+	}
+	if !cfg.NoRestart {
+		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
+	}
+
 	resp, err := c.docker.ContainerCreate(ctx,
 		&container.Config{
 			Image:      ProxyImage,
@@ -465,22 +485,7 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 				containerPort: struct{}{},
 			},
 		},
-		&container.HostConfig{
-			// Use bridge as the primary network so HostIP/HostPort publishing is
-			// actually activated by the runtime.
-			NetworkMode: "bridge",
-			Binds: []string{
-				cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
-				cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
-			},
-			ExtraHosts:    []string{"host-gateway:host-gateway"},
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
-			PortBindings: nat.PortMap{
-				containerPort: []nat.PortBinding{
-					{HostIP: "127.0.0.1", HostPort: portStr},
-				},
-			},
-		},
+		hostConfig,
 		nil,
 		nil,
 		cfg.Name,
@@ -748,6 +753,30 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 	}
 
 	return resp.ID, nil
+}
+
+// StartContainer starts a previously created container without attaching.
+func (c *Client) StartContainer(ctx context.Context, containerID string) error {
+	return c.docker.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+// FindPublishedPort inspects a container and returns the host port bound to
+// the given container port (e.g. "2222/tcp"). Returns an error if the port
+// is not published.
+func (c *Client) FindPublishedPort(ctx context.Context, containerID string, containerPort string) (int, error) {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return 0, fmt.Errorf("inspect container: %w", err)
+	}
+	bindings, ok := info.NetworkSettings.Ports[nat.Port(containerPort)]
+	if !ok || len(bindings) == 0 {
+		return 0, fmt.Errorf("port %s not published", containerPort)
+	}
+	var port int
+	if _, err := fmt.Sscanf(bindings[0].HostPort, "%d", &port); err != nil {
+		return 0, fmt.Errorf("parse host port: %w", err)
+	}
+	return port, nil
 }
 
 // StopAndRemove stops a container (best-effort) then forcibly removes it.

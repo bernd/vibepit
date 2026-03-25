@@ -43,6 +43,7 @@ func RootCommand() *cli.Command {
 		Commands: []*cli.Command{
 			// Order matters here!
 			RunCommand(),
+			UpCommand(),
 			AllowHTTPCommand(),
 			AllowDNSCommand(),
 			ProxyCommand(),
