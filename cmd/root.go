@@ -44,6 +44,7 @@ func RootCommand() *cli.Command {
 			// Order matters here!
 			RunCommand(),
 			UpCommand(),
+			DownCommand(),
 			AllowHTTPCommand(),
 			AllowDNSCommand(),
 			ProxyCommand(),

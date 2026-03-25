@@ -214,6 +214,37 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (str
 	return "", nil
 }
 
+// FindContainersBySessionID returns the IDs of all containers labelled with
+// the given session ID.
+func (c *Client) FindContainersBySessionID(ctx context.Context, sessionID string) ([]string, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
+		),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, ctr := range containers {
+		ids = append(ids, ctr.ID)
+	}
+	return ids, nil
+}
+
+// SessionIDFromContainer inspects a container and returns its session ID label.
+func (c *Client) SessionIDFromContainer(ctx context.Context, containerID string) (string, error) {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", err
+	}
+	sid, ok := info.Config.Labels[LabelSessionID]
+	if !ok {
+		return "", fmt.Errorf("container has no session ID label")
+	}
+	return sid, nil
+}
+
 // FindProxyIP returns the IP address of the running vibepit proxy container
 // by inspecting its network settings. Returns an error if no proxy is running.
 func (c *Client) FindProxyIP(ctx context.Context) (string, error) {
