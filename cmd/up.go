@@ -304,6 +304,9 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 
 	tui.Status("Starting", "sandbox container")
 	if err := client.StartContainer(ctx, sandboxContainerID); err != nil {
+		if logs, logErr := client.ContainerLogs(ctx, sandboxContainerID, 20); logErr == nil && logs != "" {
+			tui.Error("sandbox logs:\n%s", logs)
+		}
 		return fmt.Errorf("start sandbox container: %w", err)
 	}
 
@@ -311,13 +314,18 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	// through the proxy to preserve sandbox network isolation).
 	sshPort, err := client.FindPublishedPort(ctx, proxyContainerID, ctr.SSHContainerPort)
 	if err != nil {
-		// If port isn't published, check if sandbox is healthy.
-		status := client.ContainerStatus(ctx, sandboxContainerID)
-		logs, _ := client.ContainerLogs(ctx, sandboxContainerID, 20)
-		if logs != "" {
-			tui.Error("sandbox container %s — logs:\n%s", status, logs)
+		// Dump proxy and sandbox diagnostics to help troubleshoot.
+		proxyStatus := client.ContainerStatus(ctx, proxyContainerID)
+		if proxyLogs, logErr := client.ContainerLogs(ctx, proxyContainerID, 20); logErr == nil && proxyLogs != "" {
+			tui.Error("proxy %s — logs:\n%s", proxyStatus, proxyLogs)
 		} else {
-			tui.Error("sandbox container %s (no logs available)", status)
+			tui.Error("proxy %s", proxyStatus)
+		}
+		sandboxStatus := client.ContainerStatus(ctx, sandboxContainerID)
+		if sandboxLogs, logErr := client.ContainerLogs(ctx, sandboxContainerID, 20); logErr == nil && sandboxLogs != "" {
+			tui.Error("sandbox %s — logs:\n%s", sandboxStatus, sandboxLogs)
+		} else {
+			tui.Error("sandbox %s", sandboxStatus)
 		}
 		return fmt.Errorf("find SSH port: %w", err)
 	}
