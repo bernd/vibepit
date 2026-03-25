@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -104,9 +105,10 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 		sess.Exit(1) //nolint:errcheck
 		return
 	}
-	defer ptmx.Close()
-
+	var wg sync.WaitGroup
+	wg.Add(3)
 	go func() {
+		defer wg.Done()
 		for win := range winCh {
 			pty.Setsize(ptmx, &pty.Winsize{ //nolint:errcheck
 				Rows: uint16(win.Height),
@@ -114,9 +116,6 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 			})
 		}
 	}()
-
-	var wg sync.WaitGroup
-	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		io.Copy(ptmx, sess) //nolint:errcheck
@@ -126,13 +125,14 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 		io.Copy(sess, ptmx) //nolint:errcheck
 	}()
 
-	if err := cmd.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			sess.Exit(exitErr.ExitCode()) //nolint:errcheck
-			wg.Wait()
-			return
-		}
+	var exitErr *exec.ExitError
+	if err := cmd.Wait(); errors.As(err, &exitErr) {
+		sess.Exit(exitErr.ExitCode()) //nolint:errcheck
+		ptmx.Close()
+		wg.Wait()
+		return
 	}
+	ptmx.Close()
 	wg.Wait()
 	sess.Exit(0) //nolint:errcheck
 }
@@ -151,8 +151,9 @@ func handleExecSession(sess charmssh.Session) {
 	cmd.Stderr = sess.Stderr()
 	cmd.Stdin = sess
 
+	var exitErr *exec.ExitError
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if errors.As(err, &exitErr) {
 			sess.Exit(exitErr.ExitCode()) //nolint:errcheck
 			return
 		}

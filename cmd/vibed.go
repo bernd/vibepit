@@ -45,5 +45,9 @@ func VibedAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	tui.Status("Listening", "on :2222")
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
 	return srv.Serve(listener)
 }

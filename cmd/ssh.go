@@ -151,7 +151,10 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer term.Restore(fd, oldState)
 
-	w, h, _ := term.GetSize(fd)
+	w, h, err := term.GetSize(fd)
+	if err != nil {
+		w, h = 80, 24
+	}
 	termEnv := os.Getenv("TERM")
 	if termEnv == "" {
 		termEnv = "xterm-256color"
@@ -176,6 +179,10 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	// Forward SIGWINCH.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGWINCH)
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+	}()
 	go func() {
 		for range sigCh {
 			if w, h, err := term.GetSize(fd); err == nil {

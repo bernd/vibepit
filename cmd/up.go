@@ -203,7 +203,10 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	merged.ProxyPort = proxyPort
 	merged.ControlAPIPort = controlAPIPort
 
-	proxyConfig, _ := json.Marshal(merged)
+	proxyConfig, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("marshal proxy config: %w", err)
+	}
 	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
 	if err != nil {
 		return err
