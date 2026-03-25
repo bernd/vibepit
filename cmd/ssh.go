@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
@@ -49,7 +50,13 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close()
 
-	projectRoot, err := resolveProjectRoot(cmd)
+	// Always resolve project root from cwd — all positional args are the
+	// remote command, not a project path.
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	projectRoot, err := config.FindProjectRoot(wd)
 	if err != nil {
 		return err
 	}

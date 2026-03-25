@@ -156,11 +156,25 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 
 	networkName := networkNamePrefix + sessionID
 
+	// Track resources for rollback on failure.
+	var cleanups []func()
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				cleanups[i]()
+			}
+		}
+	}()
+
 	tui.Status("Creating", "network %s", networkName)
 	netInfo, err := client.CreateNetwork(ctx, networkName)
 	if err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		client.RemoveNetwork(ctx, networkName) //nolint:errcheck
+	})
 	proxyIP := netInfo.ProxyIP
 
 	merged.ProxyIP = proxyIP
@@ -207,6 +221,9 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("session credentials: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		CleanupSessionCredentials(sessionID) //nolint:errcheck
+	})
 	tui.Status("Session", "%s (credentials in %s)", sessionID, sessDir)
 
 	// Generate SSH keypairs for daemon mode.
@@ -227,13 +244,14 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	hostPubPath := filepath.Join(sessDir, "host-key.pub")
 
 	tui.Status("Starting", "proxy container")
-	_, controlPort, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
+	proxyContainerName := "vibepit-proxy-" + sessionID
+	proxyContainerID, controlPort, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
 		BinaryPath:     selfBinary,
 		ConfigPath:     tmpFile.Name(),
 		NetworkID:      netInfo.ID,
 		ProxyIP:        proxyIP,
 		ControlAPIPort: controlAPIPort,
-		Name:           "vibepit-proxy-" + sessionID,
+		Name:           proxyContainerName,
 		SessionID:      sessionID,
 		TLSKeyPEM:      string(creds.ServerKeyPEM()),
 		TLSCertPEM:     string(creds.ServerCertPEM()),
@@ -244,6 +262,9 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("proxy container: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		client.StopAndRemove(ctx, proxyContainerID) //nolint:errcheck
+	})
 	tui.Status("Listening", "control API on 127.0.0.1:%s", controlPort)
 
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
@@ -274,6 +295,9 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		client.StopAndRemove(ctx, sandboxContainerID) //nolint:errcheck
+	})
 
 	tui.Status("Starting", "sandbox container")
 	if err := client.StartContainer(ctx, sandboxContainerID); err != nil {
@@ -292,6 +316,8 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		}
 		return fmt.Errorf("find SSH port: %w", err)
 	}
+
+	succeeded = true
 
 	fmt.Println()
 	tui.Status("Ready", "session %s", sessionID)
