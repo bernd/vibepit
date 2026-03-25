@@ -106,24 +106,20 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 		return
 	}
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for win := range winCh {
 			pty.Setsize(ptmx, &pty.Winsize{ //nolint:errcheck
 				Rows: uint16(win.Height),
 				Cols: uint16(win.Width),
 			})
 		}
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		io.Copy(ptmx, sess) //nolint:errcheck
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		io.Copy(sess, ptmx) //nolint:errcheck
-	}()
+	})
 
 	var exitErr *exec.ExitError
 	if err := cmd.Wait(); errors.As(err, &exitErr) {
