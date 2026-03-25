@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
@@ -54,13 +55,11 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	for _, c := range containers {
-		name := c.Role
-		if name == "" {
-			name = c.ID[:12]
-		}
-		tui.Status("Stopping", "%s", name)
+		role := cmp.Or(c.Role, c.ID[:12])
+		name := cmp.Or(c.Name, "unknown-name")
+		tui.Status("Stopping", "%s %s", role, name)
 		if err := client.StopAndRemove(ctx, c.ID); err != nil {
-			tui.Error("stop %s: %v", name, err)
+			tui.Error("stop %s %s: %v", role, name, err)
 		}
 	}
 
