@@ -15,7 +15,7 @@ import (
 )
 
 func sessionBaseDir() (string, error) {
-	return filepath.Join(xdg.RuntimeDir, config.RuntimeDirName), nil
+	return filepath.Join(xdg.StateHome, config.RuntimeDirName, "sessions"), nil
 }
 
 func sessionDir(sessionID string) (string, error) {
@@ -77,8 +77,8 @@ func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
 }
 
 // WriteSessionCredentials persists the client TLS material for a session
-// into $XDG_RUNTIME_DIR/vibepit/<sessionID>/ so that subcommands launched
-// in separate processes can load them via LoadSessionTLSConfig.
+// into $XDG_STATE_HOME/vibepit/sessions/<sessionID>/ so that subcommands
+// launched in separate processes can load them via LoadSessionTLSConfig.
 func WriteSessionCredentials(sessionID string, creds *proxy.MTLSCredentials) (string, error) {
 	dir, err := sessionDir(sessionID)
 	if err != nil {

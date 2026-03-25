@@ -12,11 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSessionBaseDirUsesStateHome(t *testing.T) {
+	origStateHome := xdg.StateHome
+	xdg.StateHome = "/tmp/test-vibepit-state"
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
+
+	base, err := sessionBaseDir()
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/test-vibepit-state/vibepit/sessions", base)
+}
+
 func TestWriteSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	origRuntimeDir := xdg.RuntimeDir
-	xdg.RuntimeDir = tmpDir
-	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
 	sessionID := "test-session-abc"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
@@ -25,7 +35,7 @@ func TestWriteSessionCredentials(t *testing.T) {
 	dir, err := WriteSessionCredentials(sessionID, creds)
 	require.NoError(t, err)
 
-	expected := filepath.Join(tmpDir, "vibepit", sessionID)
+	expected := filepath.Join(tmpDir, "vibepit", "sessions", sessionID)
 	assert.Equal(t, expected, dir)
 
 	info, err := os.Stat(dir)
@@ -45,9 +55,9 @@ func TestWriteSessionCredentials(t *testing.T) {
 
 func TestReadSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	origRuntimeDir := xdg.RuntimeDir
-	xdg.RuntimeDir = tmpDir
-	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
 	sessionID := "test-session-read"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
@@ -65,9 +75,9 @@ func TestReadSessionCredentials(t *testing.T) {
 
 func TestCleanupSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	origRuntimeDir := xdg.RuntimeDir
-	xdg.RuntimeDir = tmpDir
-	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
 	sessionID := "test-session-cleanup"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
