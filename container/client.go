@@ -611,6 +611,13 @@ type SandboxContainerConfig struct {
 	ColorTerm           string
 	UID                 int
 	User                string
+	SessionID           string   // session identifier for labeling
+	Daemon              bool     // when true, creates daemon-mode container
+	DaemonBinaryPath    string   // host path to vibepit binary (bind-mounted at /vibepit)
+	DaemonHostKeyPath   string   // host path to SSH host key (bind-mounted at /etc/vibepit/sshd/host-key)
+	DaemonHostPubPath   string   // host path to SSH host pub key
+	DaemonAuthorizedKey string   // SSH public key for client auth (set as VIBEPIT_SSH_PUBKEY env)
+	DaemonEntrypoint    []string // entrypoint override for daemon mode
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -666,44 +673,80 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")
 	}
 
-	resp, err := c.docker.ContainerCreate(ctx,
-		&container.Config{
-			Image:    cfg.Image,
-			Env:      env,
-			Hostname: ContainerHostname,
-			Labels: map[string]string{
-				LabelVibepit:         "true",
-				LabelRole:            RoleSandbox,
-				LabelUID:             fmt.Sprintf("%d", cfg.UID),
-				LabelUser:            cfg.User,
-				LabelVolumeHome:      cfg.HomeVolumeName,
-				LabelVolumeLinuxbrew: cfg.LinuxbrewVolumeName,
-				LabelProjectDir:      cfg.ProjectDir,
-			},
-			Tty:        true,
-			OpenStdin:  true,
-			WorkingDir: cfg.WorkDir,
-		},
-		&container.HostConfig{
-			Binds:          binds,
-			DNS:            []string{cfg.ProxyIP},
-			Init:           new(true),
-			ReadonlyRootfs: true,
-			CapDrop:        []string{"ALL"},
-			SecurityOpt:    []string{"no-new-privileges"},
-			Tmpfs:          map[string]string{"/tmp": "exec"},
-		},
-		&network.NetworkingConfig{
+	labels := map[string]string{
+		LabelVibepit:         "true",
+		LabelRole:            RoleSandbox,
+		LabelUID:             fmt.Sprintf("%d", cfg.UID),
+		LabelUser:            cfg.User,
+		LabelVolumeHome:      cfg.HomeVolumeName,
+		LabelVolumeLinuxbrew: cfg.LinuxbrewVolumeName,
+		LabelProjectDir:      cfg.ProjectDir,
+		LabelSessionID:       cfg.SessionID,
+	}
+
+	containerConfig := &container.Config{
+		Image:      cfg.Image,
+		Env:        env,
+		Hostname:   ContainerHostname,
+		Labels:     labels,
+		Tty:        true,
+		OpenStdin:  true,
+		WorkingDir: cfg.WorkDir,
+	}
+
+	hostConfig := &container.HostConfig{
+		Binds:          binds,
+		DNS:            []string{cfg.ProxyIP},
+		Init:           new(true),
+		ReadonlyRootfs: true,
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    []string{"no-new-privileges"},
+		Tmpfs:          map[string]string{"/tmp": "exec"},
+	}
+
+	var networkingConfig *network.NetworkingConfig
+
+	if cfg.Daemon {
+		containerConfig.Tty = false
+		containerConfig.OpenStdin = false
+		containerConfig.Entrypoint = cfg.DaemonEntrypoint
+		containerConfig.Cmd = nil
+		containerConfig.Env = append(containerConfig.Env,
+			fmt.Sprintf("VIBEPIT_SSH_PUBKEY=%s", cfg.DaemonAuthorizedKey),
+		)
+		containerConfig.ExposedPorts = nat.PortSet{
+			"2222/tcp": struct{}{},
+		}
+		hostConfig.NetworkMode = "bridge"
+		hostConfig.PortBindings = nat.PortMap{
+			"2222/tcp": []nat.PortBinding{{HostIP: "127.0.0.1"}},
+		}
+		// Add daemon-specific bind mounts
+		hostConfig.Binds = append(hostConfig.Binds,
+			cfg.DaemonBinaryPath+":"+ProxyBinaryPath+":ro",
+			cfg.DaemonHostKeyPath+":/etc/vibepit/sshd/host-key:ro",
+			cfg.DaemonHostPubPath+":/etc/vibepit/sshd/host-key.pub:ro",
+		)
+		// NetworkingConfig left empty for bridge mode; network connected below after create.
+	} else {
+		networkingConfig = &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{
 				cfg.NetworkID: {},
 			},
-		},
-		nil,
-		cfg.Name,
-	)
+		}
+	}
+
+	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, nil, cfg.Name)
 	if err != nil {
 		return "", fmt.Errorf("create sandbox container: %w", err)
 	}
+
+	if cfg.Daemon {
+		if err := c.docker.NetworkConnect(ctx, cfg.NetworkID, resp.ID, &network.EndpointSettings{}); err != nil {
+			return "", fmt.Errorf("connect sandbox to session network: %w", err)
+		}
+	}
+
 	return resp.ID, nil
 }
 

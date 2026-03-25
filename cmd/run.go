@@ -301,6 +301,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		ColorTerm:           os.Getenv("COLORTERM"),
 		UID:                 uid,
 		User:                u.Username,
+		SessionID:           sessionID,
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)
