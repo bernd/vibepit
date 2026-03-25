@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/creack/pty"
@@ -68,9 +70,29 @@ func handleSession(sess charmssh.Session) {
 	}
 }
 
+// mergeEnv returns the container's environment with session-provided vars overlaid.
+func mergeEnv(sessionEnv []string) []string {
+	env := make(map[string]string)
+	for _, e := range os.Environ() {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			env[k] = v
+		}
+	}
+	for _, e := range sessionEnv {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			env[k] = v
+		}
+	}
+	result := make([]string, 0, len(env))
+	for k, v := range env {
+		result = append(result, k+"="+v)
+	}
+	return result
+}
+
 func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan charmssh.Window) {
 	cmd := exec.Command("/bin/bash", "--login")
-	cmd.Env = sess.Environ()
+	cmd.Env = mergeEnv(sess.Environ())
 	cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
@@ -124,7 +146,7 @@ func handleExecSession(sess charmssh.Session) {
 	}
 
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Env = sess.Environ()
+	cmd.Env = mergeEnv(sess.Environ())
 	cmd.Stdout = sess
 	cmd.Stderr = sess.Stderr()
 	cmd.Stdin = sess

@@ -69,15 +69,21 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 	// Best-effort cleanup: stop and remove all containers.
 	for _, id := range containers {
 		tui.Status("Stopping", "container %s", id[:12])
-		client.StopAndRemove(ctx, id)
+		if err := client.StopAndRemove(ctx, id); err != nil {
+			tui.Error("stop container %s: %v", id[:12], err)
+		}
 	}
 
 	// Remove network by name.
 	networkName := networkNamePrefix + sessionID
-	client.RemoveNetwork(ctx, networkName)
+	if err := client.RemoveNetwork(ctx, networkName); err != nil {
+		tui.Error("remove network %s: %v", networkName, err)
+	}
 
 	// Remove credentials.
-	CleanupSessionCredentials(sessionID)
+	if err := CleanupSessionCredentials(sessionID); err != nil {
+		tui.Error("cleanup credentials: %v", err)
+	}
 
 	tui.Status("Stopped", "session %s", sessionID)
 	return nil

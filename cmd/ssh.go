@@ -136,7 +136,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		}
 		if err := session.Run(strings.Join(quoted, " ")); err != nil {
 			if exitErr, ok := err.(*ssh.ExitError); ok {
-				os.Exit(exitErr.ExitStatus())
+				return &ctr.ExitError{Code: exitErr.ExitStatus()}
 			}
 			return err
 		}
