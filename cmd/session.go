@@ -146,6 +146,34 @@ func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
 	}, nil
 }
 
+// WriteSSHCredentials persists SSH key material for a session into
+// $XDG_STATE_HOME/vibepit/sessions/<sessionID>/ so that the SSH server
+// and client can load them when establishing a session.
+func WriteSSHCredentials(sessionID string, clientPriv, clientPub, hostPriv, hostPub []byte) error {
+	dir, err := sessionDir(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	files := map[string]struct {
+		data []byte
+		perm os.FileMode
+	}{
+		"ssh-key":      {clientPriv, 0600},
+		"ssh-key.pub":  {clientPub, 0644},
+		"host-key":     {hostPriv, 0600},
+		"host-key.pub": {hostPub, 0644},
+	}
+	for name, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), f.data, f.perm); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // CleanupSessionCredentials removes the entire session directory and its
 // contents. Safe to call if the directory does not exist.
 func CleanupSessionCredentials(sessionID string) error {
