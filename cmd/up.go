@@ -310,6 +310,19 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("start sandbox container: %w", err)
 	}
 
+	// Wait briefly and verify the sandbox is still running. The entrypoint
+	// may fail immediately (e.g. missing function), and StartContainer only
+	// confirms the container was started, not that it stayed up.
+	time.Sleep(500 * time.Millisecond)
+	if status := client.ContainerStatus(ctx, sandboxContainerID); status != "running" {
+		if logs, logErr := client.ContainerLogs(ctx, sandboxContainerID, 20); logErr == nil && logs != "" {
+			tui.Error("sandbox %s — logs:\n%s", status, logs)
+		} else {
+			tui.Error("sandbox %s", status)
+		}
+		return fmt.Errorf("sandbox container exited immediately (%s)", status)
+	}
+
 	// Find the published SSH port on the proxy container (SSH is forwarded
 	// through the proxy to preserve sandbox network isolation).
 	sshPort, err := client.FindPublishedPort(ctx, proxyContainerID, ctr.SSHContainerPort)
