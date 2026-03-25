@@ -46,6 +46,7 @@ func RootCommand() *cli.Command {
 			AllowHTTPCommand(),
 			AllowDNSCommand(),
 			ProxyCommand(),
+			VibedCommand(),
 			SessionsCommand(),
 			MonitorCommand(),
 			UpdateCommand(),
