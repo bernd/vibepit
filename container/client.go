@@ -41,9 +41,9 @@ const (
 	RoleProxy   = "proxy"
 	RoleSandbox = "sandbox"
 
-	ProxyBinaryPath   = "/vibepit"
-	SandboxBinaryPath = "/vibed"
-	ProxyConfigPath   = "/config.json"
+	ProxyBinaryPath    = "/vibepit"
+	SandboxBinaryPath  = "/vibed"
+	ProxyConfigPath    = "/config.json"
 	HomeMountPath      = "/home/code"
 	LinuxbrewMountPath = "/home/linuxbrew"
 	ContainerHostname  = "vibes"
@@ -51,10 +51,10 @@ const (
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
 	LabelControlPort = "vibepit.control-port"
 
-	SSHContainerPort  = "2222/tcp"
-	SSHHostKeyPath    = "/etc/vibepit/sshd/host-key"
-	SSHHostPubPath    = "/etc/vibepit/sshd/host-key.pub"
-	SSHPubKeyEnv      = "VIBEPIT_SSH_PUBKEY"
+	SSHContainerPort = "2222/tcp"
+	SSHHostKeyPath   = "/etc/vibepit/sshd/host-key"
+	SSHHostPubPath   = "/etc/vibepit/sshd/host-key.pub"
+	SSHPubKeyEnv     = "VIBEPIT_SSH_PUBKEY"
 )
 
 // Client wraps the Docker/Podman API, trying Docker first then falling back

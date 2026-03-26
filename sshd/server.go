@@ -101,7 +101,7 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 	})
 	if err != nil {
 		fmt.Fprintf(sess.Stderr(), "failed to start shell: %s\n", err) //nolint:errcheck
-		sess.Exit(1) //nolint:errcheck
+		sess.Exit(1)                                                   //nolint:errcheck
 		return
 	}
 	// Window resize handler — runs until winCh is closed (session end).
@@ -133,8 +133,8 @@ func handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan c
 	if exitErr, ok := errors.AsType[*exec.ExitError](cmd.Wait()); ok {
 		exitCode = exitErr.ExitCode()
 	}
-	ptmx.Close() //nolint:errcheck
-	<-done                      // wait for output to drain
+	ptmx.Close()        //nolint:errcheck
+	<-done              // wait for output to drain
 	sess.Exit(exitCode) //nolint:errcheck
 }
 
@@ -142,7 +142,7 @@ func handleExecSession(sess charmssh.Session) {
 	args := sess.Command()
 	if len(args) == 0 {
 		fmt.Fprintln(sess.Stderr(), "no command specified") //nolint:errcheck
-		sess.Exit(1) //nolint:errcheck
+		sess.Exit(1)                                        //nolint:errcheck
 		return
 	}
 
@@ -158,7 +158,7 @@ func handleExecSession(sess charmssh.Session) {
 			return
 		}
 		fmt.Fprintf(sess.Stderr(), "failed to run command: %s\n", err) //nolint:errcheck
-		sess.Exit(1) //nolint:errcheck
+		sess.Exit(1)                                                   //nolint:errcheck
 		return
 	}
 	sess.Exit(0) //nolint:errcheck

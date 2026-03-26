@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -23,7 +24,7 @@ func shellescape(s string) string {
 	}
 	safe := true
 	for _, c := range s {
-			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
 			c != '-' && c != '_' && c != '.' && c != '/' && c != ':' && c != ',' && c != '+' && c != '=' {
 			safe = false
 			break
@@ -143,7 +144,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 			quoted[i] = shellescape(arg)
 		}
 		if err := session.Run(strings.Join(quoted, " ")); err != nil {
-			if exitErr, ok := err.(*ssh.ExitError); ok {
+			if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
 				return &ctr.ExitError{Code: exitErr.ExitStatus()}
 			}
 			return err

@@ -292,7 +292,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		DaemonHostKeyPath:   hostKeyPath,
 		DaemonHostPubPath:   hostPubPath,
 		DaemonAuthorizedKey: string(clientPub),
-		DaemonEntrypoint: []string{"/vibed"},
+		DaemonEntrypoint:    []string{"/vibed"},
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)

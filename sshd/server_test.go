@@ -26,7 +26,7 @@ func TestServerAcceptsAuthorizedKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close() //nolint:errcheck
+	defer srv.Close()      //nolint:errcheck
 
 	signer, err := gossh.ParsePrivateKey(clientPriv)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestServerRejectsUnauthorizedKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close() //nolint:errcheck
+	defer srv.Close()      //nolint:errcheck
 
 	signer, err := gossh.ParsePrivateKey(unauthorizedPriv)
 	require.NoError(t, err)
