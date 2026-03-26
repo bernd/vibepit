@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/sshd"
@@ -22,6 +23,16 @@ func VibedCommand() *cli.Command {
 }
 
 func VibedAction(ctx context.Context, cmd *cli.Command) error {
+	// Run the same shell initialization as entrypoint.sh so the home
+	// directory and linuxbrew volume are ready before accepting SSH sessions.
+	initCmd := exec.Command("bash", "-c",
+		"source /etc/vibepit/lib.sh && source /etc/vibepit/entrypoint-lib.sh && migrate_linuxbrew_volume && init_home")
+	initCmd.Stdout = os.Stdout
+	initCmd.Stderr = os.Stderr
+	if err := initCmd.Run(); err != nil {
+		return fmt.Errorf("sandbox init: %w", err)
+	}
+
 	hostKey, err := os.ReadFile(ctr.SSHHostKeyPath)
 	if err != nil {
 		return fmt.Errorf("read host key: %w", err)

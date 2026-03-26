@@ -292,8 +292,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		DaemonHostKeyPath:   hostKeyPath,
 		DaemonHostPubPath:   hostPubPath,
 		DaemonAuthorizedKey: string(clientPub),
-		DaemonEntrypoint: []string{"/bin/bash", "-c",
-			"source /etc/vibepit/lib.sh && source /etc/vibepit/entrypoint-lib.sh && migrate_linuxbrew_volume && init_home && exec /vibed"},
+		DaemonEntrypoint: []string{"/vibed"},
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)
