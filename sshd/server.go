@@ -83,6 +83,11 @@ func mergeEnv(sessionEnv []string) []string {
 			env[k] = v
 		}
 	}
+
+	// Cleanup vibed config variables
+	delete(env, "VIBEPIT_SSH_PUBKEY")
+	delete(env, "VIBEPIT_DEFAULT_COMMAND")
+
 	result := make([]string, 0, len(env))
 	for k, v := range env {
 		result = append(result, k+"="+v)
