@@ -54,7 +54,7 @@ func TestDownloadArchiveStreamCap(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Don't set Content-Length. Write more than test cap.
 		data := strings.Repeat("x", 512)
-		for i := 0; i < 10; i++ { // 5 KB > 1 KB test cap
+		for range 10 { // 5 KB > 1 KB test cap
 			w.Write([]byte(data))
 		}
 	}))
