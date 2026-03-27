@@ -56,7 +56,7 @@ release-archive:
 		tar -czf "dist/$$name.tar.gz" -C dist "$$name"; \
 		rm -rf "dist/$$name"; \
 	done
-	cd dist && shasum -a 256 *.tar.gz > checksums.txt
+	cd dist && sha256sum *.tar.gz > checksums.txt
 
 release-publish:
 	@[ -n "$(VERSION)" ] || { echo "VERSION is required"; exit 1; }
