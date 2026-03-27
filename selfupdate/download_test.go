@@ -24,7 +24,7 @@ func TestDownloadArchive(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	path, err := DownloadArchive(srv.URL, dir, false)
+	path, err := DownloadArchive(srv.Client(), srv.URL, dir, false)
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -40,7 +40,7 @@ func TestDownloadArchiveTooLarge(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	_, err := DownloadArchive(srv.URL, dir, false)
+	_, err := DownloadArchive(srv.Client(), srv.URL, dir, false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum")
 }
@@ -61,7 +61,7 @@ func TestDownloadArchiveStreamCap(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	_, err := DownloadArchive(srv.URL, dir, false)
+	_, err := DownloadArchive(srv.Client(), srv.URL, dir, false)
 	assert.Error(t, err)
 }
 

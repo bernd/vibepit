@@ -85,7 +85,7 @@ func (c *Client) FetchChannelIndex(channel string) (*ChannelIndex, bool, error) 
 		return nil, false, fmt.Errorf("fetch channel index: HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, false, fmt.Errorf("read channel index: %w", err)
 	}
@@ -113,7 +113,7 @@ func (c *Client) FetchVersionMetadata(version string) (*VersionMetadata, error) 
 		return nil, fmt.Errorf("fetch version metadata: HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read version metadata: %w", err)
 	}

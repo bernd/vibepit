@@ -20,8 +20,8 @@ var maxArchiveSizeLimit int64 = 256 * 1024 * 1024 // 256 MB
 // Returns the path to the downloaded file. If isTTY is true, displays a
 // progress bar; otherwise uses line-based progress.
 // Checks Content-Length header and caps streaming at maxArchiveSizeLimit.
-func DownloadArchive(url, dir string, isTTY bool) (string, error) {
-	resp, err := http.Get(url)
+func DownloadArchive(httpClient *http.Client, url, dir string, isTTY bool) (string, error) {
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("download archive: %w", err)
 	}
@@ -51,11 +51,12 @@ func DownloadArchive(url, dir string, isTTY bool) (string, error) {
 		totalSize, _ = strconv.ParseInt(cl, 10, 64)
 	}
 
-	// Cap the reader at maxArchiveSize as defense-in-depth.
+	// Cap the reader at maxArchiveSize+1 as defense-in-depth. The +1 allows
+	// detecting when the limit is exceeded (written > maxArchiveSizeLimit).
 	reader := io.LimitReader(resp.Body, maxArchiveSizeLimit+1)
 
 	var written int64
-	var lastMilestone int
+	lastMilestone := -1
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := reader.Read(buf)

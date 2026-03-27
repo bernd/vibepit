@@ -11,6 +11,8 @@ import (
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/selfupdate"
+	"strings"
+
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
 )
@@ -186,7 +188,8 @@ func runBinaryUpdate(ctx context.Context, client *selfupdate.Client, useVersion 
 		fmt.Printf("\nInstall vibepit v%s? [y/N] ", meta.Version)
 		var answer string
 		fmt.Scanln(&answer)
-		if answer != "y" && answer != "Y" {
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer != "y" && answer != "yes" {
 			fmt.Println("Update cancelled.")
 			return nil
 		}
@@ -209,7 +212,7 @@ func runBinaryUpdate(ctx context.Context, client *selfupdate.Client, useVersion 
 
 	// Download.
 	isTTY := term.IsTerminal(int(os.Stdout.Fd()))
-	archivePath, err := selfupdate.DownloadArchive(asset.URL, binDir, isTTY)
+	archivePath, err := selfupdate.DownloadArchive(client.HTTPClient, asset.URL, binDir, isTTY)
 	if err != nil {
 		return err
 	}
