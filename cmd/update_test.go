@@ -14,6 +14,11 @@ func TestUpdateFlagValidation(t *testing.T) {
 		wantErr string
 	}{
 		{
+			"bin with images is error",
+			[]string{"vibepit", "update", "--bin", "--images"},
+			"--bin and --images are mutually exclusive",
+		},
+		{
 			"use with images is error",
 			[]string{"vibepit", "update", "--use", "0.1.0", "--images"},
 			"--use cannot be combined with --images",

@@ -94,6 +94,10 @@ func validateUpdateFlags(cmd *cli.Command) error {
 	check := cmd.Bool("check")
 	images := cmd.Bool("images")
 
+	bin := cmd.Bool("bin")
+	if bin && images {
+		return fmt.Errorf("--bin and --images are mutually exclusive")
+	}
 	if use != "" && images {
 		return fmt.Errorf("--use cannot be combined with --images")
 	}
