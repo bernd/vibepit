@@ -63,7 +63,7 @@ release-publish:
 	gh release create \
 		--draft --prerelease --verify-tag \
 		--title "v$(VERSION)" \
-		v$(VERSION) dist/*.tar.gz dist/*.bundle dist/checksums.txt
+		v$(VERSION) dist/*.tar.gz $(wildcard dist/*.bundle) dist/checksums.txt
 
 clean:
 	rm -f $(BINARY) embed/proxy/vibepit
