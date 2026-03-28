@@ -43,15 +43,21 @@ func ReplaceBinary(targetPath, newPath string) error {
 }
 
 // ResolveBinaryPath returns the absolute path to the currently running binary,
-// resolving any symlinks.
-func ResolveBinaryPath() (string, error) {
+// resolving any symlinks. It also returns the original (unresolved) path, which
+// is useful for package manager detection where symlinks (e.g. /snap/bin/foo ->
+// /usr/bin/snap) would cause incorrect prefix matching.
+func ResolveBinaryPath() (original string, resolved string, err error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("resolve executable path: %w", err)
+		return "", "", fmt.Errorf("resolve executable path: %w", err)
 	}
-	resolved, err := filepath.EvalSymlinks(exe)
+	abs, err := filepath.Abs(exe)
 	if err != nil {
-		return "", fmt.Errorf("resolve symlinks: %w", err)
+		return "", "", fmt.Errorf("resolve absolute path: %w", err)
 	}
-	return resolved, nil
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve symlinks: %w", err)
+	}
+	return abs, real, nil
 }

@@ -9,6 +9,7 @@ var packageManagerPrefixes = []struct {
 }{
 	{"/opt/homebrew/", "Homebrew"},
 	{"/usr/local/Cellar/", "Homebrew"},
+	{"/home/linuxbrew/.linuxbrew/", "Homebrew"},
 	{"/usr/bin/", "system package manager"},
 	{"/usr/sbin/", "system package manager"},
 	{"/nix/store/", "Nix"},

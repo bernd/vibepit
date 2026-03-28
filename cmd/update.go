@@ -199,12 +199,21 @@ func runBinaryUpdate(ctx context.Context, client *selfupdate.Client, useVersion 
 		}
 	}
 
-	// Resolve binary path and check permissions.
-	binPath, err := selfupdate.ResolveBinaryPath()
+	// Resolve binary path. Check the original (unresolved) path for package
+	// manager detection since symlinks like /snap/bin/foo -> /usr/bin/snap
+	// would cause incorrect prefix matching against the resolved path.
+	originalPath, binPath, err := selfupdate.ResolveBinaryPath()
 	if err != nil {
 		return err
 	}
 
+	// Check both original and resolved paths. The original catches prefix-based
+	// managers (snap, nix), while the resolved path catches managers where the
+	// symlink target reveals the manager (e.g. /usr/local/bin/vibepit ->
+	// /usr/local/Cellar/vibepit/...).
+	if manager, managed := selfupdate.DetectPackageManager(originalPath); managed {
+		return fmt.Errorf("vibepit appears to be managed by %s; use your package manager to update instead", manager)
+	}
 	if manager, managed := selfupdate.DetectPackageManager(binPath); managed {
 		return fmt.Errorf("vibepit appears to be managed by %s; use your package manager to update instead", manager)
 	}
