@@ -31,11 +31,12 @@ func DownloadArchive(httpClient *http.Client, url, dir string, isTTY bool) (stri
 		return "", fmt.Errorf("download archive: HTTP %d", resp.StatusCode)
 	}
 
-	// Check Content-Length if present.
+	// Parse Content-Length for size validation and progress display.
+	var totalSize int64
 	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		size, err := strconv.ParseInt(cl, 10, 64)
-		if err == nil && size > maxArchiveSizeLimit {
-			return "", fmt.Errorf("archive size %d bytes exceeds maximum %d bytes", size, maxArchiveSizeLimit)
+		totalSize, _ = strconv.ParseInt(cl, 10, 64)
+		if totalSize > maxArchiveSizeLimit {
+			return "", fmt.Errorf("archive size %d bytes exceeds maximum %d bytes", totalSize, maxArchiveSizeLimit)
 		}
 	}
 
@@ -44,12 +45,6 @@ func DownloadArchive(httpClient *http.Client, url, dir string, isTTY bool) (stri
 		return "", fmt.Errorf("create temp file: %w", err)
 	}
 	path := f.Name()
-
-	// Parse total size for progress display.
-	var totalSize int64
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		totalSize, _ = strconv.ParseInt(cl, 10, 64)
-	}
 
 	// Cap the reader at maxArchiveSize+1 as defense-in-depth. The +1 allows
 	// detecting when the limit is exceeded (written > maxArchiveSizeLimit).

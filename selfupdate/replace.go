@@ -23,19 +23,15 @@ func CheckWritePermission(dir string) error {
 // binary at newPath using os.Rename (atomic on POSIX). Preserves the original
 // file permissions.
 func ReplaceBinary(targetPath, newPath string) error {
-	// Get original permissions.
 	info, err := os.Stat(targetPath)
 	if err != nil {
 		return fmt.Errorf("stat current binary: %w", err)
 	}
-	origMode := info.Mode().Perm()
 
-	// Set permissions on new binary before rename.
-	if err := os.Chmod(newPath, origMode); err != nil {
+	if err := os.Chmod(newPath, info.Mode().Perm()); err != nil {
 		return fmt.Errorf("set permissions on new binary: %w", err)
 	}
 
-	// Atomic rename.
 	if err := os.Rename(newPath, targetPath); err != nil {
 		return fmt.Errorf("replace binary: %w", err)
 	}

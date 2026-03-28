@@ -14,9 +14,8 @@ import (
 // Verification checks:
 // - Certificate issuer: https://token.actions.githubusercontent.com
 // - Certificate SAN (prefix): https://github.com/bernd/vibepit/.github/workflows/build.yml
-func VerifyCosignBundle(archivePath, bundleURL string) error {
-	// Download bundle.
-	bundlePath, err := downloadBundle(bundleURL)
+func VerifyCosignBundle(httpClient *http.Client, archivePath, bundleURL string) error {
+	bundlePath, err := downloadBundle(httpClient, bundleURL)
 	if err != nil {
 		return err
 	}
@@ -42,9 +41,8 @@ func VerifyCosignBundle(archivePath, bundleURL string) error {
 
 const maxBundleSize = 10 * 1024 * 1024 // 10 MB — bundles are typically a few KB
 
-func downloadBundle(url string) (string, error) {
-	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Get(url)
+func downloadBundle(httpClient *http.Client, url string) (string, error) {
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("download cosign bundle: %w", err)
 	}

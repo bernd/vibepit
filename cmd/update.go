@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"strings"
+
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/selfupdate"
-	"strings"
-
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
 )
@@ -239,7 +239,7 @@ func runBinaryUpdate(ctx context.Context, client *selfupdate.Client, useVersion 
 	// Verify cosign bundle (skip if bundle URL is empty -- cosign signing
 	// may not yet be deployed in CI).
 	if asset.CosignBundleURL != "" {
-		if err := selfupdate.VerifyCosignBundle(archivePath, asset.CosignBundleURL); err != nil {
+		if err := selfupdate.VerifyCosignBundle(client.HTTPClient, archivePath, asset.CosignBundleURL); err != nil {
 			return err
 		}
 	}
