@@ -46,3 +46,11 @@ migrate_linuxbrew_volume() {
 
 	type vp_status &>/dev/null && vp_status "Homebrew migration complete." || true
 }
+
+init_home() {
+	if [ ! -f "$HOME/.vibepit-initialized" ]; then
+		vp_status "Initializing $HOME"
+		rsync -aHS "/opt/vibepit/home-template/" "$HOME/"
+		date > "$HOME/.vibepit-initialized"
+	fi
+}

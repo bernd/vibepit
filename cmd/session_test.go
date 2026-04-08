@@ -12,11 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSessionBaseDirUsesStateHome(t *testing.T) {
+	origStateHome := xdg.StateHome
+	xdg.StateHome = "/tmp/test-vibepit-state"
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
+
+	base, err := sessionBaseDir()
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/test-vibepit-state/vibepit/sessions", base)
+}
+
 func TestWriteSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	origRuntimeDir := xdg.RuntimeDir
-	xdg.RuntimeDir = tmpDir
-	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
 	sessionID := "test-session-abc"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
@@ -25,7 +35,7 @@ func TestWriteSessionCredentials(t *testing.T) {
 	dir, err := WriteSessionCredentials(sessionID, creds)
 	require.NoError(t, err)
 
-	expected := filepath.Join(tmpDir, "vibepit", sessionID)
+	expected := filepath.Join(tmpDir, "vibepit", "sessions", sessionID)
 	assert.Equal(t, expected, dir)
 
 	info, err := os.Stat(dir)
@@ -45,9 +55,9 @@ func TestWriteSessionCredentials(t *testing.T) {
 
 func TestReadSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	origRuntimeDir := xdg.RuntimeDir
-	xdg.RuntimeDir = tmpDir
-	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
 	sessionID := "test-session-read"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)
@@ -63,11 +73,48 @@ func TestReadSessionCredentials(t *testing.T) {
 	assert.NotNil(t, tlsCfg.RootCAs)
 }
 
+func TestWriteSSHCredentials(t *testing.T) {
+	tmpDir := t.TempDir()
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
+
+	sessionID := "test-session-id"
+	clientPriv := []byte("fake-client-private-key")
+	clientPub := []byte("fake-client-public-key")
+	hostPriv := []byte("fake-host-private-key")
+	hostPub := []byte("fake-host-public-key")
+
+	err := WriteSSHCredentials(sessionID, clientPriv, clientPub, hostPriv, hostPub)
+	require.NoError(t, err)
+
+	sessDir, _ := sessionDir(sessionID)
+
+	data, err := os.ReadFile(filepath.Join(sessDir, "ssh-key"))
+	require.NoError(t, err)
+	assert.Equal(t, clientPriv, data)
+
+	info, _ := os.Stat(filepath.Join(sessDir, "ssh-key"))
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
+	data, _ = os.ReadFile(filepath.Join(sessDir, "ssh-key.pub"))
+	assert.Equal(t, clientPub, data)
+
+	data, _ = os.ReadFile(filepath.Join(sessDir, "host-key"))
+	assert.Equal(t, hostPriv, data)
+
+	info, _ = os.Stat(filepath.Join(sessDir, "host-key"))
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
+	data, _ = os.ReadFile(filepath.Join(sessDir, "host-key.pub"))
+	assert.Equal(t, hostPub, data)
+}
+
 func TestCleanupSessionCredentials(t *testing.T) {
 	tmpDir := t.TempDir()
-	origRuntimeDir := xdg.RuntimeDir
-	xdg.RuntimeDir = tmpDir
-	t.Cleanup(func() { xdg.RuntimeDir = origRuntimeDir })
+	origStateHome := xdg.StateHome
+	xdg.StateHome = tmpDir
+	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
 	sessionID := "test-session-cleanup"
 	creds, err := proxy.GenerateMTLSCredentials(24 * time.Hour)

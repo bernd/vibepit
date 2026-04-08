@@ -16,100 +16,22 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/keygen"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
 )
 
-const (
-	// imageRevision is bumped on backwards-incompatible image changes (r1, r2, ...).
-	// Also update IMAGE_REVISION in .github/workflows/docker-publish.yml.
-	imageRevision       = "r1"
-	defaultImagePrefix  = "ghcr.io/bernd/vibepit:" + imageRevision
-	localImage          = "vibepit:latest"
-	homeVolumeName      = "vibepit-home"
-	linuxbrewVolumeName = "vibepit-linuxbrew"
-	networkNamePrefix   = "vibepit-net-"
-)
-
-const (
-	allowFlag       = "allow"
-	localFlag       = "local"
-	presetFlag      = "preset"
-	reconfigureFlag = "reconfigure"
-)
-
-// resolveProjectRoot determines the project root from the first CLI argument
-// or the current working directory, then finds the Git root if available.
-func resolveProjectRoot(cmd *cli.Command) (string, error) {
-	projectRoot := cmd.Args().First()
-	if projectRoot == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return "", err
-		}
-		projectRoot = wd
-	}
-	projectRoot, err := filepath.Abs(projectRoot)
-	if err != nil {
-		return "", err
-	}
-	return config.FindProjectRoot(projectRoot)
-}
-
-// containerTerm returns a TERM value suitable for the sandbox container.
-func containerTerm() string {
-	t := os.Getenv("TERM")
-	switch t {
-	case "":
-		return "linux"
-	case "xterm-ghostty":
-		return "xterm-256color"
-	default:
-		return t
-	}
-}
-
-// sandboxFlags returns the shared flag definitions used by both run and up commands.
-func sandboxFlags() []cli.Flag {
-	return []cli.Flag{
-		&cli.BoolFlag{
-			Name:    localFlag,
-			Aliases: []string{"L"},
-			Usage:   fmt.Sprintf("Use local %q image instead of the published one", localImage),
-		},
-		&cli.StringSliceFlag{
-			Name:    allowFlag,
-			Aliases: []string{"a"},
-			Usage:   "Additional domain:port to allow (e.g. api.example.com:443)",
-		},
-		&cli.StringSliceFlag{
-			Name:    presetFlag,
-			Aliases: []string{"p"},
-			Usage:   "Additional presets to activate",
-		},
-		&cli.BoolFlag{
-			Name:    reconfigureFlag,
-			Aliases: []string{"r"},
-			Usage:   "Re-run the network preset selector",
-		},
-	}
-}
-
-func RunCommand() *cli.Command {
+func UpCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "run",
-		Usage:  "Start the sandbox",
+		Name:   "up",
+		Usage:  "Start a sandbox session in daemon mode (with SSH server)",
 		Flags:  sandboxFlags(),
-		Action: RunAction,
+		Action: UpAction,
 	}
 }
 
-func imageName(u *user.User) string {
-	return fmt.Sprintf("%s-uid-%s-gid-%s", defaultImagePrefix, u.Uid, u.Gid)
-}
-
-func RunAction(ctx context.Context, cmd *cli.Command) error {
+func UpAction(ctx context.Context, cmd *cli.Command) error {
 	tui.PrintHeader()
 
 	projectRoot, err := resolveProjectRoot(cmd)
@@ -145,13 +67,24 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close()
 
+	// Idempotent: if a session is already running for this project, exit early.
 	existing, err := client.FindRunningSession(ctx, projectRoot)
 	if err != nil {
 		return err
 	}
 	if existing != nil {
-		tui.Status("Attaching", "to running session in %s", projectRoot)
-		return client.ExecSession(ctx, existing.ContainerID)
+		tui.Status("Session", "already running for %s", projectRoot)
+		return nil
+	}
+
+	// Check for orphaned containers from a previous failed attempt (e.g.
+	// proxy still running after sandbox crashed).
+	orphanedSessionID, err := client.FindAnySessionContainer(ctx, projectRoot)
+	if err != nil {
+		return err
+	}
+	if orphanedSessionID != "" {
+		return fmt.Errorf("a previous session (%s) left orphaned containers — run 'vibepit down' first", orphanedSessionID)
 	}
 
 	globalPath := config.DefaultGlobalPath()
@@ -223,11 +156,25 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 
 	networkName := networkNamePrefix + sessionID
 
+	// Track resources for rollback on failure.
+	var cleanups []func()
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				cleanups[i]()
+			}
+		}
+	}()
+
 	tui.Status("Creating", "network %s", networkName)
 	netInfo, err := client.CreateNetwork(ctx, networkName)
 	if err != nil {
 		return fmt.Errorf("network: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		client.RemoveNetwork(ctx, networkName) //nolint:errcheck
+	})
 	proxyIP := netInfo.ProxyIP
 
 	merged.ProxyIP = proxyIP
@@ -244,22 +191,24 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	merged.ProxyPort = proxyPort
 	merged.ControlAPIPort = controlAPIPort
+	merged.SSHForwardAddr = fmt.Sprintf("%s:2222", netInfo.SandboxIP)
 
-	proxyConfig, _ := json.Marshal(merged)
+	proxyConfig, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("marshal proxy config: %w", err)
+	}
 	tmpFile, err := os.CreateTemp("", "vibepit-proxy-*.json")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Write(proxyConfig)
-	tmpFile.Close()
-
-	defer func() {
-		tui.Status("Removing", "network %s", networkName)
-		if err := client.RemoveNetwork(ctx, netInfo.ID); err != nil {
-			tui.Error("%v", err)
-		}
-	}()
+	defer os.Remove(tmpFile.Name()) //nolint:errcheck
+	if _, err := tmpFile.Write(proxyConfig); err != nil {
+		tmpFile.Close() //nolint:errcheck
+		return fmt.Errorf("write proxy config: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close proxy config: %w", err)
+	}
 
 	// Generate ephemeral mTLS credentials for the control API.
 	tui.Status("Generating", "mTLS credentials")
@@ -269,46 +218,68 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Write client credentials so subcommands can find them.
-	sessionDir, err := WriteSessionCredentials(sessionID, creds)
+	sessDir, err := WriteSessionCredentials(sessionID, creds)
 	if err != nil {
 		return fmt.Errorf("session credentials: %w", err)
 	}
-	defer CleanupSessionCredentials(sessionID)
-	tui.Status("Session", "%s (credentials in %s)", sessionID, sessionDir)
+	cleanups = append(cleanups, func() {
+		CleanupSessionCredentials(sessionID) //nolint:errcheck
+	})
+	tui.Status("Session", "%s (credentials in %s)", sessionID, sessDir)
+
+	// Generate SSH keypairs for daemon mode.
+	tui.Status("Generating", "SSH keypairs")
+	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
+	if err != nil {
+		return fmt.Errorf("generate client SSH keypair: %w", err)
+	}
+	hostPriv, hostPub, err := keygen.GenerateEd25519Keypair()
+	if err != nil {
+		return fmt.Errorf("generate host SSH keypair: %w", err)
+	}
+	if err := WriteSSHCredentials(sessionID, clientPriv, clientPub, hostPriv, hostPub); err != nil {
+		return fmt.Errorf("write SSH credentials: %w", err)
+	}
+
+	hostKeyPath := filepath.Join(sessDir, "host-key")
+	hostPubPath := filepath.Join(sessDir, "host-key.pub")
 
 	tui.Status("Starting", "proxy container")
+	proxyContainerName := "vibepit-proxy-" + sessionID
 	proxyContainerID, controlPort, err := client.StartProxyContainer(ctx, ctr.ProxyContainerConfig{
 		BinaryPath:     selfBinary,
 		ConfigPath:     tmpFile.Name(),
 		NetworkID:      netInfo.ID,
 		ProxyIP:        proxyIP,
 		ControlAPIPort: controlAPIPort,
-		Name:           "vibepit-proxy-" + sessionID,
+		Name:           proxyContainerName,
 		SessionID:      sessionID,
 		TLSKeyPEM:      string(creds.ServerKeyPEM()),
 		TLSCertPEM:     string(creds.ServerCertPEM()),
 		CACertPEM:      string(creds.CACertPEM()),
 		ProjectDir:     projectRoot,
+		NoRestart:      true,
+		SSHPort:        2222,
 	})
 	if err != nil {
 		return fmt.Errorf("proxy container: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		client.StopAndRemove(ctx, proxyContainerID) //nolint:errcheck
+	})
 	tui.Status("Listening", "control API on 127.0.0.1:%s", controlPort)
-	defer func() {
-		tui.Status("Stopping", "proxy container")
-		client.StopAndRemove(ctx, proxyContainerID)
-	}()
 
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
-	sandboxContainer, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
+	sandboxContainerID, err := client.CreateSandboxContainer(ctx, ctr.SandboxContainerConfig{
 		Image:               image,
 		ProjectDir:          projectRoot,
 		WorkDir:             projectRoot,
-		RuntimeDir:          sessionDir,
+		RuntimeDir:          sessDir,
 		HomeVolumeName:      homeVolumeName,
 		LinuxbrewVolumeName: linuxbrewVolumeName,
 		NetworkID:           netInfo.ID,
 		ProxyIP:             proxyIP,
+		SandboxIP:           netInfo.SandboxIP,
 		ProxyPort:           proxyPort,
 		Name:                "vibepit-sandbox-" + sessionID,
 		Term:                containerTerm(),
@@ -316,17 +287,64 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		UID:                 uid,
 		User:                u.Username,
 		SessionID:           sessionID,
+		Daemon:              true,
+		DaemonBinaryPath:    selfBinary,
+		DaemonHostKeyPath:   hostKeyPath,
+		DaemonHostPubPath:   hostPubPath,
+		DaemonAuthorizedKey: string(clientPub),
+		DaemonEntrypoint:    []string{"/vibed"},
 	})
 	if err != nil {
 		return fmt.Errorf("sandbox container: %w", err)
 	}
-	defer func() {
-		tui.Status("Stopping", "sandbox container")
-		client.StopAndRemove(ctx, sandboxContainer)
-	}()
+	cleanups = append(cleanups, func() {
+		client.StopAndRemove(ctx, sandboxContainerID) //nolint:errcheck
+	})
 
 	tui.Status("Starting", "sandbox container")
-	tui.Status("Attaching", "shell session")
+	if err := client.StartContainer(ctx, sandboxContainerID); err != nil {
+		if logs, logErr := client.ContainerLogs(ctx, sandboxContainerID, 20); logErr == nil && logs != "" {
+			tui.Error("sandbox logs:\n%s", logs)
+		}
+		return fmt.Errorf("start sandbox container: %w", err)
+	}
+
+	// Wait briefly and verify the sandbox is still running. The entrypoint
+	// may fail immediately (e.g. missing function), and StartContainer only
+	// confirms the container was started, not that it stayed up.
+	time.Sleep(500 * time.Millisecond)
+	if status := client.ContainerStatus(ctx, sandboxContainerID); status != "running" {
+		logContainerDiag(ctx, client, "sandbox", sandboxContainerID)
+		return fmt.Errorf("sandbox container exited immediately (%s)", status)
+	}
+
+	// Find the published SSH port on the proxy container (SSH is forwarded
+	// through the proxy to preserve sandbox network isolation).
+	sshPort, err := client.FindPublishedPort(ctx, proxyContainerID, ctr.SSHContainerPort)
+	if err != nil {
+		// Dump proxy and sandbox diagnostics to help troubleshoot.
+		logContainerDiag(ctx, client, "proxy", proxyContainerID)
+		logContainerDiag(ctx, client, "sandbox", sandboxContainerID)
+		return fmt.Errorf("find SSH port: %w", err)
+	}
+
+	succeeded = true
+
 	fmt.Println()
-	return client.AttachAndStartSession(ctx, sandboxContainer)
+	tui.Status("Ready", "session %s", sessionID)
+	tui.Status("SSH", "ssh -p %d -i %s code@127.0.0.1", sshPort, filepath.Join(sessDir, "ssh-key"))
+	tui.Status("Stop", "vibepit down")
+	fmt.Println()
+
+	return nil
+}
+
+// logContainerDiag prints a container's status and recent logs for troubleshooting.
+func logContainerDiag(ctx context.Context, client *ctr.Client, name, containerID string) {
+	status := client.ContainerStatus(ctx, containerID)
+	if logs, err := client.ContainerLogs(ctx, containerID, 20); err == nil && logs != "" {
+		tui.Error("%s %s — logs:\n%s", name, status, logs)
+	} else {
+		tui.Error("%s %s", name, status)
+	}
 }

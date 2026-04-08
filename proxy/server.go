@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ type ProxyConfig struct {
 	ProxyPort      int      `json:"proxy-port"`
 	ControlAPIPort int      `json:"control-api-port"`
 	DNSPort        int      `json:"dns-port"`
+	SSHForwardAddr string   `json:"ssh-forward-addr,omitempty"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
@@ -81,7 +83,11 @@ func (s *Server) Run(ctx context.Context) error {
 	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
 	dnsAddr := fmt.Sprintf(":%d", s.dnsPort())
 
-	errCh := make(chan error, 3)
+	services := 3
+	if s.config.SSHForwardAddr != "" {
+		services++
+	}
+	errCh := make(chan error, services)
 
 	go func() {
 		fmt.Printf("proxy: HTTP proxy listening on %s\n", proxyAddr)
@@ -108,12 +114,64 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- http.Serve(ln, controlAPI)
 	}()
 
+	if s.config.SSHForwardAddr != "" {
+		go func() {
+			errCh <- s.runSSHForwarder(s.config.SSHForwardAddr)
+		}()
+	}
+
 	select {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// SSHForwardPort is the port the SSH forwarder listens on inside the proxy container.
+const SSHForwardPort = 2222
+
+// runSSHForwarder accepts TCP connections and forwards them to the sandbox SSH server.
+func (s *Server) runSSHForwarder(targetAddr string) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", SSHForwardPort))
+	if err != nil {
+		return fmt.Errorf("ssh forwarder listen: %w", err)
+	}
+	fmt.Printf("proxy: SSH forwarder listening on :%d -> %s\n", SSHForwardPort, targetAddr)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return fmt.Errorf("ssh forwarder accept: %w", err)
+		}
+		go forwardTCP(conn, targetAddr)
+	}
+}
+
+func forwardTCP(client net.Conn, targetAddr string) {
+	defer client.Close() //nolint:errcheck
+	target, err := net.Dial("tcp", targetAddr)
+	if err != nil {
+		return
+	}
+	defer target.Close() //nolint:errcheck
+
+	done := make(chan struct{}, 2)
+	go func() {
+		io.Copy(target, client) //nolint:errcheck
+		// Half-close the write side so the target sees EOF while keeping
+		// the read side open for remaining output.
+		if tc, ok := target.(*net.TCPConn); ok {
+			tc.CloseWrite() //nolint:errcheck
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(client, target) //nolint:errcheck
+		done <- struct{}{}
+	}()
+	// Wait for both directions to finish.
+	<-done
+	<-done
 }
 
 func (s *Server) dnsPort() int {

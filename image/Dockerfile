@@ -82,6 +82,7 @@ COPY bin /usr/local/bin
 COPY config/profile /etc/profile.d/999-vibepit.sh
 
 RUN install -d -o root -g root -m 0755 /etc/vibepit \
+  && install -d -o root -g root -m 0755 /etc/vibepit/sshd \
   && install -d -o root -g root -m 0755 /opt/vibepit
 COPY config/bashrc /etc/vibepit/bashrc
 COPY config/tmux.conf /etc/vibepit/tmux.conf
