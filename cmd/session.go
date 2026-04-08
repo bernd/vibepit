@@ -15,7 +15,13 @@ import (
 )
 
 func sessionBaseDir() (string, error) {
-	return filepath.Join(xdg.RuntimeDir, config.RuntimeDirName), nil
+	return filepath.Join(xdg.StateHome, config.RuntimeDirName, "sessions"), nil
+}
+
+// legacySessionBaseDir returns the pre-migration credential path
+// ($XDG_RUNTIME_DIR/vibepit/{sessionID}).
+func legacySessionBaseDir() string {
+	return filepath.Join(xdg.RuntimeDir, config.RuntimeDirName)
 }
 
 func sessionDir(sessionID string) (string, error) {
@@ -23,7 +29,16 @@ func sessionDir(sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, sessionID), nil
+	dir := filepath.Join(base, sessionID)
+	// Fall back to legacy path for sessions created before the credential
+	// directory migration.
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		legacy := filepath.Join(legacySessionBaseDir(), sessionID)
+		if _, err := os.Stat(legacy); err == nil {
+			return legacy, nil
+		}
+	}
+	return dir, nil
 }
 
 // matchSession reports whether a proxy session matches the given filter string,
@@ -77,8 +92,8 @@ func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
 }
 
 // WriteSessionCredentials persists the client TLS material for a session
-// into $XDG_RUNTIME_DIR/vibepit/<sessionID>/ so that subcommands launched
-// in separate processes can load them via LoadSessionTLSConfig.
+// into $XDG_STATE_HOME/vibepit/sessions/<sessionID>/ so that subcommands
+// launched in separate processes can load them via LoadSessionTLSConfig.
 func WriteSessionCredentials(sessionID string, creds *proxy.MTLSCredentials) (string, error) {
 	dir, err := sessionDir(sessionID)
 	if err != nil {
@@ -144,6 +159,37 @@ func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      caPool,
 	}, nil
+}
+
+// WriteSSHCredentials persists SSH key material for a session into
+// $XDG_STATE_HOME/vibepit/sessions/<sessionID>/ so that the SSH server
+// and client can load them when establishing a session.
+func WriteSSHCredentials(sessionID string, clientPriv, clientPub, hostPriv, hostPub []byte) error {
+	dir, err := sessionDir(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return fmt.Errorf("chmod session dir: %w", err)
+	}
+	files := map[string]struct {
+		data []byte
+		perm os.FileMode
+	}{
+		"ssh-key":      {clientPriv, 0600},
+		"ssh-key.pub":  {clientPub, 0644},
+		"host-key":     {hostPriv, 0600},
+		"host-key.pub": {hostPub, 0644},
+	}
+	for name, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), f.data, f.perm); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // CleanupSessionCredentials removes the entire session directory and its

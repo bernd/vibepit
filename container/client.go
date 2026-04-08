@@ -42,6 +42,7 @@ const (
 	RoleSandbox = "sandbox"
 
 	ProxyBinaryPath    = "/vibepit"
+	SandboxBinaryPath  = "/vibed"
 	ProxyConfigPath    = "/config.json"
 	HomeMountPath      = "/home/code"
 	LinuxbrewMountPath = "/home/linuxbrew"
@@ -49,6 +50,12 @@ const (
 
 	ProxyImage       = "gcr.io/distroless/base-debian13:latest"
 	LabelControlPort = "vibepit.control-port"
+
+	SSHContainerPort = "2222/tcp"
+	SSHHostKeyPath   = "/etc/vibepit/sshd/host-key"
+	SSHHostPubPath   = "/etc/vibepit/sshd/host-key.pub"
+	SSHPubKeyEnv     = "VIBEPIT_SSH_PUBKEY"
+	SessionStatePath = "/tmp/vibed-sessions.json"
 )
 
 // Client wraps the Docker/Podman API, trying Docker first then falling back
@@ -196,9 +203,15 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	return nil
 }
 
-// FindRunningSession returns the ID of an already-running sandbox container for
-// the given project directory, or empty string if none is found.
-func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (string, error) {
+// RunningSession describes a running sandbox container found by FindRunningSession.
+type RunningSession struct {
+	ContainerID string
+	SessionID   string
+}
+
+// FindRunningSession returns a running sandbox container for the given project
+// directory, or nil if none is found.
+func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*RunningSession, error) {
 	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
 		Filters: filters.NewArgs(
 			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
@@ -206,12 +219,81 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (str
 		),
 	})
 	if err != nil {
+		return nil, err
+	}
+	if len(containers) > 0 {
+		return &RunningSession{
+			ContainerID: containers[0].ID,
+			SessionID:   containers[0].Labels[LabelSessionID],
+		}, nil
+	}
+	return nil, nil
+}
+
+// FindAnySessionContainer returns the session ID for any container (sandbox or
+// proxy) matching the given project directory. This is useful for cleanup when
+// the sandbox may have crashed but the proxy is still running.
+func (c *Client) FindAnySessionContainer(ctx context.Context, projectDir string) (string, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
+			filters.Arg("label", LabelSessionID),
+		),
+	})
+	if err != nil {
 		return "", err
 	}
 	if len(containers) > 0 {
-		return containers[0].ID, nil
+		return containers[0].Labels[LabelSessionID], nil
 	}
 	return "", nil
+}
+
+// SessionContainer describes a container belonging to a session.
+type SessionContainer struct {
+	ID   string
+	Name string
+	Role string // "proxy" or "sandbox"
+}
+
+// SessionContainers returns all containers for a session with their roles.
+func (c *Client) SessionContainers(ctx context.Context, sessionID string) ([]SessionContainer, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
+		),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result []SessionContainer
+	for _, ctr := range containers {
+		name := ""
+		if len(ctr.Names) > 0 {
+			name = strings.TrimPrefix(ctr.Names[0], "/")
+		}
+		result = append(result, SessionContainer{
+			ID:   ctr.ID,
+			Name: name,
+			Role: ctr.Labels[LabelRole],
+		})
+	}
+	return result, nil
+}
+
+// SessionIDFromContainer inspects a container and returns its session ID label.
+func (c *Client) SessionIDFromContainer(ctx context.Context, containerID string) (string, error) {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", err
+	}
+	sid, ok := info.Config.Labels[LabelSessionID]
+	if !ok {
+		return "", fmt.Errorf("container has no session ID label")
+	}
+	return sid, nil
 }
 
 // FindProxyIP returns the IP address of the running vibepit proxy container
@@ -343,8 +425,9 @@ func (c *Client) ExecSession(ctx context.Context, containerID string) error {
 
 // NetworkInfo is returned by CreateNetwork with the Docker-assigned addresses.
 type NetworkInfo struct {
-	ID      string
-	ProxyIP string
+	ID        string
+	ProxyIP   string
+	SandboxIP string
 }
 
 // CreateNetwork creates an internal Docker network with a random /24 subnet
@@ -373,9 +456,11 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 	}
 
 	proxyIP := nextIP(gateway)
+	sandboxIP := nextIP(proxyIP)
 	return NetworkInfo{
-		ID:      resp.ID,
-		ProxyIP: proxyIP.String(),
+		ID:        resp.ID,
+		ProxyIP:   proxyIP.String(),
+		SandboxIP: sandboxIP.String(),
 	}, nil
 }
 
@@ -423,6 +508,8 @@ type ProxyContainerConfig struct {
 	TLSCertPEM     string
 	CACertPEM      string
 	ProjectDir     string
+	NoRestart      bool // when true, omits the restart policy so the proxy stops with the session
+	SSHPort        int  // when > 0, publish this port for SSH forwarding to sandbox
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
@@ -454,33 +541,45 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 
 	containerPort, _ := nat.NewPort("tcp", portStr)
 
+	exposedPorts := nat.PortSet{
+		containerPort: struct{}{},
+	}
+	portBindings := nat.PortMap{
+		containerPort: []nat.PortBinding{
+			{HostIP: "127.0.0.1", HostPort: portStr},
+		},
+	}
+	if cfg.SSHPort > 0 {
+		sshPort := nat.Port(SSHContainerPort)
+		exposedPorts[sshPort] = struct{}{}
+		portBindings[sshPort] = []nat.PortBinding{{HostIP: "127.0.0.1"}}
+	}
+
+	hostConfig := &container.HostConfig{
+		// Use bridge as the primary network so HostIP/HostPort publishing is
+		// actually activated by the runtime.
+		NetworkMode: "bridge",
+		Binds: []string{
+			cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
+			cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
+		},
+		ExtraHosts:   []string{"host-gateway:host-gateway"},
+		PortBindings: portBindings,
+	}
+	if !cfg.NoRestart {
+		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
+	}
+
 	resp, err := c.docker.ContainerCreate(ctx,
 		&container.Config{
-			Image:      ProxyImage,
-			Cmd:        []string{ProxyBinaryPath, "proxy", "--config", ProxyConfigPath},
-			Labels:     labels,
-			Env:        env,
-			WorkingDir: "/",
-			ExposedPorts: nat.PortSet{
-				containerPort: struct{}{},
-			},
+			Image:        ProxyImage,
+			Cmd:          []string{ProxyBinaryPath, "proxy", "--config", ProxyConfigPath},
+			Labels:       labels,
+			Env:          env,
+			WorkingDir:   "/",
+			ExposedPorts: exposedPorts,
 		},
-		&container.HostConfig{
-			// Use bridge as the primary network so HostIP/HostPort publishing is
-			// actually activated by the runtime.
-			NetworkMode: "bridge",
-			Binds: []string{
-				cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
-				cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
-			},
-			ExtraHosts:    []string{"host-gateway:host-gateway"},
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
-			PortBindings: nat.PortMap{
-				containerPort: []nat.PortBinding{
-					{HostIP: "127.0.0.1", HostPort: portStr},
-				},
-			},
-		},
+		hostConfig,
 		nil,
 		nil,
 		cfg.Name,
@@ -605,12 +704,20 @@ type SandboxContainerConfig struct {
 	LinuxbrewVolumeName string
 	NetworkID           string
 	ProxyIP             string
+	SandboxIP           string // static IP on the session network (for SSH forwarding)
 	ProxyPort           int
 	Name                string
 	Term                string
 	ColorTerm           string
 	UID                 int
 	User                string
+	SessionID           string   // session identifier for labeling
+	Daemon              bool     // when true, creates daemon-mode container
+	DaemonBinaryPath    string   // host path to vibepit binary (bind-mounted at /vibepit)
+	DaemonHostKeyPath   string   // host path to SSH host key (bind-mounted at /etc/vibepit/sshd/host-key)
+	DaemonHostPubPath   string   // host path to SSH host pub key
+	DaemonAuthorizedKey string   // SSH public key for client auth (set as VIBEPIT_SSH_PUBKEY env)
+	DaemonEntrypoint    []string // entrypoint override for daemon mode
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -666,45 +773,99 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		binds = append(binds, "/etc/localtime:/etc/localtime:ro")
 	}
 
-	resp, err := c.docker.ContainerCreate(ctx,
-		&container.Config{
-			Image:    cfg.Image,
-			Env:      env,
-			Hostname: ContainerHostname,
-			Labels: map[string]string{
-				LabelVibepit:         "true",
-				LabelRole:            RoleSandbox,
-				LabelUID:             fmt.Sprintf("%d", cfg.UID),
-				LabelUser:            cfg.User,
-				LabelVolumeHome:      cfg.HomeVolumeName,
-				LabelVolumeLinuxbrew: cfg.LinuxbrewVolumeName,
-				LabelProjectDir:      cfg.ProjectDir,
-			},
-			Tty:        true,
-			OpenStdin:  true,
-			WorkingDir: cfg.WorkDir,
+	labels := map[string]string{
+		LabelVibepit:         "true",
+		LabelRole:            RoleSandbox,
+		LabelUID:             fmt.Sprintf("%d", cfg.UID),
+		LabelUser:            cfg.User,
+		LabelVolumeHome:      cfg.HomeVolumeName,
+		LabelVolumeLinuxbrew: cfg.LinuxbrewVolumeName,
+		LabelProjectDir:      cfg.ProjectDir,
+		LabelSessionID:       cfg.SessionID,
+	}
+
+	containerConfig := &container.Config{
+		Image:      cfg.Image,
+		Env:        env,
+		Hostname:   ContainerHostname,
+		Labels:     labels,
+		Tty:        true,
+		OpenStdin:  true,
+		WorkingDir: cfg.WorkDir,
+	}
+
+	hostConfig := &container.HostConfig{
+		Binds:          binds,
+		DNS:            []string{cfg.ProxyIP},
+		Init:           new(true),
+		ReadonlyRootfs: true,
+		CapDrop:        []string{"ALL"},
+		SecurityOpt:    []string{"no-new-privileges"},
+		Tmpfs:          map[string]string{"/tmp": "exec"},
+	}
+
+	var networkingConfig *network.NetworkingConfig
+
+	if cfg.Daemon {
+		containerConfig.Tty = false
+		containerConfig.OpenStdin = false
+		containerConfig.Entrypoint = cfg.DaemonEntrypoint
+		containerConfig.Cmd = nil
+		containerConfig.Env = append(containerConfig.Env,
+			fmt.Sprintf("%s=%s", SSHPubKeyEnv, cfg.DaemonAuthorizedKey),
+			"VIBEPIT_DEFAULT_COMMAND=vibed",
+		)
+		hostConfig.Binds = append(hostConfig.Binds,
+			cfg.DaemonBinaryPath+":"+SandboxBinaryPath+":ro",
+			cfg.DaemonHostKeyPath+":"+SSHHostKeyPath+":ro",
+			cfg.DaemonHostPubPath+":"+SSHHostPubPath+":ro",
+		)
+		// Daemon sandbox stays on the isolated network only — SSH access
+		// is forwarded through the proxy container to preserve isolation.
+	}
+
+	endpointSettings := &network.EndpointSettings{}
+	if cfg.SandboxIP != "" {
+		endpointSettings.IPAMConfig = &network.EndpointIPAMConfig{
+			IPv4Address: cfg.SandboxIP,
+		}
+	}
+	networkingConfig = &network.NetworkingConfig{
+		EndpointsConfig: map[string]*network.EndpointSettings{
+			cfg.NetworkID: endpointSettings,
 		},
-		&container.HostConfig{
-			Binds:          binds,
-			DNS:            []string{cfg.ProxyIP},
-			Init:           new(true),
-			ReadonlyRootfs: true,
-			CapDrop:        []string{"ALL"},
-			SecurityOpt:    []string{"no-new-privileges"},
-			Tmpfs:          map[string]string{"/tmp": "exec"},
-		},
-		&network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				cfg.NetworkID: {},
-			},
-		},
-		nil,
-		cfg.Name,
-	)
+	}
+
+	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, nil, cfg.Name)
 	if err != nil {
 		return "", fmt.Errorf("create sandbox container: %w", err)
 	}
+
 	return resp.ID, nil
+}
+
+// StartContainer starts a previously created container without attaching.
+func (c *Client) StartContainer(ctx context.Context, containerID string) error {
+	return c.docker.ContainerStart(ctx, containerID, container.StartOptions{})
+}
+
+// FindPublishedPort inspects a container and returns the host port bound to
+// the given container port (e.g. "2222/tcp"). Returns an error if the port
+// is not published.
+func (c *Client) FindPublishedPort(ctx context.Context, containerID string, containerPort string) (int, error) {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return 0, fmt.Errorf("inspect container: %w", err)
+	}
+	bindings, ok := info.NetworkSettings.Ports[nat.Port(containerPort)]
+	if !ok || len(bindings) == 0 {
+		return 0, fmt.Errorf("port %s not published", containerPort)
+	}
+	var port int
+	if _, err := fmt.Sscanf(bindings[0].HostPort, "%d", &port); err != nil {
+		return 0, fmt.Errorf("parse host port: %w", err)
+	}
+	return port, nil
 }
 
 // StopAndRemove stops a container (best-effort) then forcibly removes it.
@@ -747,6 +908,52 @@ func (c *Client) EnsureVolume(ctx context.Context, name string, uid int, user st
 
 func (c *Client) RemoveVolume(ctx context.Context, name string) error {
 	return c.docker.VolumeRemove(ctx, name, false)
+}
+
+// ContainerLogs returns the last n lines of a container's log output.
+func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int) (string, error) {
+	reader, err := c.docker.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       fmt.Sprintf("%d", tail),
+	})
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ContainerStartedAt returns the time a container was started, as reported by
+// the container runtime. Returns the zero time if the container cannot be
+// inspected or has not been started.
+func (c *Client) ContainerStartedAt(ctx context.Context, containerID string) time.Time {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil || info.State == nil {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// ContainerStatus returns a short status string for a container (e.g. "running", "exited (1)").
+func (c *Client) ContainerStatus(ctx context.Context, containerID string) string {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "unknown"
+	}
+	state := info.State
+	if state.ExitCode != 0 {
+		return fmt.Sprintf("%s (exit %d)", state.Status, state.ExitCode)
+	}
+	return state.Status
 }
 
 // StreamLogs follows the container log output and copies it to the given writer.

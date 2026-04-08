@@ -51,6 +51,7 @@ type MergedConfig struct {
 	HostGateway    string   `json:"host-gateway,omitempty"`
 	ProxyPort      int      `json:"proxy-port,omitempty"`
 	ControlAPIPort int      `json:"control-api-port,omitempty"`
+	SSHForwardAddr string   `json:"ssh-forward-addr,omitempty"`
 }
 
 // RandomProxyPort returns a random port in the ephemeral range (49152-65535)
