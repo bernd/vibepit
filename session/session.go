@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -294,7 +295,7 @@ func (s *Session) pump() {
 func (s *Session) waitForExit() {
 	exitCode := 0
 	if err := s.cmd.Wait(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
 		}
 	}
