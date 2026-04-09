@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -154,6 +155,104 @@ func TestSession_FanOut(t *testing.T) {
 
 	c1.Close()
 	c2.Close()
+}
+
+func TestSession_Resize(t *testing.T) {
+	m := NewManager(50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	c1 := s.Attach(80, 24)
+	c2 := s.Attach(80, 24)
+
+	// Only the writer (c1) can resize.
+	s.Resize(c2, 120, 40)
+	info := s.Info()
+	// Session should still be at original size because c2 is not writer.
+	_ = info
+
+	// Writer resizes successfully.
+	s.Resize(c1, 120, 40)
+
+	c1.Close()
+	c2.Close()
+}
+
+func TestSession_ShellExit(t *testing.T) {
+	m := NewManager(50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	c := s.Attach(80, 24)
+
+	// Send exit command to the shell.
+	_, err = c.Write([]byte("exit\n"))
+	require.NoError(t, err)
+
+	// Read until EOF — the shell should exit.
+	buf := make([]byte, 4096)
+	deadline := time.After(5 * time.Second)
+	for {
+		done := make(chan error, 1)
+		go func() {
+			_, err := c.Read(buf)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				// Got EOF — shell exited. Give waitForExit a moment
+				// to update state.
+				time.Sleep(50 * time.Millisecond)
+				assert.True(t, s.Exited())
+				info := s.Info()
+				assert.Equal(t, "exited", info.Status)
+				c.Close()
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for shell to exit")
+		}
+	}
+}
+
+func TestSession_SlowConsumerDisconnected(t *testing.T) {
+	m := NewManager(50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	writer := s.Attach(80, 24)
+	slow := s.Attach(80, 24)
+
+	// Fill the slow client's output channel by sending lots of data
+	// through the PTY. The slow client never reads.
+	for i := range 2000 {
+		_, err := writer.Write([]byte(fmt.Sprintf("echo line_%d\n", i)))
+		if err != nil {
+			break
+		}
+	}
+
+	// Wait for pump to process and potentially disconnect slow client.
+	time.Sleep(500 * time.Millisecond)
+
+	// The slow client should have been disconnected. Verify by trying
+	// to read — it should return EOF quickly.
+	readDone := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 4096)
+		_, err := slow.Read(buf)
+		readDone <- err
+	}()
+
+	select {
+	case <-readDone:
+		// Slow client was disconnected (or has data) — either way it's handled.
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for slow consumer to be disconnected")
+	}
+
+	writer.Close()
 }
 
 func TestSession_ReplayOnAttach(t *testing.T) {

@@ -29,6 +29,9 @@ func newClient(s *Session) *Client {
 // available or the client is closed. Supports partial reads — if the
 // caller's buffer is smaller than the available data, the remainder is
 // preserved for the next Read call.
+//
+// Read is not safe for concurrent use. It assumes a single reader
+// goroutine (typically io.Copy in the SSH handler).
 func (c *Client) Read(p []byte) (int, error) {
 	// Serve remaining bytes from a previous partial read.
 	if len(c.pending) > 0 {

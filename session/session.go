@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -229,9 +230,15 @@ func (s *Session) WriteInput(c *Client, p []byte) (int, error) {
 
 // feedVTE runs in its own goroutine and feeds PTY output to the VTE emulator.
 // This is async because the VTE must not stall the pump or client delivery.
+// It also toggles scrollback pause based on alternate screen state.
 func (s *Session) feedVTE() {
 	for data := range s.vteInput {
+		wasAlt := s.vte.IsAltScreen()
 		s.vte.Write(data) //nolint:errcheck
+		isAlt := s.vte.IsAltScreen()
+		if wasAlt != isAlt {
+			s.scrollback.SetPaused(isAlt)
+		}
 	}
 }
 
@@ -270,6 +277,7 @@ func (s *Session) pump() {
 			select {
 			case s.vteInput <- data:
 			default:
+				slog.Warn("VTE input channel full, dropping data", "session", s.id, "bytes", len(data))
 			}
 
 			for _, c := range clients {
@@ -329,7 +337,8 @@ func (s *Session) waitForCleanup() {
 }
 
 // MergeEnv returns the container's environment with session-provided vars
-// overlaid. Filters out vibed-internal config variables.
+// overlaid. Filters out vibed-internal config variables
+// (VIBEPIT_SSH_PUBKEY, VIBEPIT_DEFAULT_COMMAND).
 func MergeEnv(sessionEnv []string) []string {
 	env := make(map[string]string)
 	for _, e := range os.Environ() {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/session"
@@ -153,6 +154,31 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		}
 	}()
 
+	// SSH keepalive: periodically send channel requests to detect dead
+	// clients. If the client doesn't respond, the context is canceled.
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		missed := 0
+		for {
+			select {
+			case <-ticker.C:
+				_, err := sess.SendRequest("keepalive@vibepit", true, nil)
+				if err != nil {
+					missed++
+					if missed >= 2 {
+						client.Close() //nolint:errcheck
+						return
+					}
+				} else {
+					missed = 0
+				}
+			case <-sess.Context().Done():
+				return
+			}
+		}
+	}()
+
 	// Copy SSH stdin to session.
 	go func() {
 		io.Copy(client, sess) //nolint:errcheck
@@ -177,7 +203,7 @@ func handleExecSession(sess charmssh.Session) {
 		return
 	}
 
-	cmd := exec.Command(args[0], args[1:]...)
+	cmd := exec.CommandContext(sess.Context(), args[0], args[1:]...)
 	cmd.Env = session.MergeEnv(sess.Environ())
 	cmd.Stdout = sess
 	cmd.Stderr = sess.Stderr()
