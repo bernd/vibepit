@@ -163,7 +163,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		for {
 			select {
 			case <-ticker.C:
-				_, err := sess.SendRequest("keepalive@vibepit", true, nil)
+				_, err := sess.SendRequest("keepalive@openssh.com", true, nil)
 				if err != nil {
 					missed++
 					if missed >= 2 {
