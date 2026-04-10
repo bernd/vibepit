@@ -39,6 +39,13 @@ func SSHCommand() *cli.Command {
 	}
 }
 
+func shouldAttachExecStdin(stdin *os.File) bool {
+	if stdin == nil {
+		return false
+	}
+	return !term.IsTerminal(int(stdin.Fd()))
+}
+
 func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	client, err := ctr.NewClient(ctr.WithDebug(cmd.Root().Bool(debugFlag)))
 	if err != nil {
@@ -118,7 +125,12 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	if len(cmdArgs) > 0 {
 		session.Stdout = os.Stdout
 		session.Stderr = os.Stderr
-		session.Stdin = os.Stdin
+		// Avoid wiring an interactive terminal into one-shot exec mode.
+		// The SSH client waits for the stdin copy loop to finish, which can
+		// otherwise block until the user presses a key after the command exits.
+		if shouldAttachExecStdin(os.Stdin) {
+			session.Stdin = os.Stdin
+		}
 		quoted := make([]string, len(cmdArgs))
 		for i, arg := range cmdArgs {
 			quoted[i] = sshd.ShellEscape(arg)
