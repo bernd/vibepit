@@ -52,7 +52,7 @@ func StatusAction(ctx context.Context, cmd *cli.Command) error {
 		startedAt := client.ContainerStartedAt(ctx, c.ID)
 		if !startedAt.IsZero() {
 			uptime := time.Since(startedAt).Truncate(time.Second)
-			status = fmt.Sprintf("%s (up %s)", status, uptime)
+			status = fmt.Sprintf("%s: %s (up %s)", status, c.Name, uptime)
 		}
 		label := "Sandbox"
 		if c.Role == ctr.RoleProxy {
