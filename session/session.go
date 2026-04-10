@@ -122,6 +122,7 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 	altScreen := s.vte.IsAltScreen()
 	vteScreen := s.vte.Render()
 	cursorPos := s.vte.CursorPosition()
+	scrollbackData := s.scrollback.Snapshot()
 
 	c := newClient(s)
 	s.clients = append(s.clients, c)
@@ -147,10 +148,14 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 		s.ptmx.Write([]byte{0x0c}) //nolint:errcheck // Ctrl-L to PTY
 	} else {
 		// Normal mode or non-alt-screen TUI (Claude Code, Codex, shell):
-		// replay VTE screen state + cursor position. The async VTE may be
-		// slightly stale but provides an immediate visual.
+		// replay scrollback history + VTE screen state + cursor position.
+		// Scrollback lines scroll off naturally as the VTE screen fills
+		// the visible area, populating the client's scroll buffer.
 		var replay []byte
 		replay = append(replay, "\033c"...) // terminal reset
+		if len(scrollbackData) > 0 {
+			replay = append(replay, scrollbackData...)
+		}
 		replay = append(replay, vteScreen...)
 		if len(vteScreen) > 0 {
 			replay = append(replay, fmt.Sprintf("\033[%d;%dH", cursorPos.Y+1, cursorPos.X+1)...)
@@ -168,10 +173,18 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 }
 
 // TakeOver promotes the given client to writer, replacing the current writer.
-func (s *Session) TakeOver(c *Client) {
+// If cols/rows are non-zero, the PTY and VTE are resized to match the new
+// writer's terminal dimensions.
+func (s *Session) TakeOver(c *Client, cols, rows uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.writer = c
+	if cols > 0 && rows > 0 && (cols != s.cols || rows != s.rows) {
+		pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}) //nolint:errcheck
+		s.vte.Resize(int(cols), int(rows))
+		s.cols = cols
+		s.rows = rows
+	}
 }
 
 // Detach removes a client from the session. If the detached client was the
@@ -310,6 +323,7 @@ func (s *Session) waitForExit() {
 	s.ptmx.Close() //nolint:errcheck
 	<-s.pumpDone   // wait for pump to stop reading before closing vteInput
 	close(s.vteInput)
+	s.vte.Close() // unblock drainVTE goroutine //nolint:errcheck
 
 	s.mu.Lock()
 	s.exited = true

@@ -65,6 +65,7 @@ func (m *Manager) Create(cols, rows uint16, env []string) (*Session, error) {
 		s.waitForCleanup()
 		m.mu.Lock()
 		delete(m.sessions, id)
+		m.writeStateFile()
 		m.mu.Unlock()
 	}()
 

@@ -97,7 +97,7 @@ func TestSession_TakeOver(t *testing.T) {
 	assert.Error(t, err)
 
 	// TakeOver promotes c2
-	s.TakeOver(c2)
+	s.TakeOver(c2, 80, 24)
 
 	_, err = c2.Write([]byte("echo takeover\n"))
 	assert.NoError(t, err)

@@ -144,7 +144,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	defer client.Close() //nolint:errcheck
 
 	if takeOver {
-		target.TakeOver(client)
+		target.TakeOver(client, cols, rows)
 	}
 
 	// Forward window resize (writer only).

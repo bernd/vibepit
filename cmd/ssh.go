@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bernd/vibepit/sshd"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/sshd"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -37,13 +38,6 @@ func SSHCommand() *cli.Command {
 		Usage:  "Connect to running sandbox via SSH",
 		Action: SSHAction,
 	}
-}
-
-func shouldAttachExecStdin(stdin *os.File) bool {
-	if stdin == nil {
-		return false
-	}
-	return !term.IsTerminal(int(stdin.Fd()))
 }
 
 func SSHAction(ctx context.Context, cmd *cli.Command) error {
@@ -125,12 +119,20 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	if len(cmdArgs) > 0 {
 		session.Stdout = os.Stdout
 		session.Stderr = os.Stderr
-		// Avoid wiring an interactive terminal into one-shot exec mode.
-		// The SSH client waits for the stdin copy loop to finish, which can
-		// otherwise block until the user presses a key after the command exits.
-		if shouldAttachExecStdin(os.Stdin) {
-			session.Stdin = os.Stdin
+
+		// Use StdinPipe so the remote command can read from our stdin
+		// (piped or terminal) without blocking session.Wait() after the
+		// command exits. Wait() only waits for stdout/stderr completion;
+		// the stdin copy goroutine is interrupted when the session closes.
+		stdinPipe, err := session.StdinPipe()
+		if err != nil {
+			return fmt.Errorf("stdin pipe: %w", err)
 		}
+		go func() {
+			io.Copy(stdinPipe, os.Stdin) //nolint:errcheck
+			stdinPipe.Close()            //nolint:errcheck
+		}()
+
 		quoted := make([]string, len(cmdArgs))
 		for i, arg := range cmdArgs {
 			quoted[i] = sshd.ShellEscape(arg)

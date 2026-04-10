@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -326,6 +327,25 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		logContainerDiag(ctx, client, "proxy", proxyContainerID)
 		logContainerDiag(ctx, client, "sandbox", sandboxContainerID)
 		return fmt.Errorf("find SSH port: %w", err)
+	}
+
+	// Wait for the SSH daemon to actually accept connections. The sandbox
+	// runs init scripts (migrate_linuxbrew_volume, init_home) before
+	// binding port 2222, so the published port may exist before the
+	// daemon is ready.
+	tui.Status("Waiting", "for SSH daemon")
+	sshAddr := fmt.Sprintf("127.0.0.1:%d", sshPort)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if conn, err := net.DialTimeout("tcp", sshAddr, time.Second); err == nil {
+			conn.Close() //nolint:errcheck
+			break
+		}
+		if status := client.ContainerStatus(ctx, sandboxContainerID); status != "running" {
+			logContainerDiag(ctx, client, "sandbox", sandboxContainerID)
+			return fmt.Errorf("sandbox container exited during startup (%s)", status)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	succeeded = true
