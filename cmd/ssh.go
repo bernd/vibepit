@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/bernd/vibepit/sshd"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,25 +17,6 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
-
-// shellescape quotes a string for safe transmission over SSH wire protocol.
-func shellescape(s string) string {
-	if s == "" {
-		return "''"
-	}
-	safe := true
-	for _, c := range s {
-		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') &&
-			c != '-' && c != '_' && c != '.' && c != '/' && c != ':' && c != ',' && c != '+' && c != '=' {
-			safe = false
-			break
-		}
-	}
-	if safe {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
 
 func findProxyForSession(ctx context.Context, client *ctr.Client, sessionID string) (string, error) {
 	containers, err := client.SessionContainers(ctx, sessionID)
@@ -139,7 +121,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		session.Stdin = os.Stdin
 		quoted := make([]string, len(cmdArgs))
 		for i, arg := range cmdArgs {
-			quoted[i] = shellescape(arg)
+			quoted[i] = sshd.ShellEscape(arg)
 		}
 		if err := session.Run(strings.Join(quoted, " ")); err != nil {
 			if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
