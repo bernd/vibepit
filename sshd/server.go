@@ -87,12 +87,20 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	sshEnv := sess.Environ()
 	sshEnv = append(sshEnv, fmt.Sprintf("TERM=%s", ptyReq.Term))
 
-	sessions := mgr.List()
+	allSessions := mgr.List()
+
+	// Only detached sessions are relevant for the selector.
+	var detached []session.SessionInfo
+	for _, info := range allSessions {
+		if info.Status == "detached" {
+			detached = append(detached, info)
+		}
+	}
 
 	var target *session.Session
 
-	if len(sessions) == 0 {
-		// No sessions — create one directly.
+	if len(detached) == 0 {
+		// No detached sessions — create one directly.
 		var err error
 		target, err = mgr.Create(cols, rows, sshEnv)
 		if err != nil {
@@ -101,8 +109,8 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 			return
 		}
 	} else {
-		// Show selector.
-		model := newSelectorModel(sessions)
+		// Show selector with detached sessions only.
+		model := newSelectorModel(detached)
 		p := tea.NewProgram(model,
 			tea.WithInput(sess),
 			tea.WithOutput(sess),
@@ -123,6 +131,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		}
 		if result.sessionID == "" {
 			// New session.
+			var err error
 			target, err = mgr.Create(cols, rows, sshEnv)
 			if err != nil {
 				fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
