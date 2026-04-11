@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,8 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testManager returns a Manager that uses /bin/sh instead of /bin/bash --login
+// to avoid slow profile loading in test environments.
+func testManager(limit int) *Manager {
+	m := NewManager(limit)
+	m.Command = []string{"/bin/sh"}
+	return m
+}
+
 func TestManager_CreateAndList(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 	require.NotNil(t, s)
@@ -18,12 +27,12 @@ func TestManager_CreateAndList(t *testing.T) {
 	sessions := m.List()
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "session-1", sessions[0].ID)
-	assert.Equal(t, "/bin/bash", sessions[0].Command)
+	assert.Equal(t, "/bin/sh", sessions[0].Command)
 	assert.Equal(t, 0, sessions[0].ClientCount)
 }
 
 func TestManager_Limit(t *testing.T) {
-	m := NewManager(1)
+	m := testManager(1)
 	_, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 	_, err = m.Create(80, 24, nil)
@@ -31,7 +40,7 @@ func TestManager_Limit(t *testing.T) {
 }
 
 func TestManager_Get(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, _ := m.Create(80, 24, nil)
 	got := m.Get(s.ID())
 	assert.Equal(t, s, got)
@@ -39,7 +48,7 @@ func TestManager_Get(t *testing.T) {
 }
 
 func TestSession_AttachDetach(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -58,7 +67,7 @@ func TestSession_AttachDetach(t *testing.T) {
 }
 
 func TestSession_WriterPromotion(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -85,7 +94,7 @@ func TestSession_WriterPromotion(t *testing.T) {
 }
 
 func TestSession_TakeOver(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -110,7 +119,7 @@ func TestSession_TakeOver(t *testing.T) {
 }
 
 func TestSession_FanOut(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -158,7 +167,7 @@ func TestSession_FanOut(t *testing.T) {
 }
 
 func TestSession_Resize(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -179,7 +188,7 @@ func TestSession_Resize(t *testing.T) {
 }
 
 func TestSession_ShellExit(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -217,7 +226,7 @@ func TestSession_ShellExit(t *testing.T) {
 }
 
 func TestSession_SlowConsumerDisconnected(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -232,9 +241,6 @@ func TestSession_SlowConsumerDisconnected(t *testing.T) {
 			break
 		}
 	}
-
-	// Wait for pump to process and potentially disconnect slow client.
-	time.Sleep(500 * time.Millisecond)
 
 	// The slow client should have been disconnected. Verify by trying
 	// to read — it should return EOF quickly.
@@ -256,7 +262,7 @@ func TestSession_SlowConsumerDisconnected(t *testing.T) {
 }
 
 func TestSession_ReplayOnAttach(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -265,15 +271,33 @@ func TestSession_ReplayOnAttach(t *testing.T) {
 	_, err = c1.Write([]byte("echo hello\n"))
 	require.NoError(t, err)
 
-	// Wait for output to flow through PTY.
-	time.Sleep(300 * time.Millisecond)
+	// Read output until "hello" appears (confirms PTY processed the command).
+	buf := make([]byte, 8192)
+	deadline := time.After(3 * time.Second)
+	var collected string
+	for {
+		readDone := make(chan int, 1)
+		go func() {
+			n, _ := c1.Read(buf)
+			readDone <- n
+		}()
+		select {
+		case n := <-readDone:
+			collected += string(buf[:n])
+			if strings.Contains(collected, "hello") {
+				goto ready
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for echo output")
+		}
+	}
+ready:
 
 	// Detach first client (simulates disconnect).
 	c1.Close()
 
 	// Attach second client — should receive replay.
 	c2 := s.Attach(80, 24)
-	buf := make([]byte, 8192)
 	n, err := c2.Read(buf)
 	require.NoError(t, err)
 	assert.Greater(t, n, 0, "should receive replay output")

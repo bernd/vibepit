@@ -13,7 +13,7 @@ import (
 func TestStateFile_WrittenOnCreate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
-	m := NewManager(50)
+	m := testManager(50)
 	m.SetStateFilePath(path)
 
 	_, err := m.Create(80, 24, nil)

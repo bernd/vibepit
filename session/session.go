@@ -45,7 +45,11 @@ type Session struct {
 }
 
 func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Session, error) {
-	cmd := exec.Command("/bin/bash", "--login")
+	shellCmd := []string{"/bin/bash", "--login"}
+	if mgr != nil && len(mgr.Command) > 0 {
+		shellCmd = mgr.Command
+	}
+	cmd := exec.Command(shellCmd[0], shellCmd[1:]...)
 	cmd.Env = MergeEnv(env)
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
