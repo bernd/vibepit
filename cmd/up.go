@@ -152,8 +152,11 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("proxy image: %w", err)
 	}
 
+	tui.Status("Using", "project directory %s", projectRoot)
+
 	// Generate a unique session ID.
 	sessionID := xid.New().String()
+	tui.Status("Creating", "session ID %s", sessionID)
 
 	networkName := networkNamePrefix + sessionID
 
@@ -226,7 +229,6 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	cleanups = append(cleanups, func() {
 		CleanupSessionCredentials(sessionID) //nolint:errcheck
 	})
-	tui.Status("Session", "%s (credentials in %s)", sessionID, sessDir)
 
 	// Generate SSH keypairs for daemon mode.
 	tui.Status("Generating", "SSH keypairs")
@@ -241,6 +243,8 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	if err := WriteSSHCredentials(sessionID, clientPriv, clientPub, hostPriv, hostPub); err != nil {
 		return fmt.Errorf("write SSH credentials: %w", err)
 	}
+
+	tui.Status("Storing", "credentials in %s", sessDir)
 
 	hostKeyPath := filepath.Join(sessDir, "host-key")
 	hostPubPath := filepath.Join(sessDir, "host-key.pub")
@@ -363,10 +367,8 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 
 	succeeded = true
 
-	fmt.Println()
+	tui.Status("Listening", "SSH on 127.0.0.1:%d", sshPort)
 	tui.Status("Ready", "session %s", sessionID)
-	tui.Status("SSH", "ssh -p %d -i %s code@127.0.0.1", sshPort, filepath.Join(sessDir, "ssh-key"))
-	tui.Status("Stop", "vibepit down")
 	fmt.Println()
 
 	return nil
