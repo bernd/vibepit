@@ -159,25 +159,37 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	}()
 
 	// SSH keepalive: periodically send channel requests to detect dead
-	// clients. If the client doesn't respond, the context is canceled.
+	// clients. SendRequest blocks until the peer replies, so we run it
+	// in a goroutine with a timeout — a dead TCP connection can stall
+	// the call indefinitely. When the timeout fires we close the
+	// session client, which cascades through the handler and eventually
+	// unblocks the stuck SendRequest.
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		missed := 0
 		for {
 			select {
 			case <-ticker.C:
-				_, err := sess.SendRequest("keepalive@openssh.com", true, nil)
-				if err != nil {
-					missed++
-					if missed >= 2 {
+				reply := make(chan error, 1)
+				go func() {
+					_, err := sess.SendRequest("keepalive@openssh.com", true, nil)
+					reply <- err
+				}()
+				select {
+				case err := <-reply:
+					if err != nil {
 						client.Close() //nolint:errcheck
 						return
 					}
-				} else {
-					missed = 0
+				case <-time.After(3 * time.Second):
+					client.Close() //nolint:errcheck
+					return
+				case <-sess.Context().Done():
+					client.Close() //nolint:errcheck
+					return
 				}
 			case <-sess.Context().Done():
+				client.Close() //nolint:errcheck
 				return
 			}
 		}
