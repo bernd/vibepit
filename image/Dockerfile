@@ -95,6 +95,7 @@ RUN mv /home/$CODE_USER /opt/vibepit/home-template \
   && install -d 0750 -o $CODE_USER -g $CODE_GROUP /home/$CODE_USER
 
 COPY entrypoint-lib.sh /etc/vibepit/entrypoint-lib.sh
+COPY vibed-init.sh /etc/vibepit/vibed-init.sh
 COPY entrypoint.sh /entrypoint.sh
 
 USER $CODE_UID
