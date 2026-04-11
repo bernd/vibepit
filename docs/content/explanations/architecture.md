@@ -42,9 +42,14 @@ The `vibepit` binary runs on your host machine and orchestrates everything:
 2. **Starts the proxy container** on that network with a static IP.
 3. **Starts the sandbox container** configured to route all traffic through the proxy.
 4. **Generates ephemeral mTLS credentials** so that only the CLI can talk to the proxy's control API.
-5. **Attaches your terminal** to the sandbox container's shell.
+5. **Attaches your terminal** to the sandbox container's shell (in `run` mode) or **waits for the SSH daemon** to accept connections (in `up` mode).
 
-After setup, the CLI also provides runtime commands — `allow-http`, `allow-dns`, and `monitor` — that communicate with the proxy's control API to modify the allowlist or observe traffic. See the [CLI Reference](../reference/cli.md) for command details.
+The CLI supports two operating modes:
+
+- **`run` mode** (default): attaches your terminal directly to the sandbox container. The session lifecycle is tied to the first `vibepit` process — when you exit, the containers are cleaned up.
+- **Daemon mode** (`up`/`ssh`/`down`): starts the containers in the background with an SSH server. You connect with `vibepit ssh`, and sessions inside the sandbox persist across SSH disconnects. The containers run until you explicitly stop them with `vibepit down`.
+
+After setup, the CLI also provides runtime commands — `allow-http`, `allow-dns`, `monitor`, and `status` — that communicate with the proxy's control API to modify the allowlist, observe traffic, or inspect session state. See the [CLI Reference](../reference/cli.md) for command details.
 
 ## Isolated Network
 
@@ -100,31 +105,83 @@ The CIDR blocklist is applied to resolved IP addresses and blocks all private ra
 
 **Host access via `host.vibepit`:** The one exception to CIDR blocking is the synthetic hostname `host.vibepit`. The proxy's DNS server resolves it to the host machine's gateway IP, and the HTTP proxy forwards requests to it — but only on ports explicitly listed in `allow-host-ports` in the project config. This lets the sandbox reach local development services (databases, API servers) without opening up all private IP ranges. See [Configure Network Presets](../how-to/configure-presets.md#allow-host-ports) for configuration details.
 
+## SSH Server
+
+In daemon mode (`vibepit up`), the sandbox container runs an SSH server instead of directly attaching a terminal. The server listens on port 2222 inside the sandbox container.
+
+### Authentication
+
+Each Vibepit session generates two ephemeral Ed25519 keypairs:
+
+- A **client keypair** — the private key stays on the host, the public key is passed to the sandbox container as the authorized key.
+- A **host keypair** — the private key is bind-mounted into the sandbox container, the public key stays on the host for host key verification.
+
+Both keypairs are stored in the session credentials directory (`$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`). When `vibepit ssh` connects, it uses the client private key for authentication and verifies the server's host key against the stored public key.
+
+### Port forwarding
+
+The SSH port is not published directly from the sandbox container. Instead, the proxy container forwards TCP traffic from a random host port to the sandbox's port 2222. This preserves network isolation — the sandbox container remains on the internal network with no direct host connectivity.
+
+### Session management
+
+The SSH server manages persistent shell sessions inside the sandbox. Each shell session is a PTY-backed process that survives SSH client disconnects:
+
+- When you connect with `vibepit ssh` and detached sessions exist, the server presents a selector screen where you can reattach to an existing session or start a new one.
+- Sessions persist until the shell process exits or the sandbox container stops.
+- The server enforces a limit of 50 concurrent sessions.
+
+### Command execution
+
+`vibepit ssh` also supports non-interactive command execution. When arguments are passed (e.g., `vibepit ssh ls -la`), the server runs the command via the user's shell and returns its exit code without creating a persistent session.
+
 ## Session Lifecycle
 
-A session progresses through these stages:
+There are two session lifecycles, one for each operating mode.
 
-### Startup
+### Run mode (default)
+
+#### Startup
 
 1. The CLI generates a session ID and creates an internal Docker network with a random `10.x.x.0/24` subnet.
 2. Ephemeral mTLS credentials (Ed25519 CA, server cert, client cert) are generated. The CA private key is used to sign both certificates and then discarded — it never touches disk.
 3. The proxy container is created on both the session network and the bridge network, with the server certificate and CA cert passed via environment variables.
 4. The sandbox container is created on the session network only, with proxy environment variables pointing to the proxy's static IP.
-5. Client credentials (CA cert, client cert, client key) are written to `$XDG_RUNTIME_DIR/vibepit/<sessionID>/` so that `allow-http`, `allow-dns`, and `monitor` can authenticate to the control API from separate processes.
+5. Client credentials (CA cert, client cert, client key) are written to `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/` so that `allow-http`, `allow-dns`, and `monitor` can authenticate to the control API from separate processes.
 6. The CLI attaches your terminal to the sandbox container and starts it.
 
-### Reattach
+#### Reattach
 
 If you run `vibepit` again in the same project directory while a session is still running, the CLI detects the existing sandbox container and opens a new shell (`exec`) inside it rather than creating a new session. This means multiple terminal windows can share one session.
 
-### Cleanup
+#### Cleanup
 
 When you exit the shell, the sandbox container's entrypoint exits and the container stops. The CLI then:
 
 1. Removes the sandbox container.
 2. Removes the proxy container.
 3. Removes the session network.
-4. Deletes the credential files from `$XDG_RUNTIME_DIR/vibepit/<sessionID>/`.
+4. Deletes the credential files from the session directory.
+
+### Daemon mode (`up`/`ssh`/`down`)
+
+#### Startup
+
+1. Steps 1–5 are the same as run mode.
+2. Ephemeral Ed25519 SSH keypairs are generated and written to the session credentials directory. See [SSH Server > Authentication](#authentication) for details.
+3. The sandbox container runs the `vibed` entrypoint instead of a shell. This initializes the sandbox environment and starts the SSH server.
+4. The CLI waits for the SSH daemon to accept connections, then prints the SSH address and exits.
+
+#### Connect
+
+You connect to the running session with `vibepit ssh`. See [SSH Server](#ssh-server) for authentication, session management, and command execution details.
+
+#### Cleanup
+
+Containers run until you explicitly stop them with `vibepit down`, which:
+
+1. Stops and removes all session containers (sandbox and proxy).
+2. Removes the session network.
+3. Deletes all credential files (mTLS and SSH keys) from the session directory.
 
 ## Control API
 

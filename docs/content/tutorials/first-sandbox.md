@@ -161,3 +161,55 @@ creating a new one.
     even if other shells are still open. Additional shells opened with
     `vibepit` are exec sessions inside the existing container and do not keep
     the session alive on their own.
+
+## Alternative: daemon mode
+
+Instead of attaching your terminal directly, you can run the sandbox in the
+background with an SSH server. This is useful when you want sessions that
+persist across disconnects or when running AI agents that connect via SSH.
+
+### Start the session
+
+```bash
+vibepit up
+```
+
+This starts the sandbox and proxy containers in the background and prints the
+SSH address when ready.
+
+### Connect via SSH
+
+```bash
+vibepit ssh
+```
+
+Each connection opens a shell session inside the sandbox. If you disconnect
+(close the terminal, network drop), the shell session continues running. When
+you reconnect, the SSH server presents a selector where you can reattach to the
+previous session or start a new one.
+
+You can also run a single command without an interactive shell:
+
+```bash
+vibepit ssh ls -la
+```
+
+### Check status
+
+```bash
+vibepit status
+```
+
+Shows container status, uptime, and published ports (control API and SSH).
+
+### Stop the session
+
+```bash
+vibepit down
+```
+
+This stops and removes all containers and cleans up credentials. Unlike `run`
+mode, the session keeps running until you explicitly stop it.
+
+For full details on all commands and flags, see the
+[CLI Reference](../reference/cli.md).
