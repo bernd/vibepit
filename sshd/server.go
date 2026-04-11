@@ -11,6 +11,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/session"
+	"github.com/bernd/vibepit/tui"
+	"github.com/charmbracelet/colorprofile"
 
 	charmssh "github.com/charmbracelet/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -110,20 +112,23 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		}
 	} else {
 		// Show selector with detached sessions only.
-		model := newSelectorModel(detached)
-		p := tea.NewProgram(model,
+		screen := newSelectorScreen(detached)
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
+		w := tui.NewWindow(header, screen)
+		p := tea.NewProgram(w,
 			tea.WithInput(sess),
 			tea.WithOutput(sess),
+			tea.WithEnvironment(sshEnv),
+			tea.WithColorProfile(colorprofile.Env(sshEnv)),
 			tea.WithWindowSize(int(cols), int(rows)),
 			tea.WithoutSignalHandler(),
 		)
-		finalModel, err := p.Run()
-		if err != nil {
+		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(sess.Stderr(), "selector: %s\n", err) //nolint:errcheck
 			sess.Exit(1)                                      //nolint:errcheck
 			return
 		}
-		result := finalModel.(selectorModel).result
+		result := screen.result
 		if result == nil {
 			// User quit without selecting.
 			sess.Exit(0) //nolint:errcheck

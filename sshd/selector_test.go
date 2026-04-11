@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/session"
+	"github.com/bernd/vibepit/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,6 +19,10 @@ func testSessions() []session.SessionInfo {
 	}
 }
 
+func testWindow(s *selectorScreen) *tui.Window {
+	return tui.NewWindow(&tui.HeaderInfo{}, s)
+}
+
 func keyPress(s string) tea.Msg {
 	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
 }
@@ -27,85 +32,98 @@ func specialKeyPress(code rune) tea.Msg {
 }
 
 func TestSelectorNewSessionShortcut(t *testing.T) {
-	m := newSelectorModel(testSessions())
-	updated, cmd := m.Update(keyPress("n"))
-	result := updated.(selectorModel).result
-	require.NotNil(t, result)
-	assert.Empty(t, result.sessionID)
+	s := newSelectorScreen(testSessions())
+	s.VpHeight = 20
+	w := testWindow(s)
+	_, cmd := s.Update(keyPress("n"), w)
+	require.NotNil(t, s.result)
+	assert.Empty(t, s.result.sessionID)
 	assert.NotNil(t, cmd) // tea.Quit
 }
 
 func TestSelectorQuit(t *testing.T) {
-	m := newSelectorModel(testSessions())
-	updated, cmd := m.Update(keyPress("q"))
-	result := updated.(selectorModel).result
-	assert.Nil(t, result)
+	s := newSelectorScreen(testSessions())
+	s.VpHeight = 20
+	w := testWindow(s)
+	_, cmd := s.Update(keyPress("q"), w)
+	assert.Nil(t, s.result)
 	assert.NotNil(t, cmd) // tea.Quit
 }
 
 func TestSelectorNavigateAndSelect(t *testing.T) {
-	m := newSelectorModel(testSessions())
+	s := newSelectorScreen(testSessions())
+	s.VpHeight = 20
+	w := testWindow(s)
+
 	// Move down to session-2.
-	updated, _ := m.Update(specialKeyPress(tea.KeyDown))
-	m = updated.(selectorModel)
-	assert.Equal(t, 1, m.cursor)
+	s.Update(specialKeyPress(tea.KeyDown), w)
+	assert.Equal(t, 1, s.Pos)
 
 	// Select it.
-	updated, cmd := m.Update(specialKeyPress(tea.KeyEnter))
-	result := updated.(selectorModel).result
-	require.NotNil(t, result)
-	assert.Equal(t, "session-2", result.sessionID)
+	_, cmd := s.Update(specialKeyPress(tea.KeyEnter), w)
+	require.NotNil(t, s.result)
+	assert.Equal(t, "session-2", s.result.sessionID)
 	assert.NotNil(t, cmd)
 }
 
 func TestSelectorNewSessionOption(t *testing.T) {
-	m := newSelectorModel(testSessions())
+	s := newSelectorScreen(testSessions())
+	s.VpHeight = 20
+	w := testWindow(s)
+
 	// Move cursor to the "new session" option (index 2).
 	for range 2 {
-		updated, _ := m.Update(specialKeyPress(tea.KeyDown))
-		m = updated.(selectorModel)
+		s.Update(specialKeyPress(tea.KeyDown), w)
 	}
-	assert.Equal(t, 2, m.cursor)
+	assert.Equal(t, 2, s.Pos)
 
-	updated, cmd := m.Update(specialKeyPress(tea.KeyEnter))
-	result := updated.(selectorModel).result
-	require.NotNil(t, result)
-	assert.Empty(t, result.sessionID)
+	_, cmd := s.Update(specialKeyPress(tea.KeyEnter), w)
+	require.NotNil(t, s.result)
+	assert.Empty(t, s.result.sessionID)
 	assert.NotNil(t, cmd)
 }
 
 func TestSelectorCursorBounds(t *testing.T) {
-	m := newSelectorModel(testSessions())
+	s := newSelectorScreen(testSessions())
+	s.VpHeight = 20
+	w := testWindow(s)
+
 	// cursor starts at 0, pressing up should not go negative.
-	updated, _ := m.Update(specialKeyPress(tea.KeyUp))
-	m = updated.(selectorModel)
-	assert.Equal(t, 0, m.cursor)
+	s.Update(specialKeyPress(tea.KeyUp), w)
+	assert.Equal(t, 0, s.Pos)
 
 	// Move to the end.
 	for range 10 {
-		updated, _ = m.Update(specialKeyPress(tea.KeyDown))
-		m = updated.(selectorModel)
+		s.Update(specialKeyPress(tea.KeyDown), w)
 	}
 	// Should be clamped to itemCount-1 = 2.
-	assert.Equal(t, 2, m.cursor)
+	assert.Equal(t, 2, s.Pos)
 }
 
 func TestSelectorViewContainsSessionInfo(t *testing.T) {
-	m := newSelectorModel(testSessions())
-	view := m.View().Content
+	s := newSelectorScreen(testSessions())
+	s.VpHeight = 20
+	w := testWindow(s)
+	view := s.View(w)
 	assert.Contains(t, view, "session-1")
 	assert.Contains(t, view, "session-2")
 	assert.Contains(t, view, "[new session]")
 	assert.Contains(t, view, "detached")
 }
 
-func TestFormatStatus(t *testing.T) {
-	now := time.Now()
-	info := session.SessionInfo{
-		CreatedAt:  now.Add(-5 * time.Minute),
-		DetachedAt: now.Add(-30 * time.Second),
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{30 * time.Second, "30s"},
+		{5 * time.Minute, "5m"},
+		{2*time.Hour + 15*time.Minute, "2h 15m"},
+		{25*time.Hour + 30*time.Minute, "1d 1h"},
 	}
-	result := formatStatus(info)
-	assert.Contains(t, result, "created 5m0s ago")
-	assert.Contains(t, result, "detached 30s ago")
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			assert.Equal(t, tt.want, formatDuration(tt.d))
+		})
+	}
 }
