@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -122,7 +123,10 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 	altScreen := s.vte.IsAltScreen()
 	vteScreen := s.vte.Render()
 	cursorPos := s.vte.CursorPosition()
-	scrollbackData := s.scrollback.Snapshot()
+	// Render VTE scrollback (only truly off-screen lines) via the
+	// per-cell safe accessor. Our custom Scrollback records all output
+	// lines including on-screen ones, so using it would duplicate content.
+	scrollbackData := renderVTEScrollback(s.vte)
 
 	c := newClient(s)
 	s.clients = append(s.clients, c)
@@ -348,6 +352,36 @@ func (s *Session) expireTombstone() {
 
 func (s *Session) waitForCleanup() {
 	<-s.cleanup
+}
+
+// renderVTEScrollback renders the VTE emulator's scrollback buffer (lines
+// that have truly scrolled off the visible screen) to a byte slice. Each
+// line is plain text with a trailing newline. Uses the per-cell safe
+// accessor so it can be called while the VTE is concurrently written to.
+func renderVTEScrollback(vte *vt.SafeEmulator) []byte {
+	lines := vte.ScrollbackLen()
+	if lines == 0 {
+		return nil
+	}
+	width := vte.Width()
+	var buf bytes.Buffer
+	for y := range lines {
+		lineStart := buf.Len()
+		for x := range width {
+			cell := vte.ScrollbackCellAt(x, y)
+			if cell != nil && cell.Content != "" {
+				buf.WriteString(cell.Content)
+			} else {
+				buf.WriteByte(' ')
+			}
+		}
+		// Trim trailing spaces from each line.
+		line := buf.Bytes()[lineStart:]
+		trimmed := bytes.TrimRight(line, " ")
+		buf.Truncate(lineStart + len(trimmed))
+		buf.WriteByte('\n')
+	}
+	return buf.Bytes()
 }
 
 // MergeEnv returns the container's environment with session-provided vars

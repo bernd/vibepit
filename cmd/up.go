@@ -329,23 +329,36 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("find SSH port: %w", err)
 	}
 
-	// Wait for the SSH daemon to actually accept connections. The sandbox
-	// runs init scripts (migrate_linuxbrew_volume, init_home) before
-	// binding port 2222, so the published port may exist before the
-	// daemon is ready.
+	// Wait for the SSH daemon to actually accept connections. The proxy
+	// port is already listening (it forwards TCP to the sandbox), so a
+	// bare TCP dial succeeds even before the sandbox daemon is up. We
+	// verify readiness by reading the SSH version banner ("SSH-2.0-...")
+	// which is only sent after the sandbox daemon accepts.
 	tui.Status("Waiting", "for SSH daemon")
 	sshAddr := fmt.Sprintf("127.0.0.1:%d", sshPort)
+	sshReady := false
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if conn, err := net.DialTimeout("tcp", sshAddr, time.Second); err == nil {
+		conn, err := net.DialTimeout("tcp", sshAddr, time.Second)
+		if err == nil {
+			conn.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+			buf := make([]byte, 4)
+			n, _ := conn.Read(buf)
 			conn.Close() //nolint:errcheck
-			break
+			if n >= 4 && string(buf[:4]) == "SSH-" {
+				sshReady = true
+				break
+			}
 		}
 		if status := client.ContainerStatus(ctx, sandboxContainerID); status != "running" {
 			logContainerDiag(ctx, client, "sandbox", sandboxContainerID)
 			return fmt.Errorf("sandbox container exited during startup (%s)", status)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+	if !sshReady {
+		logContainerDiag(ctx, client, "sandbox", sandboxContainerID)
+		return fmt.Errorf("SSH daemon did not become ready within 30s")
 	}
 
 	succeeded = true
