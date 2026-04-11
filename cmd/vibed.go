@@ -58,6 +58,7 @@ func VibedAction(ctx context.Context, cmd *cli.Command) error {
 
 	listener, err := net.Listen("tcp", "0.0.0.0:2222")
 	if err != nil {
+		srv.Close() //nolint:errcheck
 		return fmt.Errorf("listen: %w", err)
 	}
 
