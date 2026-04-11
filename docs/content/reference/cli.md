@@ -220,7 +220,7 @@ vibepit ssh cat /etc/os-release
 
 ## `status`
 
-Show session status for the current project.
+Show session status.
 
 ```
 vibepit status [project-path]
@@ -234,8 +234,10 @@ vibepit status [project-path]
 
 ### Output
 
-Displays the session ID, project directory, per-container status with uptime,
-and published ports (control API and SSH).
+When run inside a project directory (or given a project path), displays the
+session status for that project. When no session is found for the current
+project, or when run outside a project directory, displays status for all
+running sessions on the machine.
 
 Example output:
 
@@ -248,7 +250,8 @@ Example output:
       SSH   127.0.0.1:52847
 ```
 
-If no session is running, prints `No running session for <path>`.
+If no sessions are running at all, prints `No running session for <path>` (when
+in a project) or `No active sessions.` (when outside a project).
 
 ---
 
