@@ -58,7 +58,7 @@ func DownAction(ctx context.Context, cmd *cli.Command) error {
 	for _, c := range containers {
 		role := cmp.Or(c.Role, c.ID[:12])
 		name := cmp.Or(c.Name, "unknown-name")
-		tui.Status("Stopping", "%s %s", role, name)
+		tui.Status("Stopping", "%s container %s", role, name)
 		if err := client.StopAndRemove(ctx, c.ID); err != nil {
 			tui.Error("stop %s %s: %v", role, name, err)
 			containersFailed = true

@@ -13,7 +13,7 @@ import (
 func StatusCommand() *cli.Command {
 	return &cli.Command{
 		Name:   "status",
-		Usage:  "Show session status for the current project",
+		Usage:  "Show session status",
 		Action: StatusAction,
 	}
 }
@@ -25,25 +25,49 @@ func StatusAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close() //nolint:errcheck
 
-	projectRoot, err := resolveProjectRoot(cmd)
-	if err != nil {
-		return err
+	projectRoot, _ := resolveProjectRoot(cmd)
+
+	// If we resolved a project root, try to show status for that project.
+	if projectRoot != "" {
+		session, err := client.FindRunningSession(ctx, projectRoot)
+		if err != nil {
+			return err
+		}
+		if session != nil {
+			return printSessionStatus(ctx, client, session.SessionID, projectRoot)
+		}
 	}
 
-	session, err := client.FindRunningSession(ctx, projectRoot)
+	// No project-specific session found — list all running sessions.
+	sessions, err := client.ListProxySessions(ctx)
 	if err != nil {
 		return err
 	}
-	if session == nil {
-		fmt.Printf("No running session for %s\n", projectRoot)
+	if len(sessions) == 0 {
+		if projectRoot != "" {
+			fmt.Printf("No running session for %s\n", projectRoot)
+		} else {
+			fmt.Println("No active sessions.")
+		}
 		return nil
 	}
+	for i, s := range sessions {
+		if i > 0 {
+			fmt.Println()
+		}
+		if err := printSessionStatus(ctx, client, s.SessionID, s.ProjectDir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-	tui.Status("Session", "%s", session.SessionID)
-	tui.Status("Project", "%s", projectRoot)
+func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, projectDir string) error {
+	tui.Status("Session", "%s", sessionID)
+	tui.Status("Project", "%s", projectDir)
 
 	// Show per-container status.
-	containers, err := client.SessionContainers(ctx, session.SessionID)
+	containers, err := client.SessionContainers(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("list session containers: %w", err)
 	}
@@ -61,15 +85,19 @@ func StatusAction(ctx context.Context, cmd *cli.Command) error {
 		tui.Status(label, "%s", status)
 	}
 
-	// Show SSH address (published on proxy container, not sandbox).
+	// Show ports published on the proxy container.
 	sshAddr := "N/A"
-	proxyID, proxyErr := findProxyForSession(ctx, client, session.SessionID)
+	apiAddr := "N/A"
+	proxyID, proxyErr := findProxyForSession(ctx, client, sessionID)
 	if proxyErr == nil {
-		port, portErr := client.FindPublishedPort(ctx, proxyID, ctr.SSHContainerPort)
-		if portErr == nil {
+		if port, err := client.FindControlPort(ctx, proxyID); err == nil {
+			apiAddr = fmt.Sprintf("127.0.0.1:%d", port)
+		}
+		if port, err := client.FindPublishedPort(ctx, proxyID, ctr.SSHContainerPort); err == nil {
 			sshAddr = fmt.Sprintf("127.0.0.1:%d", port)
 		}
 	}
+	tui.Status("API", "%s", apiAddr)
 	tui.Status("SSH", "%s", sshAddr)
 
 	return nil

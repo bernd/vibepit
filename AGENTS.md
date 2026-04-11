@@ -38,6 +38,10 @@ go run . -L                  # use local image instead of published one
 go run . -a example.com:443  # allow additional domain:port
 go run . -p vcs-github       # enable additional network preset
 go run . --reconfigure       # re-run interactive setup
+go run . up                  # start in daemon mode with SSH server
+go run . ssh                 # connect to running daemon-mode session
+go run . status              # show session status
+go run . down                # stop daemon-mode session
 ```
 
 Use Make targets for reproducible build/test workflows:
@@ -55,9 +59,14 @@ make clean             # remove binary and dist/ artifacts
 Current root commands are defined in `cmd/root.go` and include:
 
 - `run` (default) -- launch or attach to a sandbox session.
+- `up` -- start sandbox and proxy containers in daemon mode with SSH server.
+- `down` -- stop and remove sandbox and proxy containers.
+- `ssh` -- connect to a running sandbox via SSH (interactive or command mode).
+- `status` -- show session status including container uptime and SSH address.
 - `allow-http` -- add HTTP(S) allowlist entries at runtime.
 - `allow-dns` -- add DNS allowlist entries at runtime.
 - `proxy` -- internal command used inside the proxy container.
+- `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
 - `sessions` -- list active sessions.
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
 - `update` -- pull latest runtime images.
@@ -73,9 +82,17 @@ Built with `urfave/cli/v3`.
 
 - `run` creates an isolated network, starts proxy + sandbox containers, and
   manages persistent `vibepit-home` volume and per-session networking.
+- `up` creates the same infrastructure as `run` but in daemon mode — containers
+  run in the background with an SSH server. Returns immediately after startup.
+- `down` stops and removes all containers for a session and cleans up
+  credentials.
+- `ssh` connects to a running daemon-mode session via SSH with ephemeral
+  Ed25519 keys. Supports interactive shells and remote command execution.
+- `status` shows session info including container uptime and published ports.
 - `allow-http` / `allow-dns` call the control API and can persist to project
   config.
 - `proxy` runs the proxy server inside the proxy container.
+- `vibed` runs the SSH daemon inside the sandbox container (internal).
 - `sessions` and `monitor` provide session discovery and interactive control.
 - `update` refreshes local runtime images.
 
@@ -112,6 +129,25 @@ and runtime detection helpers.
 
 Bubble Tea-based terminal UI primitives for window framing, header/cursor, and
 screen abstraction.
+
+### SSH daemon (`sshd/`)
+
+SSH server implementation using `charmbracelet/ssh`. Handles public key
+authentication, interactive PTY sessions with a BubbleTea session selector, and
+non-interactive command execution. Used by the `vibed` command inside the
+sandbox container.
+
+### Session management (`session/`)
+
+Persistent PTY session manager. Manages shell processes that survive SSH
+disconnects, supports multiple attached clients per session, handles scrollback
+buffers, and enforces concurrent session limits.
+
+### SSH key generation (`keygen/`)
+
+Ed25519 SSH keypair generation. Produces PEM-encoded private keys and
+OpenSSH-format authorized keys. Used by `up` to create ephemeral per-session
+keypairs.
 
 ### Embedded proxy binary (`embed/`)
 

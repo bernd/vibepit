@@ -24,10 +24,9 @@ func VibedCommand() *cli.Command {
 }
 
 func VibedAction(ctx context.Context, cmd *cli.Command) error {
-	// Run the same shell initialization as entrypoint.sh so the home
-	// directory and linuxbrew volume are ready before accepting SSH sessions.
-	initCmd := exec.Command("bash", "-c",
-		"source /etc/vibepit/lib.sh && source /etc/vibepit/entrypoint-lib.sh && migrate_linuxbrew_volume && init_home")
+	// Run shell initialization (home directory, linuxbrew migration) before
+	// accepting SSH sessions.
+	initCmd := exec.Command("/etc/vibepit/vibed-init.sh")
 	initCmd.Stdout = os.Stdout
 	initCmd.Stderr = os.Stderr
 	if err := initCmd.Run(); err != nil {
@@ -58,6 +57,7 @@ func VibedAction(ctx context.Context, cmd *cli.Command) error {
 
 	listener, err := net.Listen("tcp", "0.0.0.0:2222")
 	if err != nil {
+		srv.Close() //nolint:errcheck
 		return fmt.Errorf("listen: %w", err)
 	}
 

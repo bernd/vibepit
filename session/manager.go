@@ -25,6 +25,10 @@ type Manager struct {
 	counter       int
 	limit         int
 	stateFilePath string
+
+	// Command is the shell command and arguments used for new sessions.
+	// Defaults to ["/bin/bash", "--login"] when empty.
+	Command []string
 }
 
 // NewManager creates a session manager with the given maximum number of

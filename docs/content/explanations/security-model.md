@@ -81,7 +81,24 @@ Each session generates ephemeral Ed25519 key pairs:
 4. TLS 1.3 is enforced as the minimum version.
 5. The server requires and verifies client certificates against the ephemeral CA (`RequireAndVerifyClientCert`).
 
-Because the CA key is discarded after signing, an attacker who compromises the proxy at runtime cannot mint new client certificates. Server credentials are passed to the proxy container via environment variables and never touch disk. Client credentials (CA cert, client cert, client key) are written to `$XDG_RUNTIME_DIR/vibepit/<sessionID>/` with `0600` permissions so that CLI subcommands can authenticate from separate processes. These files are deleted when the session ends.
+Because the CA key is discarded after signing, an attacker who compromises the proxy at runtime cannot mint new client certificates. Server credentials are passed to the proxy container via environment variables and never touch disk. Client credentials (CA cert, client cert, client key) are written to `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/` with `0600` permissions so that CLI subcommands can authenticate from separate processes. These files are deleted when the session ends.
+
+## SSH authentication
+
+In daemon mode (`vibepit up`), the sandbox container runs an SSH server for remote access. SSH authentication uses ephemeral Ed25519 keypairs generated per session:
+
+1. Two keypairs are generated at session startup: a **client keypair** and a **host keypair**.
+2. The client private key and host public key remain on the host in `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/` with `0600` permissions (private keys) and `0644` permissions (public keys).
+3. The host private key is bind-mounted read-only into the sandbox container. The client public key is passed via environment variable.
+4. Only public key authentication is accepted — no passwords.
+5. The SSH server verifies the connecting client's key against the single authorized public key.
+6. The SSH client (`vibepit ssh`) verifies the server's host key against the stored public key, preventing MITM attacks.
+
+All SSH credentials are deleted when the session ends (`vibepit down`). Because keys are never reused across sessions, a compromised key cannot grant access to another.
+
+## SSH network access
+
+The SSH port is not directly accessible from the host. It is forwarded through the proxy container, which publishes it to `127.0.0.1` on a random port. This means SSH is only reachable from the local machine.
 
 ## Proxy image
 

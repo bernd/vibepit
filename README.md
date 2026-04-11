@@ -55,6 +55,14 @@ vibepit -a example.com:443
 vibepit -p github
 ```
 
+Or run in daemon mode with SSH access:
+
+```sh
+vibepit up
+vibepit ssh
+vibepit down
+```
+
 Add entries to the HTTP or DNS allowlist of a running session:
 
 ```sh
