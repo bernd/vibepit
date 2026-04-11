@@ -628,11 +628,11 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 
 	var sessions []ProxySession
 	for _, ctr := range containers {
-		// The control port label stores the container-internal port, but we
-		// need the host-published port. Find the published binding that
-		// corresponds to the labelled container port.
 		labelPort := ctr.Labels[LabelControlPort]
-		controlPort := c.resolveControlPort(ctx, ctr, labelPort)
+		controlPort := labelPort
+		if port, err := c.FindPublishedPort(ctx, ctr.ID, labelPort+"/tcp"); err == nil {
+			controlPort = strconv.Itoa(port)
+		}
 		sessions = append(sessions, ProxySession{
 			ContainerID: ctr.ID,
 			SessionID:   ctr.Labels[LabelSessionID],
@@ -642,56 +642,6 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 		})
 	}
 	return sessions, nil
-}
-
-// resolveControlPort determines the host-published control port for a proxy
-// container. It tries three sources in order: the ports reported by
-// ContainerList, a full ContainerInspect, and finally the label value itself
-// (which equals HostPort in our setup).
-func (c *Client) resolveControlPort(ctx context.Context, ctr container.Summary, labelPort string) string {
-	for _, p := range ctr.Ports {
-		if p.PublicPort != 0 && (labelPort == "" || strconv.Itoa(int(p.PrivatePort)) == labelPort) {
-			return strconv.Itoa(int(p.PublicPort))
-		}
-	}
-
-	// Some runtimes omit published ports in ContainerList. Fall back to a
-	// full inspect, then to the label itself (HostPort == labelPort in our
-	// setup).
-	if port := c.controlPortFromInspect(ctx, ctr.ID, labelPort); port != "" {
-		return port
-	}
-	return labelPort
-}
-
-func (c *Client) controlPortFromInspect(ctx context.Context, containerID, labelPort string) string {
-	info, err := c.docker.ContainerInspect(ctx, containerID)
-	if err != nil || info.NetworkSettings == nil {
-		return ""
-	}
-
-	// Try the specific labelled port first, then any published port.
-	if labelPort != "" {
-		if port := firstHostPort(info.NetworkSettings.Ports[nat.Port(labelPort+"/tcp")]); port != "" {
-			return port
-		}
-	}
-	for _, bindings := range info.NetworkSettings.Ports {
-		if port := firstHostPort(bindings); port != "" {
-			return port
-		}
-	}
-	return ""
-}
-
-// firstHostPort returns the first non-empty HostPort from bindings, or "".
-func firstHostPort(bindings []nat.PortBinding) string {
-	for _, b := range bindings {
-		if b.HostPort != "" {
-			return b.HostPort
-		}
-	}
-	return ""
 }
 
 // SandboxContainerConfig holds the parameters for the sandboxed sandbox container.
@@ -857,19 +807,12 @@ func (c *Client) FindPublishedPort(ctx context.Context, containerID string, cont
 	if err != nil {
 		return 0, fmt.Errorf("inspect container: %w", err)
 	}
-	bindings, ok := info.NetworkSettings.Ports[nat.Port(containerPort)]
-	if !ok || len(bindings) == 0 {
-		return 0, fmt.Errorf("port %s not published", containerPort)
-	}
-	var port int
-	if _, err := fmt.Sscanf(bindings[0].HostPort, "%d", &port); err != nil {
-		return 0, fmt.Errorf("parse host port: %w", err)
-	}
-	return port, nil
+	return publishedPort(info, containerPort)
 }
 
-// FindControlPort returns the host port for the control API on the given
-// proxy container by reading its control port label.
+// FindControlPort returns the host-published control API port for a proxy
+// container. It reads the container port from the control port label and
+// looks up the published binding.
 func (c *Client) FindControlPort(ctx context.Context, containerID string) (int, error) {
 	info, err := c.docker.ContainerInspect(ctx, containerID)
 	if err != nil {
@@ -879,9 +822,18 @@ func (c *Client) FindControlPort(ctx context.Context, containerID string) (int, 
 	if portStr == "" {
 		return 0, fmt.Errorf("control port not found")
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return 0, fmt.Errorf("invalid control port: %w", err)
+	return publishedPort(info, portStr+"/tcp")
+}
+
+// publishedPort extracts the host port for a container port from an inspect result.
+func publishedPort(info container.InspectResponse, containerPort string) (int, error) {
+	bindings, ok := info.NetworkSettings.Ports[nat.Port(containerPort)]
+	if !ok || len(bindings) == 0 {
+		return 0, fmt.Errorf("port %s not published", containerPort)
+	}
+	var port int
+	if _, err := fmt.Sscanf(bindings[0].HostPort, "%d", &port); err != nil {
+		return 0, fmt.Errorf("parse host port: %w", err)
 	}
 	return port, nil
 }
