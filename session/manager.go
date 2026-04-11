@@ -15,6 +15,7 @@ type SessionInfo struct {
 	ExitCode    int
 	CreatedAt   time.Time
 	ExitedAt    time.Time
+	DetachedAt  time.Time
 }
 
 // Manager owns all sessions and enforces the concurrency limit.

@@ -13,8 +13,8 @@ import (
 func testSessions() []session.SessionInfo {
 	now := time.Now()
 	return []session.SessionInfo{
-		{ID: "session-1", Command: "/bin/bash", Status: "detached", ClientCount: 0, CreatedAt: now.Add(-10 * time.Minute)},
-		{ID: "session-2", Command: "/bin/bash", Status: "detached", ClientCount: 0, CreatedAt: now.Add(-5 * time.Minute)},
+		{ID: "session-1", Command: "/bin/bash", Status: "detached", ClientCount: 0, CreatedAt: now.Add(-10 * time.Minute), DetachedAt: now.Add(-30 * time.Second)},
+		{ID: "session-2", Command: "/bin/bash", Status: "detached", ClientCount: 0, CreatedAt: now.Add(-5 * time.Minute), DetachedAt: now.Add(-10 * time.Second)},
 	}
 }
 
@@ -101,7 +101,11 @@ func TestSelectorViewContainsSessionInfo(t *testing.T) {
 
 func TestFormatStatus(t *testing.T) {
 	now := time.Now()
-	info := session.SessionInfo{Status: "detached", CreatedAt: now.Add(-5 * time.Minute)}
+	info := session.SessionInfo{
+		CreatedAt:  now.Add(-5 * time.Minute),
+		DetachedAt: now.Add(-30 * time.Second),
+	}
 	result := formatStatus(info)
-	assert.Contains(t, result, "detached")
+	assert.Contains(t, result, "created 5m0s ago")
+	assert.Contains(t, result, "detached 30s ago")
 }

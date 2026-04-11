@@ -107,6 +107,7 @@ func (m selectorModel) View() tea.View {
 }
 
 func formatStatus(info session.SessionInfo) string {
-	ago := time.Since(info.CreatedAt).Truncate(time.Second)
-	return fmt.Sprintf("detached %s ago", ago)
+	created := time.Since(info.CreatedAt).Truncate(time.Second)
+	detached := time.Since(info.DetachedAt).Truncate(time.Second)
+	return fmt.Sprintf("created %s ago, detached %s ago", created, detached)
 }
