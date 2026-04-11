@@ -101,6 +101,11 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 
 	var target *session.Session
 
+	// inputCh is non-nil when the selector runs. A single goroutine reads
+	// from sess into the channel so that BubbleTea's abandoned read loop
+	// never steals bytes from the session.
+	var inputCh <-chan []byte
+
 	if len(detached) == 0 {
 		// No detached sessions — create one directly.
 		var err error
@@ -111,12 +116,18 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 			return
 		}
 	} else {
+		// Start a goroutine that owns reading from the SSH channel.
+		// BubbleTea reads from a closeable wrapper; the session IO
+		// reads from the same channel afterward.
+		inputCh = sshInputChannel(sess)
+		cr := &channelReader{ch: inputCh, done: make(chan struct{})}
+
 		// Show selector with detached sessions only.
 		screen := newSelectorScreen(detached)
 		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
 		w := tui.NewWindow(header, screen)
 		p := tea.NewProgram(w,
-			tea.WithInput(sess),
+			tea.WithInput(cr),
 			tea.WithOutput(sess),
 			tea.WithEnvironment(sshEnv),
 			tea.WithColorProfile(colorprofile.Env(sshEnv)),
@@ -128,6 +139,9 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 			sess.Exit(1)                                      //nolint:errcheck
 			return
 		}
+		// Instantly unblock BubbleTea's abandoned read goroutine.
+		close(cr.done)
+
 		result := screen.result
 		if result == nil {
 			// User quit without selecting.
@@ -200,10 +214,22 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		}
 	}()
 
-	// Copy SSH stdin to session.
-	go func() {
-		io.Copy(client, sess) //nolint:errcheck
-	}()
+	// Copy SSH stdin to session. When the selector ran, a channel-based
+	// reader already owns sess reads — consume from it to avoid two
+	// goroutines reading from the same SSH channel.
+	if inputCh != nil {
+		go func() {
+			for data := range inputCh {
+				if _, err := client.Write(data); err != nil {
+					break
+				}
+			}
+		}()
+	} else {
+		go func() {
+			io.Copy(client, sess) //nolint:errcheck
+		}()
+	}
 
 	// Copy session output to SSH.
 	done := make(chan struct{})
@@ -268,4 +294,51 @@ func userShell() string {
 		return shell
 	}
 	return "/bin/sh"
+}
+
+// sshInputChannel starts a goroutine that reads from r and sends chunks
+// on the returned channel. The channel is closed when r returns an error.
+func sshInputChannel(r io.Reader) <-chan []byte {
+	ch := make(chan []byte, 16)
+	go func() {
+		defer close(ch)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				ch <- data
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ch
+}
+
+// channelReader wraps a byte channel as an io.Reader. Closing the done
+// channel immediately unblocks any pending Read with io.EOF.
+type channelReader struct {
+	ch   <-chan []byte
+	buf  []byte
+	done chan struct{}
+}
+
+func (r *channelReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		select {
+		case data, ok := <-r.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+			r.buf = data
+		case <-r.done:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
 }
