@@ -13,7 +13,6 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
-	"github.com/bernd/vibepit/sshd"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -114,7 +113,9 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer session.Close() //nolint:errcheck
 
-	// Command mode — argv semantics via shell-quoting.
+	// Command mode — join args with spaces, matching ssh(1) behavior.
+	// The server executes via the user's shell, so the shell handles
+	// parsing. No client-side escaping needed.
 	cmdArgs := cmd.Args().Slice()
 	if len(cmdArgs) > 0 {
 		session.Stdout = os.Stdout
@@ -133,11 +134,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 			stdinPipe.Close()            //nolint:errcheck
 		}()
 
-		quoted := make([]string, len(cmdArgs))
-		for i, arg := range cmdArgs {
-			quoted[i] = sshd.ShellEscape(arg)
-		}
-		if err := session.Run(strings.Join(quoted, " ")); err != nil {
+		if err := session.Run(strings.Join(cmdArgs, " ")); err != nil {
 			if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
 				return &ctr.ExitError{Code: exitErr.ExitStatus()}
 			}

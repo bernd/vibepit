@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"time"
 
@@ -196,14 +197,19 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 }
 
 func handleExecSession(sess charmssh.Session) {
-	args := sess.Command()
-	if len(args) == 0 {
+	rawCmd := sess.RawCommand()
+	if rawCmd == "" {
 		fmt.Fprintln(sess.Stderr(), "no command specified") //nolint:errcheck
 		sess.Exit(1)                                        //nolint:errcheck
 		return
 	}
 
-	cmd := exec.CommandContext(sess.Context(), args[0], args[1:]...)
+	// Execute via the user's shell, matching OpenSSH sshd behavior.
+	// The client shell-escapes individual arguments to preserve
+	// boundaries (e.g. filenames with spaces), and the shell parses
+	// them back.
+	shell := userShell()
+	cmd := exec.CommandContext(sess.Context(), shell, "-c", rawCmd)
 	cmd.Env = session.MergeEnv(sess.Environ())
 	cmd.Stdout = sess
 	cmd.Stderr = sess.Stderr()
@@ -234,4 +240,12 @@ func handleExecSession(sess charmssh.Session) {
 		return
 	}
 	sess.Exit(0) //nolint:errcheck
+}
+
+// userShell returns the current user's login shell, falling back to /bin/sh.
+func userShell() string {
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
+	}
+	return "/bin/sh"
 }
