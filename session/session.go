@@ -32,6 +32,7 @@ type Session struct {
 	exited     bool
 	exitCode   int
 	exitedAt   time.Time
+	detachedAt time.Time
 	vte        *vt.SafeEmulator
 	scrollback *Scrollback
 	cols       uint16
@@ -99,6 +100,7 @@ func (s *Session) Info() SessionInfo {
 		CreatedAt:   s.createdAt,
 		ExitCode:    s.exitCode,
 		ExitedAt:    s.exitedAt,
+		DetachedAt:  s.detachedAt,
 	}
 	if s.exited {
 		info.Status = "exited"
@@ -208,6 +210,9 @@ func (s *Session) Detach(c *Client) {
 		if len(s.clients) > 0 {
 			s.writer = s.clients[len(s.clients)-1]
 		}
+	}
+	if len(s.clients) == 0 {
+		s.detachedAt = time.Now()
 	}
 	// If this was the last client and the session has exited, start the
 	// tombstone expiry timer. This handles the normal case where the user

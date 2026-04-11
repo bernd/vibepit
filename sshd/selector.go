@@ -6,156 +6,128 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/session"
+	"github.com/bernd/vibepit/tui"
 )
 
 // selectorResult holds the outcome of the session selector.
 type selectorResult struct {
 	sessionID string // empty means "new session"
-	takeOver  bool   // true if user wants to take over writer
 }
 
-// selectorModel is a Bubble Tea model for choosing a session to attach to.
-type selectorModel struct {
+// selectorScreen implements tui.Screen for choosing an SSH session to attach to.
+type selectorScreen struct {
+	tui.Cursor
 	sessions []session.SessionInfo
-	cursor   int
 	result   *selectorResult
-
-	// confirmTakeOver is set when the user selects an attached session
-	// and we need to prompt before proceeding.
-	confirmTakeOver bool
 }
 
-func newSelectorModel(sessions []session.SessionInfo) selectorModel {
-	return selectorModel{
+func newSelectorScreen(sessions []session.SessionInfo) *selectorScreen {
+	return &selectorScreen{
+		Cursor:   tui.Cursor{ItemCount: len(sessions) + 1}, // +1 for "new session"
 		sessions: sessions,
-		cursor:   0,
 	}
 }
 
-func (m selectorModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (s *selectorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if m.confirmTakeOver {
-			return m.handleTakeOverPrompt(msg)
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return s, tea.Quit
+		case "n":
+			s.result = &selectorResult{}
+			return s, tea.Quit
+		case "enter":
+			if s.Pos < len(s.sessions) {
+				s.result = &selectorResult{sessionID: s.sessions[s.Pos].ID}
+			} else {
+				s.result = &selectorResult{}
+			}
+			return s, tea.Quit
+		default:
+			s.HandleKey(msg)
 		}
-		return m.handleNormalKey(msg)
+	case tea.WindowSizeMsg:
+		s.VpHeight = w.VpHeight()
+		s.EnsureVisible()
 	}
-	return m, nil
+	return s, nil
 }
 
-func (m selectorModel) handleTakeOverPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y":
-		info := m.sessions[m.cursor]
-		m.result = &selectorResult{sessionID: info.ID, takeOver: true}
-		return m, tea.Quit
-	case "n", "escape":
-		m.confirmTakeOver = false
-		return m, nil
+func (s *selectorScreen) View(w *tui.Window) string {
+	var lines []string
+
+	note := lipgloss.NewStyle().Foreground(tui.ColorField).
+		Render("Select a session:")
+	lines = append(lines, note, "")
+
+	headerLines := 2 // note + blank line
+	end := s.Offset + s.VpHeight - headerLines
+	end = min(end, s.ItemCount)
+	now := time.Now()
+
+	for i := s.Offset; i < end; i++ {
+		if i < len(s.sessions) {
+			lines = append(lines, renderSelectorLine(s.sessions[i], i == s.Pos, now))
+		} else {
+			lines = append(lines, renderNewSessionLine(i == s.Pos))
+		}
 	}
-	return m, nil
+
+	for len(lines) < s.VpHeight {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
-// itemCount returns total items: sessions + "new session" option.
-func (m selectorModel) itemCount() int {
-	return len(m.sessions) + 1
+func renderSelectorLine(info session.SessionInfo, highlighted bool, now time.Time) string {
+	base, marker := tui.LineStyle(highlighted)
+
+	id := base.Foreground(tui.ColorField).Render(fmt.Sprintf("%-16s", info.ID))
+	age := base.Foreground(tui.ColorOrange).Render(fmt.Sprintf("%-8s", formatDuration(now.Sub(info.CreatedAt))))
+	detached := base.Foreground(tui.ColorCyan).Render(fmt.Sprintf("detached %s ago", formatDuration(now.Sub(info.DetachedAt))))
+	sp := base.Render(" ")
+
+	return marker + id + sp + age + sp + detached
 }
 
-func (m selectorModel) handleNormalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q", "ctrl+c":
-		// Quit without selecting.
-		return m, tea.Quit
-
-	case "n":
-		// Shortcut for new session.
-		m.result = &selectorResult{}
-		return m, tea.Quit
-
-	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
-
-	case "down", "j":
-		if m.cursor < m.itemCount()-1 {
-			m.cursor++
-		}
-
-	case "enter":
-		// "New session" is the last item.
-		if m.cursor == len(m.sessions) {
-			m.result = &selectorResult{}
-			return m, tea.Quit
-		}
-		info := m.sessions[m.cursor]
-		// Exited sessions are not selectable.
-		if info.Status == "exited" {
-			return m, nil
-		}
-		if info.Status == "attached" {
-			m.confirmTakeOver = true
-			return m, nil
-		}
-		m.result = &selectorResult{sessionID: info.ID}
-		return m, tea.Quit
-	}
-	return m, nil
+func renderNewSessionLine(highlighted bool) string {
+	base, marker := tui.LineStyle(highlighted)
+	label := base.Foreground(tui.ColorField).Render("[new session]")
+	return marker + label
 }
 
-func (m selectorModel) View() tea.View {
-	var b strings.Builder
-
-	b.WriteString("Sessions:\n\n")
-
-	for i, info := range m.sessions {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
-		status := formatStatus(info)
-		line := fmt.Sprintf("%s%-14s %-12s %s", cursor, info.ID, info.Command, status)
-		if info.Status == "exited" {
-			line += " (not selectable)"
-		}
-		b.WriteString(line)
-		b.WriteString("\n")
+// formatDuration formats a duration as a compact human-readable string.
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", max(int(d.Seconds()), 0))
 	}
 
-	// "New session" option.
-	cursor := "  "
-	if m.cursor == len(m.sessions) {
-		cursor = "> "
+	totalMinutes := int(d.Minutes())
+	days := totalMinutes / (60 * 24)
+	hours := (totalMinutes % (60 * 24)) / 60
+	minutes := totalMinutes % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh", days, hours)
 	}
-	fmt.Fprintf(&b, "%s[new session]\n", cursor)
-
-	b.WriteString("\n")
-
-	if m.confirmTakeOver {
-		b.WriteString("Take over as writer? [y/n]")
-	} else {
-		b.WriteString("j/k or arrows to move, enter to select, n for new, q to quit")
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
-
-	return tea.NewView(b.String())
+	return fmt.Sprintf("%dm", minutes)
 }
 
-func formatStatus(info session.SessionInfo) string {
-	switch info.Status {
-	case "attached":
-		return fmt.Sprintf("%d client(s) attached", info.ClientCount)
-	case "detached":
-		ago := time.Since(info.CreatedAt).Truncate(time.Second)
-		return fmt.Sprintf("detached %s ago", ago)
-	case "exited":
-		ago := time.Since(info.ExitedAt).Truncate(time.Second)
-		return fmt.Sprintf("exited (%d) %s ago", info.ExitCode, ago)
-	default:
-		return info.Status
+func (s *selectorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
+	keys := []tui.FooterKey{
+		{Key: "enter", Desc: "select"},
+		{Key: "n", Desc: "new session"},
 	}
+	keys = append(keys, s.Cursor.FooterKeys()...)
+	return keys
+}
+
+func (s *selectorScreen) FooterStatus(w *tui.Window) string {
+	return fmt.Sprintf("%d sessions", len(s.sessions))
 }

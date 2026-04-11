@@ -7,10 +7,13 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/session"
+	"github.com/bernd/vibepit/tui"
+	"github.com/charmbracelet/colorprofile"
 
 	charmssh "github.com/charmbracelet/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -84,16 +87,35 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	mgr := s.sessions
 
 	// Build environment from SSH session (includes TERM, etc.).
+	// SSH clients typically don't forward COLORTERM. Fall back to the
+	// container's own value so the TUI can detect TrueColor support.
 	sshEnv := sess.Environ()
 	sshEnv = append(sshEnv, fmt.Sprintf("TERM=%s", ptyReq.Term))
+	if !hasEnvPrefix(sshEnv, "COLORTERM=") {
+		if ct := os.Getenv("COLORTERM"); ct != "" {
+			sshEnv = append(sshEnv, "COLORTERM="+ct)
+		}
+	}
 
-	sessions := mgr.List()
+	allSessions := mgr.List()
+
+	// Only detached sessions are relevant for the selector.
+	var detached []session.SessionInfo
+	for _, info := range allSessions {
+		if info.Status == "detached" {
+			detached = append(detached, info)
+		}
+	}
 
 	var target *session.Session
-	var takeOver bool
 
-	if len(sessions) == 0 {
-		// No sessions — create one directly.
+	// inputCh is non-nil when the selector runs. A single goroutine reads
+	// from sess into the channel so that BubbleTea's abandoned read loop
+	// never steals bytes from the session.
+	var inputCh <-chan []byte
+
+	if len(detached) == 0 {
+		// No detached sessions — create one directly.
 		var err error
 		target, err = mgr.Create(cols, rows, sshEnv)
 		if err != nil {
@@ -102,21 +124,33 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 			return
 		}
 	} else {
-		// Show selector.
-		model := newSelectorModel(sessions)
-		p := tea.NewProgram(model,
-			tea.WithInput(sess),
+		// Start a goroutine that owns reading from the SSH channel.
+		// BubbleTea reads from a closeable wrapper; the session IO
+		// reads from the same channel afterward.
+		inputCh = sshInputChannel(sess)
+		cr := &channelReader{ch: inputCh, done: make(chan struct{})}
+
+		// Show selector with detached sessions only.
+		screen := newSelectorScreen(detached)
+		header := &tui.HeaderInfo{ProjectDir: "vibepit", SessionID: "session selector"}
+		w := tui.NewWindow(header, screen)
+		p := tea.NewProgram(w,
+			tea.WithInput(cr),
 			tea.WithOutput(sess),
+			tea.WithEnvironment(sshEnv),
+			tea.WithColorProfile(colorprofile.Env(sshEnv)),
 			tea.WithWindowSize(int(cols), int(rows)),
 			tea.WithoutSignalHandler(),
 		)
-		finalModel, err := p.Run()
-		if err != nil {
+		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(sess.Stderr(), "selector: %s\n", err) //nolint:errcheck
 			sess.Exit(1)                                      //nolint:errcheck
 			return
 		}
-		result := finalModel.(selectorModel).result
+		// Instantly unblock BubbleTea's abandoned read goroutine.
+		close(cr.done)
+
+		result := screen.result
 		if result == nil {
 			// User quit without selecting.
 			sess.Exit(0) //nolint:errcheck
@@ -124,6 +158,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		}
 		if result.sessionID == "" {
 			// New session.
+			var err error
 			target, err = mgr.Create(cols, rows, sshEnv)
 			if err != nil {
 				fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
@@ -137,16 +172,11 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 				sess.Exit(1)                                                           //nolint:errcheck
 				return
 			}
-			takeOver = result.takeOver
 		}
 	}
 
 	client := target.Attach(cols, rows)
 	defer client.Close() //nolint:errcheck
-
-	if takeOver {
-		target.TakeOver(client, cols, rows)
-	}
 
 	// Forward window resize (writer only).
 	go func() {
@@ -156,34 +186,58 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	}()
 
 	// SSH keepalive: periodically send channel requests to detect dead
-	// clients. If the client doesn't respond, the context is canceled.
+	// clients. SendRequest blocks until the peer replies, so we run it
+	// in a goroutine with a timeout — a dead TCP connection can stall
+	// the call indefinitely. When the timeout fires we close the
+	// session client, which cascades through the handler and eventually
+	// unblocks the stuck SendRequest.
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		missed := 0
 		for {
 			select {
 			case <-ticker.C:
-				_, err := sess.SendRequest("keepalive@openssh.com", true, nil)
-				if err != nil {
-					missed++
-					if missed >= 2 {
+				reply := make(chan error, 1)
+				go func() {
+					_, err := sess.SendRequest("keepalive@openssh.com", true, nil)
+					reply <- err
+				}()
+				select {
+				case err := <-reply:
+					if err != nil {
 						client.Close() //nolint:errcheck
 						return
 					}
-				} else {
-					missed = 0
+				case <-time.After(3 * time.Second):
+					client.Close() //nolint:errcheck
+					return
+				case <-sess.Context().Done():
+					client.Close() //nolint:errcheck
+					return
 				}
 			case <-sess.Context().Done():
+				client.Close() //nolint:errcheck
 				return
 			}
 		}
 	}()
 
-	// Copy SSH stdin to session.
-	go func() {
-		io.Copy(client, sess) //nolint:errcheck
-	}()
+	// Copy SSH stdin to session. When the selector ran, a channel-based
+	// reader already owns sess reads — consume from it to avoid two
+	// goroutines reading from the same SSH channel.
+	if inputCh != nil {
+		go func() {
+			for data := range inputCh {
+				if _, err := client.Write(data); err != nil {
+					break
+				}
+			}
+		}()
+	} else {
+		go func() {
+			io.Copy(client, sess) //nolint:errcheck
+		}()
+	}
 
 	// Copy session output to SSH.
 	done := make(chan struct{})
@@ -242,10 +296,67 @@ func handleExecSession(sess charmssh.Session) {
 	sess.Exit(0) //nolint:errcheck
 }
 
+// hasEnvPrefix reports whether any entry in env starts with prefix.
+func hasEnvPrefix(env []string, prefix string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // userShell returns the current user's login shell, falling back to /bin/sh.
 func userShell() string {
 	if shell := os.Getenv("SHELL"); shell != "" {
 		return shell
 	}
 	return "/bin/sh"
+}
+
+// sshInputChannel starts a goroutine that reads from r and sends chunks
+// on the returned channel. The channel is closed when r returns an error.
+func sshInputChannel(r io.Reader) <-chan []byte {
+	ch := make(chan []byte, 16)
+	go func() {
+		defer close(ch)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				ch <- data
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ch
+}
+
+// channelReader wraps a byte channel as an io.Reader. Closing the done
+// channel immediately unblocks any pending Read with io.EOF.
+type channelReader struct {
+	ch   <-chan []byte
+	buf  []byte
+	done chan struct{}
+}
+
+func (r *channelReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		select {
+		case data, ok := <-r.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+			r.buf = data
+		case <-r.done:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
 }
