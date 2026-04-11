@@ -236,7 +236,7 @@ func TestSession_SlowConsumerDisconnected(t *testing.T) {
 	// Fill the slow client's output channel by sending lots of data
 	// through the PTY. The slow client never reads.
 	for i := range 2000 {
-		_, err := writer.Write([]byte(fmt.Sprintf("echo line_%d\n", i)))
+		_, err := writer.Write(fmt.Appendf(nil, "echo line_%d\n", i))
 		if err != nil {
 			break
 		}
@@ -274,7 +274,7 @@ func TestSession_ReplayOnAttach(t *testing.T) {
 	// Read output until "hello" appears (confirms PTY processed the command).
 	buf := make([]byte, 8192)
 	deadline := time.After(3 * time.Second)
-	var collected string
+	var collected strings.Builder
 	for {
 		readDone := make(chan int, 1)
 		go func() {
@@ -283,8 +283,8 @@ func TestSession_ReplayOnAttach(t *testing.T) {
 		}()
 		select {
 		case n := <-readDone:
-			collected += string(buf[:n])
-			if strings.Contains(collected, "hello") {
+			collected.WriteString(string(buf[:n]))
+			if strings.Contains(collected.String(), "hello") {
 				goto ready
 			}
 		case <-deadline:
