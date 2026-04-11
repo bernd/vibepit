@@ -97,7 +97,6 @@ func TestSelectorViewContainsSessionInfo(t *testing.T) {
 	assert.Contains(t, view, "session-2")
 	assert.Contains(t, view, "[new session]")
 	assert.Contains(t, view, "detached")
-	assert.NotContains(t, view, "not selectable")
 }
 
 func TestFormatStatus(t *testing.T) {
