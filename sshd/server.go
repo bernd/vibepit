@@ -207,7 +207,22 @@ func handleExecSession(sess charmssh.Session) {
 	cmd.Env = session.MergeEnv(sess.Environ())
 	cmd.Stdout = sess
 	cmd.Stderr = sess.Stderr()
-	cmd.Stdin = sess
+
+	// Use StdinPipe instead of cmd.Stdin = sess. With cmd.Stdin,
+	// cmd.Wait() blocks until the SSH channel sends EOF, which doesn't
+	// happen until the client closes its side — deadlocking one-shot
+	// commands like "uptime" that don't consume stdin. StdinPipe lets
+	// cmd.Wait() close the pipe automatically after the process exits.
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(sess.Stderr(), "stdin pipe: %s\n", err) //nolint:errcheck
+		sess.Exit(1)                                        //nolint:errcheck
+		return
+	}
+	go func() {
+		io.Copy(stdinPipe, sess) //nolint:errcheck
+		stdinPipe.Close()        //nolint:errcheck
+	}()
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
