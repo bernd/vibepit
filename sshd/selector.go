@@ -12,7 +12,6 @@ import (
 // selectorResult holds the outcome of the session selector.
 type selectorResult struct {
 	sessionID string // empty means "new session"
-	takeOver  bool   // true if user wants to take over writer
 }
 
 // selectorModel is a Bubble Tea model for choosing a session to attach to.
@@ -20,10 +19,6 @@ type selectorModel struct {
 	sessions []session.SessionInfo
 	cursor   int
 	result   *selectorResult
-
-	// confirmTakeOver is set when the user selects an attached session
-	// and we need to prompt before proceeding.
-	confirmTakeOver bool
 }
 
 func newSelectorModel(sessions []session.SessionInfo) selectorModel {
@@ -40,23 +35,7 @@ func (m selectorModel) Init() tea.Cmd {
 func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if m.confirmTakeOver {
-			return m.handleTakeOverPrompt(msg)
-		}
 		return m.handleNormalKey(msg)
-	}
-	return m, nil
-}
-
-func (m selectorModel) handleTakeOverPrompt(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "y":
-		info := m.sessions[m.cursor]
-		m.result = &selectorResult{sessionID: info.ID, takeOver: true}
-		return m, tea.Quit
-	case "n", "escape":
-		m.confirmTakeOver = false
-		return m, nil
 	}
 	return m, nil
 }
@@ -93,16 +72,7 @@ func (m selectorModel) handleNormalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 			m.result = &selectorResult{}
 			return m, tea.Quit
 		}
-		info := m.sessions[m.cursor]
-		// Exited sessions are not selectable.
-		if info.Status == "exited" {
-			return m, nil
-		}
-		if info.Status == "attached" {
-			m.confirmTakeOver = true
-			return m, nil
-		}
-		m.result = &selectorResult{sessionID: info.ID}
+		m.result = &selectorResult{sessionID: m.sessions[m.cursor].ID}
 		return m, tea.Quit
 	}
 	return m, nil
@@ -120,9 +90,6 @@ func (m selectorModel) View() tea.View {
 		}
 		status := formatStatus(info)
 		line := fmt.Sprintf("%s%-14s %-12s %s", cursor, info.ID, info.Command, status)
-		if info.Status == "exited" {
-			line += " (not selectable)"
-		}
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
@@ -134,28 +101,12 @@ func (m selectorModel) View() tea.View {
 	}
 	fmt.Fprintf(&b, "%s[new session]\n", cursor)
 
-	b.WriteString("\n")
-
-	if m.confirmTakeOver {
-		b.WriteString("Take over as writer? [y/n]")
-	} else {
-		b.WriteString("j/k or arrows to move, enter to select, n for new, q to quit")
-	}
+	b.WriteString("\nj/k or arrows to move, enter to select, n for new, q to quit")
 
 	return tea.NewView(b.String())
 }
 
 func formatStatus(info session.SessionInfo) string {
-	switch info.Status {
-	case "attached":
-		return fmt.Sprintf("%d client(s) attached", info.ClientCount)
-	case "detached":
-		ago := time.Since(info.CreatedAt).Truncate(time.Second)
-		return fmt.Sprintf("detached %s ago", ago)
-	case "exited":
-		ago := time.Since(info.ExitedAt).Truncate(time.Second)
-		return fmt.Sprintf("exited (%d) %s ago", info.ExitCode, ago)
-	default:
-		return info.Status
-	}
+	ago := time.Since(info.CreatedAt).Truncate(time.Second)
+	return fmt.Sprintf("detached %s ago", ago)
 }

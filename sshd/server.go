@@ -90,7 +90,6 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	sessions := mgr.List()
 
 	var target *session.Session
-	var takeOver bool
 
 	if len(sessions) == 0 {
 		// No sessions — create one directly.
@@ -137,16 +136,11 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 				sess.Exit(1)                                                           //nolint:errcheck
 				return
 			}
-			takeOver = result.takeOver
 		}
 	}
 
 	client := target.Attach(cols, rows)
 	defer client.Close() //nolint:errcheck
-
-	if takeOver {
-		target.TakeOver(client, cols, rows)
-	}
 
 	// Forward window resize (writer only).
 	go func() {
