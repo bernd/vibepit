@@ -868,6 +868,24 @@ func (c *Client) FindPublishedPort(ctx context.Context, containerID string, cont
 	return port, nil
 }
 
+// FindControlPort returns the host port for the control API on the given
+// proxy container by reading its control port label.
+func (c *Client) FindControlPort(ctx context.Context, containerID string) (int, error) {
+	info, err := c.docker.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return 0, fmt.Errorf("inspect container: %w", err)
+	}
+	portStr := info.Config.Labels[LabelControlPort]
+	if portStr == "" {
+		return 0, fmt.Errorf("control port not found")
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid control port: %w", err)
+	}
+	return port, nil
+}
+
 // StopAndRemove stops a container (best-effort) then forcibly removes it.
 // Uses a short stop timeout since callers invoke this after the workload
 // has already exited.
