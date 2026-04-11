@@ -33,9 +33,14 @@ func findProxyForSession(ctx context.Context, client *ctr.Client, sessionID stri
 
 func SSHCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "ssh",
-		Usage:  "Connect to running sandbox via SSH",
-		Action: SSHAction,
+		Name:  "ssh",
+		Usage: "Connect to running sandbox via SSH",
+		// All args after "ssh" are the remote command and may contain
+		// dashes (e.g. "vibepit ssh cat -e -"). If we add flags to
+		// this subcommand, replace this with manual arg parsing or a
+		// "--" separator.
+		SkipFlagParsing: true,
+		Action:          SSHAction,
 	}
 }
 
