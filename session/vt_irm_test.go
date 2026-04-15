@@ -41,7 +41,7 @@ func TestVT_InsertReplaceMode(t *testing.T) {
 
 	// Read back row 0.
 	var got []byte
-	for col := 0; col < 6; col++ {
+	for col := range 6 {
 		c := e.CellAt(col, 0)
 		require.NotNil(t, c, "cell at col %d nil", col)
 		got = append(got, c.Content...)
