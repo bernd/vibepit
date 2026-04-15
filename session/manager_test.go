@@ -386,7 +386,7 @@ func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
 	assert.True(t, found,
 		"VT emulator should contain %q somewhere in scrollback or screen "+
 			"after a 2000-line burst; it is missing, which indicates the "+
-			"async vteInput feed dropped data", needle)
+			"VTE write path dropped data", needle)
 
 	c.Close()
 }
