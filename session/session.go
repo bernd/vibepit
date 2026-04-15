@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,8 +37,8 @@ type Session struct {
 	cols       uint16
 	rows       uint16
 
-	vteInput    chan []byte   // async VTE feed channel
-	pumpDone    chan struct{} // closed when pump goroutine exits
+	pumpDone    chan struct{} // closed when pump goroutine exits; barrier for vte.Close
+	drainDone   chan struct{} // closed by drainVTE when it has exited; barrier for vte.Close
 	cleanup     chan struct{}
 	cleanupOnce sync.Once
 }
@@ -70,13 +69,12 @@ func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Sess
 		scrollback: NewScrollback(10000),
 		cols:       cols,
 		rows:       rows,
-		vteInput:   make(chan []byte, 1024),
 		pumpDone:   make(chan struct{}),
+		drainDone:  make(chan struct{}),
 		cleanup:    make(chan struct{}),
 	}
 
 	go s.pump()
-	go s.feedVTE()
 	go s.drainVTE()
 	go s.waitForExit()
 
@@ -124,6 +122,16 @@ func (s *Session) Info() SessionInfo {
 // current VTE screen state so the terminal appears restored.
 func (s *Session) Attach(cols, rows uint16) *Client {
 	s.mu.Lock()
+
+	// If the session has already exited (pump or waitForExit set the flag),
+	// return a client with its output pre-closed so the caller sees clean
+	// EOF. Do not add to s.clients — nothing will ever drive it.
+	if s.exited {
+		c := newClient(s)
+		s.mu.Unlock()
+		c.closeOutput()
+		return c
+	}
 
 	// Snapshot state while holding the lock.
 	altScreen := s.vte.IsAltScreen()
@@ -254,24 +262,13 @@ func (s *Session) WriteInput(c *Client, p []byte) (int, error) {
 	return s.ptmx.Write(p)
 }
 
-// feedVTE runs in its own goroutine and feeds PTY output to the VTE emulator.
-// This is async because the VTE must not stall the pump or client delivery.
-// It also toggles scrollback pause based on alternate screen state.
-func (s *Session) feedVTE() {
-	for data := range s.vteInput {
-		wasAlt := s.vte.IsAltScreen()
-		s.vte.Write(data) //nolint:errcheck
-		isAlt := s.vte.IsAltScreen()
-		if wasAlt != isAlt {
-			s.scrollback.SetPaused(isAlt)
-		}
-	}
-}
-
 // drainVTE continuously reads from the VTE's internal response pipe. The VTE
 // generates responses for terminal queries (DA, DSR, cursor position, etc.).
 // If this pipe isn't drained, Write() blocks when the buffer fills up.
+// drainVTE closes drainDone when it exits; waitForExit uses this as a barrier
+// before calling vte.Close() to prevent racing on the emulator's internal state.
 func (s *Session) drainVTE() {
+	defer close(s.drainDone)
 	buf := make([]byte, 1024)
 	for {
 		if _, err := s.vte.Read(buf); err != nil {
@@ -280,7 +277,14 @@ func (s *Session) drainVTE() {
 	}
 }
 
-// pump reads PTY output and delivers it to all attached clients.
+// pump reads PTY output, feeds it into the VTE emulator under s.mu, and
+// fans out to all attached clients. On PTY read error (shell exit or
+// ptmx.Close from waitForExit), it sets s.exited = true atomically with
+// the final client snapshot and closes every client's output channel.
+// Setting s.exited inside the error-path critical section is what makes
+// Attach's s.exited guard race-free: any Attach that holds s.mu after
+// pump's error path has run sees the flag; any that ran before is
+// included in pump's snapshot.
 func (s *Session) pump() {
 	defer close(s.pumpDone)
 	buf := make([]byte, 32*1024)
@@ -290,21 +294,11 @@ func (s *Session) pump() {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 
-			// Update scrollback under lock, snapshot client list, then
-			// deliver outside the lock to avoid deadlock with WriteInput.
 			s.mu.Lock()
-			s.scrollback.Write(data)
-			clients := make([]*Client, len(s.clients))
-			copy(clients, s.clients)
+			s.vte.Write(data) //nolint:errcheck
+			s.scrollback.Write(data) // removed in Task 5 (C1)
+			clients := append([]*Client(nil), s.clients...)
 			s.mu.Unlock()
-
-			// Feed VTE asynchronously. Use select to avoid panic if the
-			// channel is closed during session exit.
-			select {
-			case s.vteInput <- data:
-			default:
-				slog.Warn("VTE input channel full, dropping data", "session", s.id, "bytes", len(data))
-			}
 
 			for _, c := range clients {
 				c.deliver(data)
@@ -312,8 +306,8 @@ func (s *Session) pump() {
 		}
 		if err != nil {
 			s.mu.Lock()
-			clients := make([]*Client, len(s.clients))
-			copy(clients, s.clients)
+			s.exited = true
+			clients := append([]*Client(nil), s.clients...)
 			s.mu.Unlock()
 
 			for _, c := range clients {
@@ -324,8 +318,11 @@ func (s *Session) pump() {
 	}
 }
 
-// waitForExit waits for the shell process to exit and marks the session as a
-// tombstone. If no clients are attached, starts the expiry timer.
+// waitForExit waits for the shell process to exit, tears down the PTY and
+// VTE in an order that avoids racing pump's final write, and records exit
+// metadata. s.exited is set by pump in its error-path critical section;
+// this function only records exitCode/exitedAt and decides whether to
+// start the tombstone timer.
 func (s *Session) waitForExit() {
 	exitCode := 0
 	if err := s.cmd.Wait(); err != nil {
@@ -333,13 +330,24 @@ func (s *Session) waitForExit() {
 			exitCode = exitErr.ExitCode()
 		}
 	}
+
+	// Close the PTY; unblocks pump's Read if it wasn't already EOF.
 	s.ptmx.Close() //nolint:errcheck
-	<-s.pumpDone   // wait for pump to stop reading before closing vteInput
-	close(s.vteInput)
-	s.vte.Close() // unblock drainVTE goroutine //nolint:errcheck
+
+	// Wait for pump to finish its last vte.Write before closing the VTE.
+	// Required: closing SafeEmulator while pump is mid-Write races on
+	// the emulator's internal state (-race flags it).
+	<-s.pumpDone
+
+	// Close the VTE; this closes the internal pipe, unblocking drainVTE's
+	// vte.Read and allowing it to exit.
+	s.vte.Close() //nolint:errcheck
+
+	// Wait for drainVTE to exit fully before proceeding. This ensures no
+	// goroutine is accessing the emulator after we return.
+	<-s.drainDone
 
 	s.mu.Lock()
-	s.exited = true
 	s.exitCode = exitCode
 	s.exitedAt = time.Now()
 	hasClients := len(s.clients) > 0

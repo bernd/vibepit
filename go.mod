@@ -83,3 +83,5 @@ require (
 	golang.org/x/tools v0.43.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )
+
+replace github.com/unixshells/vt-go v0.2.0 => ./internal/vt-go

@@ -303,3 +303,164 @@ ready:
 	assert.Greater(t, n, 0, "should receive replay output")
 	c2.Close()
 }
+
+// TestSession_VTEDoesNotDropUnderBurst verifies that a large burst of shell
+// output does not cause the VT emulator state to desync from reality.
+// Historically, pump fed the emulator through a 1024-slot async channel and
+// dropped writes with select/default when it filled; replay on reattach
+// then showed stale screen state. This test fails under the old async
+// design and passes with synchronous in-pump vte.Write.
+func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
+	m := testManager(50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	c := s.Attach(80, 24)
+
+	// Burst 2000 numbered lines through the shell. The completion marker
+	// uses printf with split strings to avoid the PTY line-discipline
+	// echo matching it (the echo shows the raw command text, which has
+	// "BURST_" and "DONE" as separate printf arguments — not the combined
+	// token "BURST_DONE" that only appears in the actual output).
+	_, err = c.Write([]byte(
+		"for i in $(seq 1 2000); do echo line_$i; done; printf '%s%s\\n' BURST_ DONE\n"))
+	require.NoError(t, err)
+
+	// Drain the client until we see the combined marker. The marker only
+	// appears as actual output — never in the command echo — so this
+	// correctly drains until the burst is complete.
+	buf := make([]byte, 32*1024)
+	deadline := time.After(10 * time.Second)
+	var seen strings.Builder
+	for !strings.Contains(seen.String(), "BURST_DONE") {
+		readDone := make(chan int, 1)
+		go func() {
+			n, _ := c.Read(buf)
+			readDone <- n
+		}()
+		select {
+		case n := <-readDone:
+			seen.WriteString(string(buf[:n]))
+		case <-deadline:
+			t.Fatal("timeout waiting for burst completion")
+		}
+	}
+	// Brief pause to let the VTE process any final buffered output.
+	time.Sleep(50 * time.Millisecond)
+
+	// The VT emulator should have the tail of the burst in its combined
+	// (scrollback + screen) history. Check that a line near the end is
+	// present somewhere — either in scrollback or on the current screen.
+	needle := "line_1995"
+	found := false
+
+	// Check current screen.
+	s.mu.Lock()
+	screen := s.vte.Render()
+	s.mu.Unlock()
+	if strings.Contains(screen, needle) {
+		found = true
+	}
+
+	// Check scrollback cells.
+	if !found {
+		s.mu.Lock()
+		sbLen := s.vte.ScrollbackLen()
+		width := s.vte.Width()
+		for y := 0; y < sbLen && !found; y++ {
+			var line []byte
+			for x := 0; x < width; x++ {
+				cell := s.vte.ScrollbackCellAt(x, y)
+				if cell != nil && cell.Content != "" {
+					line = append(line, cell.Content...)
+				}
+			}
+			if strings.Contains(string(line), needle) {
+				found = true
+			}
+		}
+		s.mu.Unlock()
+	}
+
+	assert.True(t, found,
+		"VT emulator should contain %q somewhere in scrollback or screen "+
+			"after a 2000-line burst; it is missing, which indicates the "+
+			"async vteInput feed dropped data", needle)
+
+	c.Close()
+}
+
+// TestSession_AttachAfterExitNeverHangs is a stress test for the
+// attach-after-exit race. It runs a tight loop that triggers shell exit
+// while concurrently calling Attach, and asserts every returned client
+// reaches EOF within a short timeout. Under the old design (s.exited set
+// only in waitForExit after <-pumpDone), pump could finish its final
+// client snapshot before waitForExit set the flag, leaving a window where
+// Attach added a client whose output was never closed; that client's Read
+// would block until SSH keepalive (~5s). This test would hang under the
+// old design.
+func TestSession_AttachAfterExitNeverHangs(t *testing.T) {
+	const iterations = 200
+	for i := 0; i < iterations; i++ {
+		m := testManager(50)
+		s, err := m.Create(80, 24, nil)
+		require.NoError(t, err)
+
+		// Writer triggers exit as soon as it can.
+		writer := s.Attach(80, 24)
+		go func() {
+			_, _ = writer.Write([]byte("exit\n"))
+		}()
+
+		// Attempt Attach in a tight loop until shell exits. Every
+		// returned client must reach EOF within a second, regardless
+		// of whether it attached before or after pump closed outputs.
+		deadline := time.After(3 * time.Second)
+		for {
+			c := s.Attach(80, 24)
+			readDone := make(chan struct{})
+			go func() {
+				defer close(readDone)
+				buf := make([]byte, 4096)
+				for {
+					_, err := c.Read(buf)
+					if err != nil {
+						return
+					}
+				}
+			}()
+			select {
+			case <-readDone:
+				c.Close()
+			case <-time.After(1 * time.Second):
+				t.Fatalf("iteration %d: Attach returned a client whose "+
+					"Read hung; attach-after-exit race not closed", i)
+			}
+
+			if s.Exited() {
+				// One final Attach *after* exited is observable — must
+				// also see EOF fast.
+				c2 := s.Attach(80, 24)
+				final := make(chan struct{})
+				go func() {
+					defer close(final)
+					buf := make([]byte, 4096)
+					_, _ = c2.Read(buf)
+				}()
+				select {
+				case <-final:
+					c2.Close()
+				case <-time.After(1 * time.Second):
+					t.Fatalf("iteration %d: post-exit Attach hung on Read", i)
+				}
+				break
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("iteration %d: shell did not exit in time", i)
+			default:
+			}
+		}
+		writer.Close()
+	}
+}
