@@ -37,6 +37,14 @@ jobs:
       - name: "Tests"
         run: "make test"
 
+      # Currently disabled: unixshells/vt-go@v0.2.0 has a Read/Close data
+      # race on Emulator.closed (SafeEmulator does not lock Close()) that
+      # -race flags across session/. Re-enable by removing `if: false`
+      # once the upstream patch lands.
+      - name: "Race Tests"
+        if: false
+        run: "make test-race"
+
       - name: "Integration Tests"
         run: "make test-integration"
 

@@ -1,4 +1,4 @@
-.PHONY: build test test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve
+.PHONY: build test test-race test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve
 
 BINARY := vibepit
 VERSION ?= $(shell git describe --tags 2>/dev/null | sed 's/^v//')
@@ -16,6 +16,14 @@ build:
 
 test:
 	go test ./...
+
+# Runs the Go race detector across the packages where vibepit's own
+# concurrency lives. Currently known to fail inside ./session because
+# unixshells/vt-go@v0.2.0 has a Read/Close data race on the Emulator.closed
+# field (SafeEmulator doesn't lock Close()). Run locally to audit your own
+# changes; tolerate the upstream race until the fix lands.
+test-race:
+	CGO_ENABLED=1 go test -race ./session ./sshd ./cmd
 
 test-integration:
 	go test -tags=integration -timeout 60s ./...
