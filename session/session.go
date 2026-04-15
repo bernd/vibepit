@@ -38,7 +38,7 @@ type Session struct {
 	rows       uint16
 
 	pumpDone    chan struct{} // closed when pump goroutine exits; barrier for vte.Close
-	drainDone   chan struct{} // closed by drainVTE when it has exited; barrier for vte.Close
+	drainDone   chan struct{} // closed by drainVTE on exit; awaited after vte.Close so no reader outlives the emulator
 	cleanup     chan struct{}
 	cleanupOnce sync.Once
 }
@@ -123,9 +123,10 @@ func (s *Session) Info() SessionInfo {
 func (s *Session) Attach(cols, rows uint16) *Client {
 	s.mu.Lock()
 
-	// If the session has already exited (pump or waitForExit set the flag),
-	// return a client with its output pre-closed so the caller sees clean
-	// EOF. Do not add to s.clients — nothing will ever drive it.
+	// If the session has already exited (pump set the flag in its error-path
+	// critical section), return a client with its output pre-closed so the
+	// caller sees clean EOF. Do not add to s.clients — nothing will ever
+	// drive it.
 	if s.exited {
 		c := newClient(s)
 		s.mu.Unlock()
@@ -265,8 +266,9 @@ func (s *Session) WriteInput(c *Client, p []byte) (int, error) {
 // drainVTE continuously reads from the VTE's internal response pipe. The VTE
 // generates responses for terminal queries (DA, DSR, cursor position, etc.).
 // If this pipe isn't drained, Write() blocks when the buffer fills up.
-// drainVTE closes drainDone when it exits; waitForExit uses this as a barrier
-// before calling vte.Close() to prevent racing on the emulator's internal state.
+// drainVTE closes drainDone when it exits; waitForExit waits on this *after*
+// calling vte.Close(), so no goroutine is still reading the emulator when
+// session teardown returns.
 func (s *Session) drainVTE() {
 	defer close(s.drainDone)
 	buf := make([]byte, 1024)
@@ -296,7 +298,7 @@ func (s *Session) pump() {
 
 			s.mu.Lock()
 			s.vte.Write(data) //nolint:errcheck
-			s.scrollback.Write(data) // removed in Task 5 (C1)
+			s.scrollback.Write(data)
 			clients := append([]*Client(nil), s.clients...)
 			s.mu.Unlock()
 
