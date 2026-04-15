@@ -52,7 +52,7 @@ func TestVT_AltScreenDoesNotPolluteScrollback(t *testing.T) {
 	// Enter alt-screen, write a screen of content, leave alt-screen.
 	_, err = e.Write([]byte("\x1b[?1049h"))
 	require.NoError(t, err)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		_, err = e.Write([]byte("altline\r\n"))
 		require.NoError(t, err)
 	}
