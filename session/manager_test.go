@@ -369,7 +369,7 @@ func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
 		width := s.vte.Width()
 		for y := 0; y < sbLen && !found; y++ {
 			var line []byte
-			for x := 0; x < width; x++ {
+			for x := range width {
 				cell := s.vte.ScrollbackCellAt(x, y)
 				if cell != nil && cell.Content != "" {
 					line = append(line, cell.Content...)
@@ -401,7 +401,7 @@ func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
 // old design.
 func TestSession_AttachAfterExitNeverHangs(t *testing.T) {
 	const iterations = 200
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		m := testManager(50)
 		s, err := m.Create(80, 24, nil)
 		require.NoError(t, err)
