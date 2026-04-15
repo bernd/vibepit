@@ -33,7 +33,6 @@ type Session struct {
 	exitedAt   time.Time
 	detachedAt time.Time
 	vte        *vt.SafeEmulator
-	scrollback *Scrollback
 	cols       uint16
 	rows       uint16
 
@@ -60,18 +59,17 @@ func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Sess
 	}
 
 	s := &Session{
-		id:         id,
-		cmd:        cmd,
-		ptmx:       ptmx,
-		createdAt:  time.Now(),
-		manager:    mgr,
-		vte:        vt.NewSafeEmulator(int(cols), int(rows)),
-		scrollback: NewScrollback(10000),
-		cols:       cols,
-		rows:       rows,
-		pumpDone:   make(chan struct{}),
-		drainDone:  make(chan struct{}),
-		cleanup:    make(chan struct{}),
+		id:        id,
+		cmd:       cmd,
+		ptmx:      ptmx,
+		createdAt: time.Now(),
+		manager:   mgr,
+		vte:       vt.NewSafeEmulator(int(cols), int(rows)),
+		cols:      cols,
+		rows:      rows,
+		pumpDone:  make(chan struct{}),
+		drainDone: make(chan struct{}),
+		cleanup:   make(chan struct{}),
 	}
 
 	go s.pump()
@@ -138,9 +136,8 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 	altScreen := s.vte.IsAltScreen()
 	vteScreen := s.vte.Render()
 	cursorPos := s.vte.CursorPosition()
-	// Render VTE scrollback (only truly off-screen lines) via the
-	// per-cell safe accessor. Our custom Scrollback records all output
-	// lines including on-screen ones, so using it would duplicate content.
+	// Render VTE scrollback (only truly off-screen lines) via the per-cell
+	// safe accessor.
 	scrollbackData := renderVTEScrollback(s.vte)
 
 	c := newClient(s)
@@ -298,7 +295,6 @@ func (s *Session) pump() {
 
 			s.mu.Lock()
 			s.vte.Write(data) //nolint:errcheck
-			s.scrollback.Write(data)
 			clients := append([]*Client(nil), s.clients...)
 			s.mu.Unlock()
 
