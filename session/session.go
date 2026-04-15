@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	vt "github.com/unixshells/vt-go"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
+	vt "github.com/unixshells/vt-go"
 )
 
 // Session represents a persistent PTY shell session that survives client
@@ -370,32 +372,55 @@ func (s *Session) waitForCleanup() {
 }
 
 // renderVTEScrollback renders the VTE emulator's scrollback buffer (lines
-// that have truly scrolled off the visible screen) to a byte slice. Each
-// line is plain text with a trailing newline. Uses the per-cell safe
-// accessor so it can be called while the VTE is concurrently written to.
+// that have scrolled off the visible screen) as an ANSI byte stream with
+// styles preserved. Uses StyleDiff to emit the minimal SGR transition
+// between cells. Skips wide-character continuation cells (Width == 0) so
+// CJK content aligns correctly. Appends an explicit ResetStyle at the end
+// so the subsequent vte.Render() blob starts with a clean SGR state.
 func renderVTEScrollback(vte *vt.SafeEmulator) []byte {
 	lines := vte.ScrollbackLen()
 	if lines == 0 {
 		return nil
 	}
 	width := vte.Width()
+
 	var buf bytes.Buffer
-	for y := range lines {
-		lineStart := buf.Len()
-		for x := range width {
+	var prev uv.Style
+	for y := 0; y < lines; y++ {
+		// Find last non-blank column so we drop right-edge fill.
+		lastCol := -1
+		for x := width - 1; x >= 0; x-- {
+			c := vte.ScrollbackCellAt(x, y)
+			if c == nil {
+				continue
+			}
+			if c.Width == 0 {
+				continue // continuation cell
+			}
+			if c.Content == "" || c.Content == " " {
+				continue
+			}
+			lastCol = x
+			break
+		}
+		for x := 0; x <= lastCol; x++ {
 			cell := vte.ScrollbackCellAt(x, y)
-			if cell != nil && cell.Content != "" {
-				buf.WriteString(cell.Content)
-			} else {
+			if cell == nil || cell.Width == 0 {
+				continue
+			}
+			if !cell.Style.Equal(&prev) {
+				buf.WriteString(uv.StyleDiff(&prev, &cell.Style))
+				prev = cell.Style
+			}
+			if cell.Content == "" {
 				buf.WriteByte(' ')
+			} else {
+				buf.WriteString(cell.Content)
 			}
 		}
-		// Trim trailing spaces from each line.
-		line := buf.Bytes()[lineStart:]
-		trimmed := bytes.TrimRight(line, " ")
-		buf.Truncate(lineStart + len(trimmed))
 		buf.WriteByte('\n')
 	}
+	buf.WriteString(ansi.ResetStyle)
 	return buf.Bytes()
 }
 

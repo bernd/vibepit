@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	vt "github.com/unixshells/vt-go"
 )
 
 // testManager returns a Manager that uses /bin/sh instead of /bin/bash --login
@@ -463,4 +464,81 @@ func TestSession_AttachAfterExitNeverHangs(t *testing.T) {
 		}
 		writer.Close()
 	}
+}
+
+// TestRenderVTEScrollback_PreservesStyle writes red-bold text that scrolls
+// off-screen, then asserts the rendered scrollback contains SGR escape
+// sequences (so the content is not monochrome) and the expected characters.
+func TestRenderVTEScrollback_PreservesStyle(t *testing.T) {
+	vte := vt.NewSafeEmulator(20, 3)
+	defer vte.Close() //nolint:errcheck
+
+	// Write 5 lines of red-bold text. With a 3-row screen, 2 lines
+	// scroll off into scrollback.
+	for i := range 5 {
+		line := fmt.Sprintf("\x1b[1;31mhello%d\x1b[0m\r\n", i)
+		_, err := vte.Write([]byte(line))
+		require.NoError(t, err)
+	}
+
+	out := renderVTEScrollback(vte)
+	s := string(out)
+
+	assert.Contains(t, s, "\x1b[", "styled scrollback should contain SGR sequences")
+	assert.Contains(t, s, "hello0", "content should be preserved")
+	assert.Contains(t, s, "hello1", "content should be preserved")
+}
+
+// TestRenderVTEScrollback_WideCharacters writes a 2-column CJK character
+// followed by ASCII, scrolls it off, and asserts the rendered scrollback
+// emits the wide character exactly once without a trailing stray space
+// (which would happen if the continuation cell with Width==0 were emitted
+// as a space).
+func TestRenderVTEScrollback_WideCharacters(t *testing.T) {
+	vte := vt.NewSafeEmulator(10, 2)
+	defer vte.Close() //nolint:errcheck
+
+	// "あ" is 3 UTF-8 bytes, displays in 2 columns. Followed by "BC".
+	_, err := vte.Write([]byte("あBC\r\n"))
+	require.NoError(t, err)
+	// Push line into scrollback with extra output.
+	_, err = vte.Write([]byte("x\r\ny\r\nz\r\n"))
+	require.NoError(t, err)
+
+	out := renderVTEScrollback(vte)
+	s := string(out)
+
+	// Strip SGR sequences for the content check.
+	clean := stripSGR(s)
+	assert.Contains(t, clean, "あBC",
+		"wide char must be followed immediately by BC without a stray "+
+			"space from its continuation cell. Got (stripped): %q", clean)
+
+	// And "あ" should appear exactly once — emitting it twice would
+	// happen if we didn't skip the continuation cell correctly.
+	assert.Equal(t, 1, strings.Count(clean, "あ"),
+		"wide char should appear exactly once; got (stripped): %q", clean)
+}
+
+// stripSGR removes CSI SGR sequences (ESC[...m) from s for text-only
+// content assertions. Does not try to be a full ANSI parser.
+func stripSGR(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			// Skip until final byte 'm' (or end of string).
+			j := i + 2
+			for j < len(s) && s[j] != 'm' {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+		out.WriteByte(s[i])
+		i++
+	}
+	return out.String()
 }
