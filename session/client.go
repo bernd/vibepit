@@ -14,7 +14,12 @@ type Client struct {
 	done      chan struct{}
 	pending   []byte // unread remainder from the last channel receive
 	closeOnce sync.Once
-	outOnce   sync.Once
+
+	// outputMu guards output channel send/close to prevent send-on-closed
+	// races between deliver (replay path in Attach) and closeOutput (pump
+	// error path). The mutex is only contended at session exit time.
+	outputMu     sync.Mutex
+	outputClosed bool
 }
 
 func newClient(s *Session) *Client {
@@ -74,19 +79,30 @@ func (c *Client) Close() error {
 // (slow consumer), the client is disconnected to prevent stalling the pump
 // and blocking all other attached clients.
 func (c *Client) deliver(data []byte) {
+	c.outputMu.Lock()
+	if c.outputClosed {
+		c.outputMu.Unlock()
+		return
+	}
 	select {
 	case c.output <- data:
+		c.outputMu.Unlock()
 		return
 	case <-c.done:
+		c.outputMu.Unlock()
 		return
 	default:
 	}
+	c.outputMu.Unlock()
 	// Channel full — slow consumer. Disconnect to protect the pump.
 	c.Close() //nolint:errcheck
 }
 
 func (c *Client) closeOutput() {
-	c.outOnce.Do(func() {
+	c.outputMu.Lock()
+	defer c.outputMu.Unlock()
+	if !c.outputClosed {
+		c.outputClosed = true
 		close(c.output)
-	})
+	}
 }
