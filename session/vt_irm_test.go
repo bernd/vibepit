@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/charmbracelet/x/vt"
+	vt "github.com/unixshells/vt-go"
 )
 
 // TestVT_InsertReplaceMode verifies the VT emulator implements IRM

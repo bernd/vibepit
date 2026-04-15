@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/charmbracelet/x/vt"
+	vt "github.com/unixshells/vt-go"
 	"github.com/creack/pty"
 )
 
