@@ -386,7 +386,7 @@ func renderVTEScrollback(vte *vt.SafeEmulator) []byte {
 
 	var buf bytes.Buffer
 	var prev uv.Style
-	for y := 0; y < lines; y++ {
+	for y := range lines {
 		// Find last non-blank column so we drop right-edge fill.
 		lastCol := -1
 		for x := width - 1; x >= 0; x-- {
