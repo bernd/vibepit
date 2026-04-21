@@ -373,10 +373,14 @@ func (s *Session) waitForCleanup() {
 
 // renderVTEScrollback renders the VTE emulator's scrollback buffer (lines
 // that have scrolled off the visible screen) as an ANSI byte stream with
-// styles preserved. Uses StyleDiff to emit the minimal SGR transition
-// between cells. Skips wide-character continuation cells (Width == 0) so
-// CJK content aligns correctly. Appends an explicit ResetStyle at the end
-// so the subsequent vte.Render() blob starts with a clean SGR state.
+// styles preserved. Uses StyleDiff to emit SGR transitions between cells.
+// Skips wide-character continuation cells (Width == 0) so CJK content
+// aligns correctly. Styled spaces are preserved because they are visible
+// (for example, background-colored separators), while default-style right
+// edge fill is trimmed. The style is reset at each line boundary so trimmed
+// trailing cells can't leak SGR state into the next line. An explicit final
+// ResetStyle keeps the subsequent vte.Render() blob starting from a clean
+// style state.
 func renderVTEScrollback(vte *vt.SafeEmulator) []byte {
 	lines := vte.ScrollbackLen()
 	if lines == 0 {
@@ -387,21 +391,15 @@ func renderVTEScrollback(vte *vt.SafeEmulator) []byte {
 	var buf bytes.Buffer
 	var prev uv.Style
 	for y := range lines {
-		// Find last non-blank column so we drop right-edge fill.
+		// Find the last significant column so we preserve styled spaces but
+		// still drop default-style right-edge fill.
 		lastCol := -1
 		for x := width - 1; x >= 0; x-- {
 			c := vte.ScrollbackCellAt(x, y)
-			if c == nil {
-				continue
+			if scrollbackCellSignificant(c) {
+				lastCol = x
+				break
 			}
-			if c.Width == 0 {
-				continue // continuation cell
-			}
-			if c.Content == "" || c.Content == " " {
-				continue
-			}
-			lastCol = x
-			break
 		}
 		for x := 0; x <= lastCol; x++ {
 			cell := vte.ScrollbackCellAt(x, y)
@@ -418,10 +416,24 @@ func renderVTEScrollback(vte *vt.SafeEmulator) []byte {
 				buf.WriteString(cell.Content)
 			}
 		}
+		if !prev.IsZero() {
+			buf.WriteString(ansi.ResetStyle)
+			prev = uv.Style{}
+		}
 		buf.WriteByte('\n')
 	}
 	buf.WriteString(ansi.ResetStyle)
 	return buf.Bytes()
+}
+
+func scrollbackCellSignificant(cell *uv.Cell) bool {
+	if cell == nil || cell.Width == 0 {
+		return false
+	}
+	if cell.Content != "" && cell.Content != " " {
+		return true
+	}
+	return !cell.Style.IsZero()
 }
 
 // MergeEnv returns the container's environment with session-provided vars

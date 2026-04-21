@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	vt "github.com/unixshells/vt-go"
@@ -487,6 +488,39 @@ func TestRenderVTEScrollback_PreservesStyle(t *testing.T) {
 	assert.Contains(t, s, "\x1b[", "styled scrollback should contain SGR sequences")
 	assert.Contains(t, s, "hello0", "content should be preserved")
 	assert.Contains(t, s, "hello1", "content should be preserved")
+}
+
+// TestRenderVTEScrollback_PreservesStyledSpaces verifies that a scrollback
+// line made entirely of styled spaces is preserved instead of being trimmed
+// away as blank right-edge fill.
+func TestRenderVTEScrollback_PreservesStyledSpaces(t *testing.T) {
+	vte := vt.NewSafeEmulator(5, 1)
+	defer vte.Close() //nolint:errcheck
+
+	_, err := vte.Write([]byte("\x1b[41m     \x1b[0m\r\nX\r\n"))
+	require.NoError(t, err)
+
+	out := string(renderVTEScrollback(vte))
+	clean := stripSGR(out)
+
+	assert.Contains(t, out, "\x1b[", "styled spaces should keep their SGR state")
+	assert.Contains(t, clean, "     \n",
+		"a line of styled spaces should be preserved in replay; got %q", clean)
+}
+
+// TestRenderVTEScrollback_ResetsStyleBetweenLines verifies that a line reset
+// performed before CRLF is not lost when trailing default-style cells are
+// trimmed. Otherwise a following blank line inherits the previous line's style.
+func TestRenderVTEScrollback_ResetsStyleBetweenLines(t *testing.T) {
+	vte := vt.NewSafeEmulator(10, 2)
+	defer vte.Close() //nolint:errcheck
+
+	_, err := vte.Write([]byte("\x1b[31mred\x1b[0m\r\n\r\nplain\r\n"))
+	require.NoError(t, err)
+
+	out := string(renderVTEScrollback(vte))
+	assert.Contains(t, out, "red"+ansi.ResetStyle+"\n\n",
+		"renderer should reset style before a following blank line; got %q", out)
 }
 
 // TestRenderVTEScrollback_WideCharacters writes a 2-column CJK character
