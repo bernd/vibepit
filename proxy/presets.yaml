@@ -25,6 +25,7 @@
     - "code.claude.com:443"
     - "claude.ai:443"
     - "platform.claude.com:443"
+    - "downloads.claude.ai:443"
 
 - name: "openai"
   group: "Infrastructure"
