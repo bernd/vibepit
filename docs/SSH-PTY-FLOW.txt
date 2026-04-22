@@ -1,0 +1,49 @@
+Two diagrams — one per direction — because they're almost independent paths.                                                                                           
+                                                                                                                                                                                        
+  Input: user keystrokes → shell stdin                                                                                                                                                    
+   
+   ┌──────┐    SSH     ┌────────┐   WriteInput()    ┌────────┐     ┌────────┐                                                                                                             
+   │ user │  channel   │ Client │ ──(writer only)─► │  PTY   │ ──► │ shell  │                                                                                                             
+   │ term │ ─────────► │        │  → s.ptmx.Write   │ master │     │ stdin  │                                                                                                             
+   └──────┘            └────────┘                   └────────┘     └────────┘                                                                                                             
+  Only the one Client marked as writer gets to push bytes into the PTY (session.go:256). Non-writer clients are read-only spectators.                                                     
+                                                                                                                                                                                          
+  Output: shell stdout → user terminal (+ VTE side-channel)                                                                                                                               
+                                                                                                                                                                                          
+   ┌────────┐    ┌────────┐     ┌──────────────┐     deliver()     ┌─────────┐  SSH   ┌──────┐   
+   │ shell  │ ─► │  PTY   │ ──► │   pump()     │ ─── fan-out  ───► │ Client₁ │ ─────► │ user │                                                                                            
+   │ stdout │    │ master │     │ ptmx.Read()  │     (N clients)   │ Client₂ │ chan   │ term │                                                                                            
+   └────────┘    └────────┘     └──────┬───────┘                   │  ...    │        └──────┘                                                                                            
+                                       │                           └─────────┘                                                                                                            
+                                       │ under s.mu                                                                                                                                       
+                                       ▼                                                                                                                                                  
+                                ┌─────────────┐   response pipe   ┌──────────┐                   
+                                │ vte.Write() │ ────────────────► │ drainVTE │  (discarded,                                                                                               
+                                │ updates:    │  (DSR/DA/CPR etc) └──────────┘   just a                                                                                                   
+                                │  • screen   │                                   safety valve)                                                                                           
+                                │  • cursor   │                                                                                                                                           
+                                │  • scrollbk │                                                                                                                                           
+                                │  • alt-scr  │                                                                                                                                           
+                                └─────▲───────┘                                                                                                                                           
+                                      │        
+                                      │ snapshot on Attach() / re-attach                                                                                                                  
+                                      │   • renderVTEScrollback()                                                                                                                         
+                                      │   • vte.Render()        (visible screen)                                                                                                          
+                                      │   • vte.CursorPosition()                                                                                                                          
+                                      ▼                                                                                                                                                   
+                                ┌─────────────┐                                                                                                                                           
+                                │ replay blob │  → prepended to the NEW client's                 
+                                │ ESC c +     │    output stream, so their terminal                                                                                                       
+                                │ scrollback +│    is restored across reconnects                                                                                                          
+                                │ screen +    │                                                                                                                                           
+                                │ cursor pos  │                                                                                                                                           
+                                └─────────────┘                                                                                                                                           
+                                                                                                 
+  Two things worth calling out:                                                                                                                                                           
+                                                                                                 
+  1. The VTE is on a side branch of the output pump, not in series. Live clients get the raw PTY bytes unmodified (session.go:304). The VTE is only read on attach to synthesize a replay 
+  (session.go:138-184). So if nobody ever re-attaches, the VTE is basically just absorbing the output stream for nothing — it's the re-attach path that justifies it.
+  2. Terminal queries get answered by the user's real terminal, not the VTE. When an app writes ESC[6n, those bytes flow to both the VTE and to the attached client's SSH channel. The    
+  user's real terminal emulator sees the query in its output stream, responds on its input stream, and the response goes back through SSH → WriteInput → PTY → app stdin. The VTE's own   
+  response goes into drainVTE and is thrown away (session.go:272). That means with no client attached, TUI queries go unanswered — the drain only exists to keep vte.Write from blocking
+  on a full response pipe. 
