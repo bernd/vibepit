@@ -119,9 +119,10 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer session.Close() //nolint:errcheck
 
-	// Command mode — join args with spaces, matching ssh(1) behavior.
-	// The server executes via the user's shell, so the shell handles
-	// parsing. No client-side escaping needed.
+	// Command mode — shell-escape each argument before joining so
+	// spaces, quotes, $VAR, $(cmd), and globs survive the wire as
+	// literals. The server runs the result via `shell -c`, matching
+	// OpenSSH exec semantics.
 	cmdArgs := cmd.Args().Slice()
 	if len(cmdArgs) > 0 {
 		session.Stdout = os.Stdout
@@ -140,7 +141,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 			stdinPipe.Close()            //nolint:errcheck
 		}()
 
-		if err := session.Run(strings.Join(cmdArgs, " ")); err != nil {
+		if err := session.Run(buildRemoteCommand(cmdArgs)); err != nil {
 			if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
 				return &ctr.ExitError{Code: exitErr.ExitStatus()}
 			}
