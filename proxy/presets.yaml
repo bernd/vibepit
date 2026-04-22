@@ -10,6 +10,7 @@
     - "anthropic"
     - "cdn-github"
     - "homebrew"
+    - "mistral"
     - "openai"
     - "vcs-github"
 
@@ -54,6 +55,12 @@
   description: "Amp Endpoints"
   domains:
     - "ampcode.com:443"
+
+- name: "mistral"
+  group: "Infrastructure"
+  description: "Mistral AI services"
+  domains:
+    - "api.mistral.ai:443"
 
 - name: "vcs-github"
   group: "Infrastructure"
