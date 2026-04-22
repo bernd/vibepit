@@ -31,6 +31,7 @@ func TestPresetRegistry(t *testing.T) {
 			"anthropic",
 			"cdn-github",
 			"homebrew",
+			"mistral",
 			"openai",
 			"vcs-github",
 		}, p.Includes)
