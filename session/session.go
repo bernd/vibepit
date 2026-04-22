@@ -163,7 +163,7 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 		// to trigger a full redraw. SIGWINCH only does a partial redraw
 		// in some apps; Ctrl-L is the universal "redraw screen" command.
 		c.deliver([]byte("\033[?1049h\033[2J"))
-		s.ptmx.Write([]byte{0x0c}) //nolint:errcheck // Ctrl-L to PTY
+		s.ptmx.Write([]byte{0x0c}) // Ctrl-L to PTY
 	} else {
 		// Normal mode or non-alt-screen TUI (Claude Code, Codex, shell):
 		// replay scrollback history + VTE screen state + cursor position.
@@ -176,6 +176,7 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 		}
 		replay = append(replay, vteScreen...)
 		if len(vteScreen) > 0 {
+			// CSI cursor-position (ESC[<row>;<col>H) - 1-indexed; cursorPos is 0-indexed.
 			replay = append(replay, fmt.Sprintf("\033[%d;%dH", cursorPos.Y+1, cursorPos.X+1)...)
 		}
 		if len(replay) > 0 {
