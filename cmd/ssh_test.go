@@ -1,9 +1,15 @@
 package cmd
 
 import (
+	"net"
 	"testing"
 
+	"github.com/bernd/vibepit/keygen"
+	"github.com/bernd/vibepit/session"
+	"github.com/bernd/vibepit/sshd"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 func TestBuildRemoteCommand(t *testing.T) {
@@ -76,4 +82,52 @@ func TestBuildRemoteCommand(t *testing.T) {
 			assert.Equal(t, tt.want, buildRemoteCommand(tt.args))
 		})
 	}
+}
+
+// TestSSHRoundTripPreservesLiteralArguments boots a real sshd.Server on a
+// loopback listener, runs a command built by buildRemoteCommand, and
+// asserts that shell metacharacters ($HOME, $(uname), spaces) reach the
+// remote program as literal arguments rather than being expanded or
+// resplit by the remote shell.
+func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
+	hostPriv, _, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close() //nolint:errcheck
+
+	srv, err := sshd.NewServer(sshd.Config{
+		HostKeyPEM:    hostPriv,
+		AuthorizedKey: clientPub,
+		Sessions:      session.NewManager(50),
+	})
+	require.NoError(t, err)
+	go srv.Serve(listener) //nolint:errcheck
+	defer srv.Close()      //nolint:errcheck
+
+	signer, err := gossh.ParsePrivateKey(clientPriv)
+	require.NoError(t, err)
+
+	client, err := gossh.Dial("tcp", listener.Addr().String(), &gossh.ClientConfig{
+		User:            "code",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec
+	})
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	defer sess.Close() //nolint:errcheck
+
+	wireCmd := buildRemoteCommand([]string{
+		"printf", "%s\n", "a b", "$HOME", "$(uname)",
+	})
+
+	output, err := sess.Output(wireCmd)
+	require.NoError(t, err)
+	assert.Equal(t, "a b\n$HOME\n$(uname)\n", string(output))
 }
