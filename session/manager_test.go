@@ -59,13 +59,13 @@ func TestSession_AttachDetach(t *testing.T) {
 
 	info := s.Info()
 	assert.Equal(t, 1, info.ClientCount)
-	assert.Equal(t, "attached", info.Status)
+	assert.Equal(t, Attached, info.Status)
 
 	c1.Close()
 
 	info = s.Info()
 	assert.Equal(t, 0, info.ClientCount)
-	assert.Equal(t, "detached", info.Status)
+	assert.Equal(t, Detached, info.Status)
 }
 
 func TestSession_WriterPromotion(t *testing.T) {
@@ -217,7 +217,7 @@ func TestSession_ShellExit(t *testing.T) {
 				time.Sleep(50 * time.Millisecond)
 				assert.True(t, s.Exited())
 				info := s.Info()
-				assert.Equal(t, "exited", info.Status)
+				assert.Equal(t, Exited, info.Status)
 				c.Close()
 				return
 			}
@@ -285,7 +285,7 @@ func TestSession_ReplayOnAttach(t *testing.T) {
 		}()
 		select {
 		case n := <-readDone:
-			collected.WriteString(string(buf[:n]))
+			collected.Write(buf[:n])
 			if strings.Contains(collected.String(), "hello") {
 				goto ready
 			}
@@ -342,7 +342,7 @@ func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
 		}()
 		select {
 		case n := <-readDone:
-			seen.WriteString(string(buf[:n]))
+			seen.Write(buf[:n])
 		case <-deadline:
 			t.Fatal("timeout waiting for burst completion")
 		}

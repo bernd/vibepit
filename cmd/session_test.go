@@ -17,9 +17,7 @@ func TestSessionBaseDirUsesStateHome(t *testing.T) {
 	xdg.StateHome = "/tmp/test-vibepit-state"
 	t.Cleanup(func() { xdg.StateHome = origStateHome })
 
-	base, err := sessionBaseDir()
-	require.NoError(t, err)
-	assert.Equal(t, "/tmp/test-vibepit-state/vibepit/sessions", base)
+	assert.Equal(t, "/tmp/test-vibepit-state/vibepit/sessions", sessionBaseDir())
 }
 
 func TestWriteSessionCredentials(t *testing.T) {
@@ -88,25 +86,25 @@ func TestWriteSSHCredentials(t *testing.T) {
 	err := WriteSSHCredentials(sessionID, clientPriv, clientPub, hostPriv, hostPub)
 	require.NoError(t, err)
 
-	sessDir, _ := sessionDir(sessionID)
+	sessDir := sessionDir(sessionID)
 
-	data, err := os.ReadFile(filepath.Join(sessDir, "ssh-key"))
+	data, err := os.ReadFile(filepath.Join(sessDir, SSHClientPrivFile))
 	require.NoError(t, err)
 	assert.Equal(t, clientPriv, data)
 
-	info, _ := os.Stat(filepath.Join(sessDir, "ssh-key"))
+	info, _ := os.Stat(filepath.Join(sessDir, SSHClientPrivFile))
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 
-	data, _ = os.ReadFile(filepath.Join(sessDir, "ssh-key.pub"))
+	data, _ = os.ReadFile(filepath.Join(sessDir, SSHClientPubFile))
 	assert.Equal(t, clientPub, data)
 
-	data, _ = os.ReadFile(filepath.Join(sessDir, "host-key"))
+	data, _ = os.ReadFile(filepath.Join(sessDir, SSHHostPrivFile))
 	assert.Equal(t, hostPriv, data)
 
-	info, _ = os.Stat(filepath.Join(sessDir, "host-key"))
+	info, _ = os.Stat(filepath.Join(sessDir, SSHHostPrivFile))
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 
-	data, _ = os.ReadFile(filepath.Join(sessDir, "host-key.pub"))
+	data, _ = os.ReadFile(filepath.Join(sessDir, SSHHostPubFile))
 	assert.Equal(t, hostPub, data)
 }
 

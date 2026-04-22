@@ -105,11 +105,11 @@ func (s *Session) Info() SessionInfo {
 		DetachedAt:  s.detachedAt,
 	}
 	if s.exited {
-		info.Status = "exited"
+		info.Status = Exited
 	} else if len(s.clients) > 0 {
-		info.Status = "attached"
+		info.Status = Attached
 	} else {
-		info.Status = "detached"
+		info.Status = Detached
 	}
 	return info
 }
@@ -163,7 +163,7 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 		// to trigger a full redraw. SIGWINCH only does a partial redraw
 		// in some apps; Ctrl-L is the universal "redraw screen" command.
 		c.deliver([]byte("\033[?1049h\033[2J"))
-		s.ptmx.Write([]byte{0x0c}) //nolint:errcheck // Ctrl-L to PTY
+		s.ptmx.Write([]byte{0x0c}) // Ctrl-L to PTY
 	} else {
 		// Normal mode or non-alt-screen TUI (Claude Code, Codex, shell):
 		// replay scrollback history + VTE screen state + cursor position.
@@ -176,6 +176,7 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 		}
 		replay = append(replay, vteScreen...)
 		if len(vteScreen) > 0 {
+			// CSI cursor-position (ESC[<row>;<col>H) - 1-indexed; cursorPos is 0-indexed.
 			replay = append(replay, fmt.Sprintf("\033[%d;%dH", cursorPos.Y+1, cursorPos.X+1)...)
 		}
 		if len(replay) > 0 {
@@ -438,7 +439,7 @@ func scrollbackCellSignificant(cell *uv.Cell) bool {
 
 // MergeEnv returns the container's environment with session-provided vars
 // overlaid. Filters out vibed-internal config variables
-// (VIBEPIT_SSH_PUBKEY, VIBEPIT_DEFAULT_COMMAND).
+// (VIBEPIT_SSH_PUBKEY).
 func MergeEnv(sessionEnv []string) []string {
 	env := make(map[string]string)
 	for _, e := range os.Environ() {
@@ -453,7 +454,6 @@ func MergeEnv(sessionEnv []string) []string {
 	}
 
 	delete(env, "VIBEPIT_SSH_PUBKEY")
-	delete(env, "VIBEPIT_DEFAULT_COMMAND")
 
 	result := make([]string, 0, len(env))
 	for k, v := range env {

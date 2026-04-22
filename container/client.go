@@ -283,6 +283,24 @@ func (c *Client) SessionContainers(ctx context.Context, sessionID string) ([]Ses
 	return result, nil
 }
 
+// FindProxyContainerID returns the container ID of the proxy for a session.
+func (c *Client) FindProxyContainerID(ctx context.Context, sessionID string) (string, error) {
+	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+		All: true,
+		Filters: filters.NewArgs(
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
+			filters.Arg("label", fmt.Sprintf("%s=%s", LabelRole, RoleProxy)),
+		),
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(containers) == 0 {
+		return "", fmt.Errorf("no proxy container found for session %s", sessionID)
+	}
+	return containers[0].ID, nil
+}
+
 // SessionIDFromContainer inspects a container and returns its session ID label.
 func (c *Client) SessionIDFromContainer(ctx context.Context, containerID string) (string, error) {
 	info, err := c.docker.ContainerInspect(ctx, containerID)
@@ -628,9 +646,8 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 
 	var sessions []ProxySession
 	for _, ctr := range containers {
-		labelPort := ctr.Labels[LabelControlPort]
-		controlPort := labelPort
-		if port, err := c.FindPublishedPort(ctx, ctr.ID, labelPort+"/tcp"); err == nil {
+		controlPort := ctr.Labels[LabelControlPort]
+		if port, err := c.FindPublishedPort(ctx, ctr.ID, controlPort+"/tcp"); err == nil {
 			controlPort = strconv.Itoa(port)
 		}
 		sessions = append(sessions, ProxySession{
@@ -673,7 +690,7 @@ type SandboxContainerConfig struct {
 // CreateSandboxContainer creates the sandboxed development container
 // with proxy environment variables and a read-only root filesystem.
 func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContainerConfig) (string, error) {
-	proxyURL := fmt.Sprintf("http://%s:%d", cfg.ProxyIP, cfg.ProxyPort)
+	proxyURL := fmt.Sprintf("http://%s", net.JoinHostPort(cfg.ProxyIP, strconv.Itoa(cfg.ProxyPort)))
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
 		"LANG=en_US.UTF-8",
@@ -763,7 +780,6 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		containerConfig.Cmd = nil
 		containerConfig.Env = append(containerConfig.Env,
 			fmt.Sprintf("%s=%s", SSHPubKeyEnv, cfg.DaemonAuthorizedKey),
-			"VIBEPIT_DEFAULT_COMMAND=vibed",
 		)
 		hostConfig.Binds = append(hostConfig.Binds,
 			cfg.DaemonBinaryPath+":"+SandboxBinaryPath+":ro",

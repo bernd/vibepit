@@ -14,8 +14,16 @@ import (
 	"github.com/bernd/vibepit/proxy"
 )
 
-func sessionBaseDir() (string, error) {
-	return filepath.Join(xdg.StateHome, config.RuntimeDirName, "sessions"), nil
+// SSH credential filenames stored under the per-session directory.
+const (
+	SSHClientPrivFile = "ssh-key"
+	SSHClientPubFile  = "ssh-key.pub"
+	SSHHostPrivFile   = "host-key"
+	SSHHostPubFile    = "host-key.pub"
+)
+
+func sessionBaseDir() string {
+	return filepath.Join(xdg.StateHome, config.RuntimeDirName, "sessions")
 }
 
 // legacySessionBaseDir returns the pre-migration credential path
@@ -24,21 +32,17 @@ func legacySessionBaseDir() string {
 	return filepath.Join(xdg.RuntimeDir, config.RuntimeDirName)
 }
 
-func sessionDir(sessionID string) (string, error) {
-	base, err := sessionBaseDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(base, sessionID)
+func sessionDir(sessionID string) string {
+	dir := filepath.Join(sessionBaseDir(), sessionID)
 	// Fall back to legacy path for sessions created before the credential
 	// directory migration.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		legacy := filepath.Join(legacySessionBaseDir(), sessionID)
 		if _, err := os.Stat(legacy); err == nil {
-			return legacy, nil
+			return legacy
 		}
 	}
-	return dir, nil
+	return dir
 }
 
 // matchSession reports whether a proxy session matches the given filter string,
@@ -91,21 +95,26 @@ func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
 	}
 }
 
+// ensureSessionDir resolves the session directory, creates it if needed,
+// and forces 0700 permissions (MkdirAll may inherit a broader umask).
+func ensureSessionDir(sessionID string) (string, error) {
+	dir := sessionDir(sessionID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create session dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return "", fmt.Errorf("chmod session dir: %w", err)
+	}
+	return dir, nil
+}
+
 // WriteSessionCredentials persists the client TLS material for a session
 // into $XDG_STATE_HOME/vibepit/sessions/<sessionID>/ so that subcommands
 // launched in separate processes can load them via LoadSessionTLSConfig.
 func WriteSessionCredentials(sessionID string, creds *proxy.MTLSCredentials) (string, error) {
-	dir, err := sessionDir(sessionID)
+	dir, err := ensureSessionDir(sessionID)
 	if err != nil {
 		return "", err
-	}
-
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", fmt.Errorf("create session dir: %w", err)
-	}
-	// MkdirAll may inherit a broader umask; force the exact permission.
-	if err := os.Chmod(dir, 0700); err != nil {
-		return "", fmt.Errorf("chmod session dir: %w", err)
 	}
 
 	files := map[string][]byte{
@@ -126,10 +135,7 @@ func WriteSessionCredentials(sessionID string, creds *proxy.MTLSCredentials) (st
 // LoadSessionTLSConfig reads the PEM files from the session directory and
 // returns a *tls.Config suitable for dialing the filtering proxy as a client.
 func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
-	dir, err := sessionDir(sessionID)
-	if err != nil {
-		return nil, err
-	}
+	dir := sessionDir(sessionID)
 
 	caCert, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	if err != nil {
@@ -165,24 +171,18 @@ func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
 // $XDG_STATE_HOME/vibepit/sessions/<sessionID>/ so that the SSH server
 // and client can load them when establishing a session.
 func WriteSSHCredentials(sessionID string, clientPriv, clientPub, hostPriv, hostPub []byte) error {
-	dir, err := sessionDir(sessionID)
+	dir, err := ensureSessionDir(sessionID)
 	if err != nil {
 		return err
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
-		return fmt.Errorf("chmod session dir: %w", err)
 	}
 	files := map[string]struct {
 		data []byte
 		perm os.FileMode
 	}{
-		"ssh-key":      {clientPriv, 0600},
-		"ssh-key.pub":  {clientPub, 0644},
-		"host-key":     {hostPriv, 0600},
-		"host-key.pub": {hostPub, 0644},
+		SSHClientPrivFile: {clientPriv, 0600},
+		SSHClientPubFile:  {clientPub, 0644},
+		SSHHostPrivFile:   {hostPriv, 0600},
+		SSHHostPubFile:    {hostPub, 0644},
 	}
 	for name, f := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), f.data, f.perm); err != nil {
@@ -195,9 +195,5 @@ func WriteSSHCredentials(sessionID string, clientPriv, clientPub, hostPriv, host
 // CleanupSessionCredentials removes the entire session directory and its
 // contents. Safe to call if the directory does not exist.
 func CleanupSessionCredentials(sessionID string) error {
-	dir, err := sessionDir(sessionID)
-	if err != nil {
-		return err
-	}
-	return os.RemoveAll(dir)
+	return os.RemoveAll(sessionDir(sessionID))
 }
