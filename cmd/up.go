@@ -81,8 +81,8 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("write SSH credentials: %w", err)
 	}
 
-	hostKeyPath := filepath.Join(infra.SessionDir, "host-key")
-	hostPubPath := filepath.Join(infra.SessionDir, "host-key.pub")
+	hostKeyPath := filepath.Join(infra.SessionDir, SSHHostPrivFile)
+	hostPubPath := filepath.Join(infra.SessionDir, SSHHostPubFile)
 
 	tui.Status("Creating", "sandbox container in %s", projectRoot)
 	sandboxCfg := infra.baseSandboxConfig(projectRoot, u)

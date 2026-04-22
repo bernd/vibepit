@@ -29,7 +29,7 @@ func TestControlAPI(t *testing.T) {
 	api := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist)
 
 	t.Run("GET /logs returns entries", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/logs", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logs", nil)
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -40,7 +40,7 @@ func TestControlAPI(t *testing.T) {
 	})
 
 	t.Run("GET /stats returns per-domain counts", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/stats", nil)
+		req := httptest.NewRequest(http.MethodGet, "/stats", nil)
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -51,14 +51,14 @@ func TestControlAPI(t *testing.T) {
 	})
 
 	t.Run("GET /config returns merged config", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/config", nil)
+		req := httptest.NewRequest(http.MethodGet, "/config", nil)
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
 	t.Run("GET /unknown returns 404", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/unknown", nil)
+		req := httptest.NewRequest(http.MethodGet, "/unknown", nil)
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusNotFound, w.Code)
@@ -66,7 +66,7 @@ func TestControlAPI(t *testing.T) {
 
 	t.Run("POST /allow-http adds entries to allowlist", func(t *testing.T) {
 		body := `{"entries": ["bun.sh:443", "esm.sh:*"]}`
-		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/allow-http", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -84,7 +84,7 @@ func TestControlAPI(t *testing.T) {
 
 	t.Run("POST /allow-http with empty entries returns 400", func(t *testing.T) {
 		body := `{"entries": []}`
-		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/allow-http", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -92,7 +92,7 @@ func TestControlAPI(t *testing.T) {
 	})
 
 	t.Run("POST /allow-http with invalid JSON returns 400", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader("not json"))
+		req := httptest.NewRequest(http.MethodPost, "/allow-http", strings.NewReader("not json"))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -101,7 +101,7 @@ func TestControlAPI(t *testing.T) {
 
 	t.Run("POST /allow-http with malformed entry returns 400", func(t *testing.T) {
 		body := `{"entries": ["github.com"]}`
-		req := httptest.NewRequest("POST", "/allow-http", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/allow-http", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -111,7 +111,7 @@ func TestControlAPI(t *testing.T) {
 
 	t.Run("POST /allow-dns adds entries to DNS allowlist", func(t *testing.T) {
 		body := `{"entries": ["internal.example.com", "*.svc.local"]}`
-		req := httptest.NewRequest("POST", "/allow-dns", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/allow-dns", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -127,7 +127,7 @@ func TestControlAPI(t *testing.T) {
 
 	t.Run("POST /allow-dns with malformed entry returns 400", func(t *testing.T) {
 		body := `{"entries": ["github.com:443"]}`
-		req := httptest.NewRequest("POST", "/allow-dns", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/allow-dns", strings.NewReader(body))
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 
@@ -136,7 +136,7 @@ func TestControlAPI(t *testing.T) {
 	})
 
 	t.Run("GET /logs with nil URL returns all entries", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/logs", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logs", nil)
 		req.URL = nil
 		w := httptest.NewRecorder()
 		api.handleLogs(w, req)
@@ -162,7 +162,7 @@ func TestControlAPIPanicRecovery(t *testing.T) {
 	})
 
 	t.Run("httptest recorder", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/panic", nil)
+		req := httptest.NewRequest(http.MethodGet, "/panic", nil)
 		w := httptest.NewRecorder()
 
 		assert.NotPanics(t, func() {

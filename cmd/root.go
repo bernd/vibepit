@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"github.com/bernd/vibepit/config"
@@ -23,7 +22,7 @@ func RootCommand() *cli.Command {
 		Usage:           "Run agents in isolated container sandboxes",
 		Description:     "I pity the vibes.",
 		HideHelpCommand: true,
-		DefaultCommand:  cmp.Or(os.Getenv("VIBEPIT_DEFAULT_COMMAND"), "run"),
+		DefaultCommand:  "run",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  debugFlag,

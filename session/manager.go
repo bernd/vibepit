@@ -6,12 +6,20 @@ import (
 	"time"
 )
 
+type Status string
+
+const (
+	Attached Status = "attached"
+	Detached Status = "detached"
+	Exited   Status = "exited"
+)
+
 // SessionInfo holds a snapshot of session state for display purposes.
 type SessionInfo struct {
 	ID          string
 	Command     string
 	ClientCount int
-	Status      string // "attached", "detached", "exited"
+	Status      Status
 	ExitCode    int
 	CreatedAt   time.Time
 	ExitedAt    time.Time

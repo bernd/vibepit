@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -91,7 +92,10 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	// container's own value so the TUI can detect TrueColor support.
 	sshEnv := sess.Environ()
 	sshEnv = append(sshEnv, fmt.Sprintf("TERM=%s", ptyReq.Term))
-	if !hasEnvPrefix(sshEnv, "COLORTERM=") {
+	hasColorterm := slices.ContainsFunc(sshEnv, func(e string) bool {
+		return strings.HasPrefix(e, "COLORTERM=")
+	})
+	if !hasColorterm {
 		if ct := os.Getenv("COLORTERM"); ct != "" {
 			sshEnv = append(sshEnv, "COLORTERM="+ct)
 		}
@@ -102,7 +106,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	// Only detached sessions are relevant for the selector.
 	var detached []session.SessionInfo
 	for _, info := range allSessions {
-		if info.Status == "detached" {
+		if info.Status == session.Detached {
 			detached = append(detached, info)
 		}
 	}
@@ -294,16 +298,6 @@ func handleExecSession(sess charmssh.Session) {
 		return
 	}
 	sess.Exit(0) //nolint:errcheck
-}
-
-// hasEnvPrefix reports whether any entry in env starts with prefix.
-func hasEnvPrefix(env []string, prefix string) bool {
-	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // userShell returns the current user's login shell, falling back to /bin/sh.

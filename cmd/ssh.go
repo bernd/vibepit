@@ -19,19 +19,6 @@ import (
 	"golang.org/x/term"
 )
 
-func findProxyForSession(ctx context.Context, client *ctr.Client, sessionID string) (string, error) {
-	containers, err := client.SessionContainers(ctx, sessionID)
-	if err != nil {
-		return "", err
-	}
-	for _, c := range containers {
-		if c.Role == ctr.RoleProxy {
-			return c.ID, nil
-		}
-	}
-	return "", fmt.Errorf("no proxy container found for session %s", sessionID)
-}
-
 func SSHCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "ssh",
@@ -72,7 +59,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// SSH port is published on the proxy container (forwarded to sandbox).
-	proxyID, err := findProxyForSession(ctx, client, sandbox.SessionID)
+	proxyID, err := client.FindProxyContainerID(ctx, sandbox.SessionID)
 	if err != nil {
 		return err
 	}
@@ -81,15 +68,12 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("find SSH port: %w", err)
 	}
 
-	sessDir, err := sessionDir(sandbox.SessionID)
-	if err != nil {
-		return err
-	}
-	privateKey, err := os.ReadFile(filepath.Join(sessDir, "ssh-key"))
+	sessDir := sessionDir(sandbox.SessionID)
+	privateKey, err := os.ReadFile(filepath.Join(sessDir, SSHClientPrivFile))
 	if err != nil {
 		return fmt.Errorf("read ssh key: %w (credentials missing — run 'vibepit down && vibepit up')", err)
 	}
-	hostPubKey, err := os.ReadFile(filepath.Join(sessDir, "host-key.pub"))
+	hostPubKey, err := os.ReadFile(filepath.Join(sessDir, SSHHostPubFile))
 	if err != nil {
 		return fmt.Errorf("read host key: %w", err)
 	}

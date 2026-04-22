@@ -88,7 +88,7 @@ func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, proj
 	// Show ports published on the proxy container.
 	sshAddr := "N/A"
 	apiAddr := "N/A"
-	proxyID, proxyErr := findProxyForSession(ctx, client, sessionID)
+	proxyID, proxyErr := client.FindProxyContainerID(ctx, sessionID)
 	if proxyErr == nil {
 		if port, err := client.FindControlPort(ctx, proxyID); err == nil {
 			apiAddr = fmt.Sprintf("127.0.0.1:%d", port)
