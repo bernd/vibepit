@@ -13,6 +13,7 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/sshd"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -197,4 +198,21 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	}()
 
 	return session.Wait()
+}
+
+// buildRemoteCommand turns an argument vector into a single shell-safe
+// command line for the remote side's "shell -c" invocation. Each argument
+// is shell-escaped so metacharacters (spaces, quotes, $, globs) survive
+// the round trip as literals instead of being re-parsed by the remote
+// shell. Matches the contract documented on the server side in
+// sshd.handleExecSession.
+func buildRemoteCommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	escaped := make([]string, len(args))
+	for i, a := range args {
+		escaped[i] = sshd.ShellEscape(a)
+	}
+	return strings.Join(escaped, " ")
 }
