@@ -34,6 +34,11 @@ type Manager struct {
 	limit         int
 	stateFilePath string
 
+	// stateFileMu serializes state-file snapshot+write so concurrent
+	// writers can't race on the temp file or let a stale snapshot
+	// overwrite a fresh one via the rename.
+	stateFileMu sync.Mutex
+
 	// Command is the shell command and arguments used for new sessions.
 	// Defaults to ["/bin/bash", "--login"] when empty.
 	Command []string

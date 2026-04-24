@@ -90,16 +90,12 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 			displayDockerHost(client.debug, cli)
 			client.docker = cli
 			return client, nil
-		} else {
-			if client.debug {
-				tui.Debug("Could not ping Docker: %v", pingErr)
-			}
+		} else if client.debug {
+			tui.Debug("Could not ping Docker: %v", pingErr)
 		}
 		cli.Close()
-	} else {
-		if client.debug {
-			tui.Debug("Could not connect to Docker: %s", err)
-		}
+	} else if client.debug {
+		tui.Debug("Could not connect to Docker: %s", err)
 	}
 
 	// Then fall back to manual socket detection.

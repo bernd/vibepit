@@ -114,7 +114,7 @@ func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
 	client, err := gossh.Dial("tcp", listener.Addr().String(), &gossh.ClientConfig{
 		User:            "code",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	require.NoError(t, err)
 	defer client.Close() //nolint:errcheck

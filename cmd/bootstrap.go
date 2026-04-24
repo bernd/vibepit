@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
 
@@ -372,7 +373,7 @@ func (infra *sessionInfra) baseSandboxConfig(projectRoot string, u *userInfo) ct
 
 // runCleanups executes cleanup functions in reverse order.
 func runCleanups(cleanups []func()) {
-	for i := len(cleanups) - 1; i >= 0; i-- {
-		cleanups[i]()
+	for _, cleanup := range slices.Backward(cleanups) {
+		cleanup()
 	}
 }

@@ -55,7 +55,7 @@ func VibedAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("create ssh server: %w", err)
 	}
 
-	listener, err := net.Listen("tcp", "0.0.0.0:2222")
+	listener, err := net.Listen("tcp", "0.0.0.0:2222") //nolint:gosec // Intentionally listening on all interfaces.
 	if err != nil {
 		srv.Close() //nolint:errcheck
 		return fmt.Errorf("listen: %w", err)

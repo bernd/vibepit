@@ -57,7 +57,7 @@ func writeProjectConfig(path string, presets []string) error {
 // preserving existing allow-http and allow-dns entries. When allowHTTP and allowDNS
 // are nil, commented-out placeholder sections are written instead.
 func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []string, allowDNS []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 
@@ -73,7 +73,7 @@ func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []s
 		"allow-dns", allowDNS,
 		[]string{"internal.corp.example.com"})
 
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return os.WriteFile(path, []byte(sb.String()), 0o600)
 }
 
 // writeConfigHeader writes the shared file header comment block.
@@ -247,5 +247,5 @@ func appendAllowEntries(projectConfigPath, sectionKey string, entries []string) 
 		}
 	}
 
-	return os.WriteFile(projectConfigPath, []byte(sb.String()), 0o644)
+	return os.WriteFile(projectConfigPath, []byte(sb.String()), 0o600)
 }

@@ -95,15 +95,11 @@ func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
 	}
 }
 
-// ensureSessionDir resolves the session directory, creates it if needed,
-// and forces 0700 permissions (MkdirAll may inherit a broader umask).
+// ensureSessionDir resolves the session directory, creates it if needed.
 func ensureSessionDir(sessionID string) (string, error) {
 	dir := sessionDir(sessionID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create session dir: %w", err)
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
-		return "", fmt.Errorf("chmod session dir: %w", err)
 	}
 	return dir, nil
 }

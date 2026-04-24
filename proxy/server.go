@@ -4,17 +4,24 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"time"
 )
 
 const (
 	DefaultUpstreamDNS = "9.9.9.9:53"
 	DefaultDNSPort     = 53
 	LogBufferCapacity  = 10000
+
+	httpProxyReadHeaderTimeout = 10 * time.Second
+	httpProxyIdleTimeout       = 2 * time.Minute
+	controlAPIReadTimeout      = 15 * time.Second
+	controlAPIWriteTimeout     = 30 * time.Second
 )
 
 // ProxyConfig is the JSON config file passed to the proxy container.
@@ -82,6 +89,20 @@ func (s *Server) Run(ctx context.Context) error {
 	proxyAddr := fmt.Sprintf(":%d", s.config.ProxyPort)
 	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
 	dnsAddr := fmt.Sprintf(":%d", s.dnsPort())
+	proxyServer := &http.Server{
+		Addr:              proxyAddr,
+		Handler:           httpProxy.Handler(),
+		ReadHeaderTimeout: httpProxyReadHeaderTimeout,
+		IdleTimeout:       httpProxyIdleTimeout,
+	}
+	controlServer := &http.Server{
+		Addr:              controlAddr,
+		Handler:           controlAPI,
+		ReadHeaderTimeout: httpProxyReadHeaderTimeout,
+		ReadTimeout:       controlAPIReadTimeout,
+		WriteTimeout:      controlAPIWriteTimeout,
+		IdleTimeout:       httpProxyIdleTimeout,
+	}
 
 	services := 3
 	if s.config.SSHForwardAddr != "" {
@@ -91,7 +112,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	go func() {
 		fmt.Printf("proxy: HTTP proxy listening on %s\n", proxyAddr)
-		errCh <- http.ListenAndServe(proxyAddr, httpProxy.Handler())
+		if err := proxyServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
 	}()
 
 	go func() {
@@ -111,7 +134,9 @@ func (s *Server) Run(ctx context.Context) error {
 			errCh <- err
 			return
 		}
-		errCh <- http.Serve(ln, controlAPI)
+		if err := controlServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
 	}()
 
 	if s.config.SSHForwardAddr != "" {
@@ -124,6 +149,10 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		proxyServer.Shutdown(shutdownCtx)   //nolint:errcheck
+		controlServer.Shutdown(shutdownCtx) //nolint:errcheck
 		return ctx.Err()
 	}
 }

@@ -15,7 +15,7 @@ func main() {
 	app := cmd.RootCommand()
 
 	// Force the vibed subcommand when the app is started as "vibed"
-	args := os.Args[:]
+	args := os.Args
 	self, err := filepath.Abs(args[0])
 	if err != nil {
 		tui.Error("%v", err)

@@ -2,7 +2,8 @@
 version: "2"
 
 issues:
-  exclude: []
+  max-issues-per-linter: 0 # Show all
+  max-same-issues: 0 # Show all
 
 linters:
   # We enable all linters and disable the ones we don't want. That way we
@@ -16,7 +17,6 @@ linters:
     - "exhaustive"
     - "forcetypeassert"
     - "goconst"
-    - "gocritic"
     - "godoclint"
     - "godot"
     - "gosec"
@@ -47,6 +47,7 @@ linters:
     - "funlen"
     - "gocyclo"
     - "gocognit"
+    - "gomodguard" # Deprecated
     - "goprintffuncname"
     - "gosmopolitan"
     - "mnd"
@@ -61,6 +62,14 @@ linters:
     - "wsl"
     - "wsl_v5"
 
+  exclusions:
+    rules:
+      - path: "_test\\.go"
+        linters:
+          - "forcetypeassert"
+          - "goconst"
+          - "gosec"
+
   settings:
     depguard:
       rules:
@@ -68,6 +77,13 @@ linters:
           deny:
             - pkg: "github.com/pkg/errors"
               desc: "Should be replaced by standard lib errors package"
+
+    gocritic:
+      disabled-checks:
+        - "ifElseChain"
+    gosec:
+      excludes:
+        - "G104" # Errors unhandled
 
     lll:
       line-length: 150
