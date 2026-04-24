@@ -240,10 +240,15 @@ func (s *Session) Detach(c *Client) {
 }
 
 // Resize changes the PTY dimensions. Only the writer client may resize.
+// Resizes that don't change the dimensions are dropped to avoid redundant
+// ioctls and VTE allocations from a chatty client.
 func (s *Session) Resize(c *Client, cols, rows uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.writer != c {
+		return
+	}
+	if cols == s.cols && rows == s.rows {
 		return
 	}
 	pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}) //nolint:errcheck

@@ -33,6 +33,29 @@ type Server struct {
 	sessions *session.Manager
 }
 
+// keepaliveRequestType is the SSH global request name used by both the PTY
+// and exec keepalive paths. It matches the OpenSSH client/server convention.
+const keepaliveRequestType = "keepalive@openssh.com"
+
+// Connection timing constants. Both keepalive intervals must stay safely
+// below idleConnectionTimeout so silent active sessions keep the
+// connection's deadline refreshed; the timeout itself closes stalled
+// handshakes to prevent a local DoS via leaked goroutines/fds.
+const (
+	idleConnectionTimeout = 2 * time.Minute
+	execKeepaliveInterval = 30 * time.Second
+)
+
+// PTY size bounds. SSH clients can request arbitrary uint32 dimensions, but
+// the VTE buffer allocates proportional to width*height, so unclamped values
+// let an authenticated peer force large allocations.
+const (
+	defaultPTYCols = 80
+	defaultPTYRows = 24
+	maxPTYCols     = 2048
+	maxPTYRows     = 2048
+)
+
 // NewServer creates a new SSH server that authenticates using the given
 // authorized key and presents the given host key.
 func NewServer(cfg Config) (*Server, error) {
@@ -46,7 +69,8 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	srv := &charmssh.Server{
-		Handler: s.handleSession,
+		Handler:     s.handleSession,
+		IdleTimeout: idleConnectionTimeout,
 	}
 
 	if err := srv.SetOption(charmssh.HostKeyPEM(cfg.HostKeyPEM)); err != nil {
@@ -83,8 +107,7 @@ func (s *Server) handleSession(sess charmssh.Session) {
 }
 
 func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan charmssh.Window) {
-	cols := uint16(ptyReq.Window.Width)
-	rows := uint16(ptyReq.Window.Height)
+	cols, rows := clampPTYSize(ptyReq.Window.Width, ptyReq.Window.Height)
 	mgr := s.sessions
 
 	// Build environment from SSH session (includes TERM, etc.).
@@ -118,6 +141,12 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	// never steals bytes from the session.
 	var inputCh <-chan []byte
 
+	// inputDone is closed via defer so the sshInputChannel goroutine never
+	// blocks forever on `ch <- data` after this handler returns — covers
+	// every early-return path below.
+	inputDone := make(chan struct{})
+	defer close(inputDone)
+
 	if len(detached) == 0 {
 		// No detached sessions — create one directly.
 		var err error
@@ -131,7 +160,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		// Start a goroutine that owns reading from the SSH channel.
 		// BubbleTea reads from a closeable wrapper; the session IO
 		// reads from the same channel afterward.
-		inputCh = sshInputChannel(sess)
+		inputCh = sshInputChannel(sess, inputDone)
 		cr := &channelReader{ch: inputCh, done: make(chan struct{})}
 
 		// Show selector with detached sessions only.
@@ -185,7 +214,8 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	// Forward window resize (writer only).
 	go func() {
 		for win := range winCh {
-			target.Resize(client, uint16(win.Width), uint16(win.Height))
+			c, r := clampPTYSize(win.Width, win.Height)
+			target.Resize(client, c, r)
 		}
 	}()
 
@@ -203,7 +233,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 			case <-ticker.C:
 				reply := make(chan error, 1)
 				go func() {
-					_, err := sess.SendRequest("keepalive@openssh.com", true, nil)
+					_, err := sess.SendRequest(keepaliveRequestType, true, nil)
 					reply <- err
 				}()
 				select {
@@ -288,6 +318,13 @@ func handleExecSession(sess charmssh.Session) {
 		stdinPipe.Close()        //nolint:errcheck
 	}()
 
+	// Keep the connection alive during silent long-running commands. Without
+	// this, the server-level IdleTimeout closes the conn → cmd context is
+	// canceled → child is killed before it can finish.
+	keepaliveDone := make(chan struct{})
+	defer close(keepaliveDone)
+	go execKeepalive(sess, keepaliveDone)
+
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			sess.Exit(exitErr.ExitCode()) //nolint:errcheck
@@ -300,6 +337,27 @@ func handleExecSession(sess charmssh.Session) {
 	sess.Exit(0) //nolint:errcheck
 }
 
+// execKeepalive sends periodic SSH keepalive requests during a non-PTY exec
+// session. The send is wantReply=false so it doesn't block; the write
+// reaches the underlying TCP conn which resets the server-side idle
+// deadline, preventing IdleTimeout from killing silent long-running
+// commands. The goroutine exits when done is closed or when the session
+// context is canceled (e.g. real client disconnect).
+func execKeepalive(sess charmssh.Session, done <-chan struct{}) {
+	ticker := time.NewTicker(execKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			sess.SendRequest(keepaliveRequestType, false, nil) //nolint:errcheck
+		case <-done:
+			return
+		case <-sess.Context().Done():
+			return
+		}
+	}
+}
+
 // userShell returns the current user's login shell, falling back to /bin/sh.
 func userShell() string {
 	if shell := os.Getenv("SHELL"); shell != "" {
@@ -309,8 +367,12 @@ func userShell() string {
 }
 
 // sshInputChannel starts a goroutine that reads from r and sends chunks
-// on the returned channel. The channel is closed when r returns an error.
-func sshInputChannel(r io.Reader) <-chan []byte {
+// on the returned channel. The channel is closed when r returns an error
+// or when done is closed. The done channel lets callers unblock the
+// goroutine if the consumer stops draining: without it, a full 16-slot
+// buffer plus a stalled consumer would pin the goroutine forever on
+// `ch <- data`.
+func sshInputChannel(r io.Reader, done <-chan struct{}) <-chan []byte {
 	ch := make(chan []byte, 16)
 	go func() {
 		defer close(ch)
@@ -320,7 +382,11 @@ func sshInputChannel(r io.Reader) <-chan []byte {
 			if n > 0 {
 				data := make([]byte, n)
 				copy(data, buf[:n])
-				ch <- data
+				select {
+				case ch <- data:
+				case <-done:
+					return
+				}
 			}
 			if err != nil {
 				return
@@ -328,6 +394,24 @@ func sshInputChannel(r io.Reader) <-chan []byte {
 		}
 	}()
 	return ch
+}
+
+// clampPTYSize normalizes client-supplied PTY dimensions to safe terminal
+// bounds. Zero or negative values fall back to a sensible default; values
+// above the cap are reduced to the cap. The cap protects the VTE buffer
+// from unbounded width*height allocations driven by the SSH peer.
+func clampPTYSize(cols, rows int) (uint16, uint16) {
+	return clampDim(cols, defaultPTYCols, maxPTYCols), clampDim(rows, defaultPTYRows, maxPTYRows)
+}
+
+func clampDim(v int, dflt, max uint16) uint16 {
+	if v <= 0 {
+		return dflt
+	}
+	if v > int(max) {
+		return max
+	}
+	return uint16(v)
 }
 
 // channelReader wraps a byte channel as an io.Reader. Closing the done
