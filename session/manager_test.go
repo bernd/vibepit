@@ -1,8 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -552,6 +554,192 @@ func TestRenderVTEScrollback_WideCharacters(t *testing.T) {
 	// happen if we didn't skip the continuation cell correctly.
 	assert.Equal(t, 1, strings.Count(clean, "あ"),
 		"wide char should appear exactly once; got (stripped): %q", clean)
+}
+
+// TestSession_AttachAsWriterResizesVTE verifies that when Attach promotes a
+// client to writer with different dimensions than the session's current
+// cols/rows, the VTE and the session's bookkeeping are both resized to
+// match — not just the PTY. Previously Attach called pty.Setsize but
+// skipped vte.Resize and the s.cols/s.rows update, so a reattach from a
+// differently-sized terminal would render at the old VTE dimensions until
+// a later Resize event happened.
+func TestSession_AttachAsWriterResizesVTE(t *testing.T) {
+	m := testManager(50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	// First client attaches at 80x24 — matches the session; nothing to update.
+	c1 := s.Attach(80, 24)
+	c1.Close()
+
+	// After detach, no writer. New client attaches at 100x30 and becomes
+	// the writer.
+	c2 := s.Attach(100, 30)
+	defer c2.Close()
+
+	s.mu.Lock()
+	cols, rows := s.cols, s.rows
+	vteW, vteH := s.vte.Width(), s.vte.Height()
+	s.mu.Unlock()
+
+	assert.Equal(t, uint16(100), cols, "s.cols should track the new writer's cols")
+	assert.Equal(t, uint16(30), rows, "s.rows should track the new writer's rows")
+	assert.Equal(t, 100, vteW, "VTE width should be resized to the new writer's cols")
+	assert.Equal(t, 30, vteH, "VTE height should be resized to the new writer's rows")
+}
+
+// TestSession_AttachReplayBeforeLiveOutput verifies that a client attaching
+// while pump is actively delivering live PTY output receives the replay
+// blob before any live bytes. Previously, Attach appended c to s.clients
+// and dropped s.mu *before* delivering replay; in that gap pump could
+// snapshot s.clients, observe c, and deliver live bytes to c's channel
+// ahead of replay. The client would then reset its terminal to a stale
+// snapshot AFTER showing fresh output — a visible flash and a broken
+// reconstruction.
+//
+// The race is triggered by a test-only sleep hook in Attach that widens
+// the window between "client added to s.clients" and "replay delivered."
+// Under the fix, replay is queued before c is visible to pump, so the
+// hook's extra delay doesn't matter — pump still can't deliver live
+// output to c before replay.
+func TestSession_AttachReplayBeforeLiveOutput(t *testing.T) {
+	// Widen the attach race window by 10ms so pump has plenty of time to
+	// fire in between.
+	prev := attachReplayTestHook
+	attachReplayTestHook = func() { time.Sleep(10 * time.Millisecond) }
+	defer func() { attachReplayTestHook = prev }()
+
+	m := testManager(50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	c1 := s.Attach(80, 24)
+	defer c1.Close()
+
+	drainFor := func(c *Client, d time.Duration) {
+		buf := make([]byte, 4096)
+		deadline := time.After(d)
+		for {
+			readDone := make(chan int, 1)
+			go func() {
+				n, _ := c.Read(buf)
+				readDone <- n
+			}()
+			select {
+			case <-readDone:
+			case <-deadline:
+				return
+			}
+		}
+	}
+
+	// Drain initial shell prompt.
+	drainFor(c1, 200*time.Millisecond)
+
+	// Start continuous output in the background so pump is always hot.
+	_, err = c1.Write([]byte("(while true; do echo LINE; done) &\n"))
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+
+	const iterations = 20
+	for i := range iterations {
+		c2 := s.Attach(80, 24)
+
+		buf := make([]byte, 4096)
+		readDone := make(chan int, 1)
+		go func() {
+			n, _ := c2.Read(buf)
+			readDone <- n
+		}()
+		select {
+		case n := <-readDone:
+			require.Greater(t, n, 0, "iteration %d: zero-byte first read", i)
+			prefix := buf[:n]
+			if len(prefix) > 32 {
+				prefix = prefix[:32]
+			}
+			require.True(t, bytes.HasPrefix(buf[:n], []byte("\x1bc")),
+				"iteration %d: first bytes after attach should start with replay "+
+					"marker ESC c, got prefix %q", i, prefix)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("iteration %d: timeout reading from c2", i)
+		}
+		c2.Close()
+	}
+}
+
+// TestSession_NonWriterAltScreenAttachNoPTYInjection verifies that a
+// non-writer attaching while the session is in alt-screen mode does not
+// cause Ctrl-L (or anything else) to be written to the PTY. Previously
+// Attach unconditionally wrote 0x0c to s.ptmx on every alt-screen attach,
+// which violates the documented writer/read-only boundary — a non-writer
+// observer could inject a control byte into the foreground application.
+//
+// Observation trick: run `cat` in raw mode as the session command. In
+// raw mode the tty doesn't do kernel echo or line buffering, so any byte
+// written to the PTY slave is immediately read by cat and written back
+// to the PTY master. Pump then fans that byte out to attached clients,
+// so a bug that injects 0x0c into the PTY is directly observable on the
+// writer's output channel.
+func TestSession_NonWriterAltScreenAttachNoPTYInjection(t *testing.T) {
+	m := NewManager(50)
+	m.Command = []string{"/bin/sh", "-c", "stty raw -echo; exec cat"}
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	c1 := s.Attach(80, 24)
+	defer c1.Close()
+
+	// Concurrent drain into a buffer so the output channel never blocks.
+	var mu sync.Mutex
+	var seen []byte
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := c1.Read(buf)
+			if n > 0 {
+				mu.Lock()
+				seen = append(seen, buf[:n]...)
+				mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Give stty+cat time to set raw mode and start reading.
+	time.Sleep(200 * time.Millisecond)
+
+	// Force the VTE into alt-screen directly. This simulates a TUI app
+	// like vim having switched modes; we don't need the shell to do it.
+	s.mu.Lock()
+	_, err = s.vte.Write([]byte("\x1b[?1049h"))
+	require.NoError(t, err)
+	altOK := s.vte.IsAltScreen()
+	s.mu.Unlock()
+	require.True(t, altOK, "VTE should be in alt-screen after direct write")
+
+	// Drain any residual output (e.g., stty echoed before raw took effect).
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	baseLen := len(seen)
+	mu.Unlock()
+
+	// Attach a second (non-writer) client. Any Ctrl-L written to PTY by
+	// Attach would be echoed back via cat and appear in c1's output after
+	// baseLen.
+	c2 := s.Attach(80, 24)
+	defer c2.Close()
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	tail := append([]byte(nil), seen[baseLen:]...)
+	mu.Unlock()
+
+	assert.Equal(t, -1, bytes.IndexByte(tail, 0x0c),
+		"non-writer attach injected Ctrl-L into PTY; writer saw echo: %q", tail)
 }
 
 // stripSGR removes CSI SGR sequences (ESC[...m) from s for text-only

@@ -17,6 +17,10 @@ import (
 	vt "github.com/unixshells/vt-go"
 )
 
+// attachReplayTestHook is a no-op in production; tests override it to
+// widen the race window between s.clients append and replay delivery.
+var attachReplayTestHook = func() {}
+
 // Session represents a persistent PTY shell session that survives client
 // disconnects. It manages the shell process, PTY, attached clients, and
 // output fan-out.
@@ -143,27 +147,26 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 	scrollbackData := renderVTEScrollback(s.vte)
 
 	c := newClient(s)
-	s.clients = append(s.clients, c)
 
+	becameWriter := false
 	if s.writer == nil {
 		s.writer = c
-		pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}) //nolint:errcheck
+		becameWriter = true
+		if cols > 0 && rows > 0 && (cols != s.cols || rows != s.rows) {
+			s.resizeLocked(cols, rows)
+		}
 	}
 
-	s.mu.Unlock()
-
-	if s.manager != nil {
-		go s.manager.onSessionChanged()
-	}
-
+	// Deliver replay BEFORE appending c to s.clients, all under s.mu so
+	// pump can't fan out to c between the VTE snapshot and c becoming
+	// visible. Delivery is non-blocking for a fresh client (empty 1024-slot
+	// channel), so holding s.mu here can't deadlock on the channel-full
+	// Close path.
 	if altScreen {
-		// Alternate screen app (vim, less, htop): enter alternate screen
-		// on the client side (the PTY is already in alt screen but the
-		// new SSH channel isn't), clear it, then send Ctrl-L to the PTY
-		// to trigger a full redraw. SIGWINCH only does a partial redraw
-		// in some apps; Ctrl-L is the universal "redraw screen" command.
+		// Alt-screen app (vim, less, htop): the PTY is already in
+		// alt-screen, but the new SSH channel isn't — switch the client
+		// into it and clear the screen.
 		c.deliver([]byte("\033[?1049h\033[2J"))
-		s.ptmx.Write([]byte{0x0c}) // Ctrl-L to PTY
 	} else {
 		// Normal mode or non-alt-screen TUI (Claude Code, Codex, shell):
 		// replay scrollback history + VTE screen state + cursor position.
@@ -183,7 +186,25 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 			c.deliver(replay)
 		}
 	}
-	// Always SIGWINCH — harmless for shells, triggers redraw for TUI apps.
+
+	attachReplayTestHook()
+
+	s.clients = append(s.clients, c)
+
+	s.mu.Unlock()
+
+	if s.manager != nil {
+		go s.manager.onSessionChanged()
+	}
+
+	// Only writer clients may write to the PTY. The Ctrl-L nudge triggers
+	// a full redraw of TUI apps; SIGWINCH only triggers partial redraws
+	// in some apps, so Ctrl-L is the reliable "redraw screen" command.
+	if altScreen && becameWriter {
+		s.ptmx.Write([]byte{0x0c}) //nolint:errcheck
+	}
+
+	// SIGWINCH is harmless for shells and triggers a redraw for TUI apps.
 	if s.cmd.Process != nil {
 		syscall.Kill(-s.cmd.Process.Pid, syscall.SIGWINCH) //nolint:errcheck
 	}
@@ -199,11 +220,17 @@ func (s *Session) TakeOver(c *Client, cols, rows uint16) {
 	defer s.mu.Unlock()
 	s.writer = c
 	if cols > 0 && rows > 0 && (cols != s.cols || rows != s.rows) {
-		pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}) //nolint:errcheck
-		s.vte.Resize(int(cols), int(rows))
-		s.cols = cols
-		s.rows = rows
+		s.resizeLocked(cols, rows)
 	}
+}
+
+// resizeLocked updates the PTY and VTE to cols×rows and records the new
+// dimensions on the session. Must be called with s.mu held.
+func (s *Session) resizeLocked(cols, rows uint16) {
+	pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}) //nolint:errcheck
+	s.vte.Resize(int(cols), int(rows))
+	s.cols = cols
+	s.rows = rows
 }
 
 // Detach removes a client from the session. If the detached client was the
@@ -251,10 +278,7 @@ func (s *Session) Resize(c *Client, cols, rows uint16) {
 	if cols == s.cols && rows == s.rows {
 		return
 	}
-	pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols}) //nolint:errcheck
-	s.vte.Resize(int(cols), int(rows))
-	s.cols = cols
-	s.rows = rows
+	s.resizeLocked(cols, rows)
 }
 
 // WriteInput sends input to the PTY. Only the writer client may write.
