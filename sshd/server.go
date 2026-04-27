@@ -404,12 +404,12 @@ func clampPTYSize(cols, rows int) (uint16, uint16) {
 	return clampDim(cols, defaultPTYCols, maxPTYCols), clampDim(rows, defaultPTYRows, maxPTYRows)
 }
 
-func clampDim(v int, dflt, max uint16) uint16 {
+func clampDim(v int, dflt, limit uint16) uint16 {
 	if v <= 0 {
 		return dflt
 	}
-	if v > int(max) {
-		return max
+	if v > int(limit) {
+		return limit
 	}
 	return uint16(v)
 }

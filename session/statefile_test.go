@@ -73,11 +73,9 @@ func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 	// Trigger a writer whose snapshot is 3 sessions. It parks inside the
 	// hook after snapshotting, before writing/renaming.
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		m.onSessionChanged()
-	}()
+	})
 
 	<-parked
 
