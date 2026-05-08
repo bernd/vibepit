@@ -83,7 +83,7 @@ These targets use [`uv`](https://docs.astral.sh/uv/) to manage Python dependenci
 
 ## Contributing
 
-Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues) but are not accepting pull requests at this time.
+Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues). Please open an issue to discuss proposed changes before creating a pull request.
 
 ## AI Transparency
 
