@@ -182,7 +182,7 @@ func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion st
 	fmt.Printf("Current version: %s\n", config.Version)
 	fmt.Printf("Target version:  %s (%s)\n", meta.Version, meta.Timestamp)
 	if meta.Changelog != "" {
-		fmt.Printf("\nChangelog:\n%s\n", meta.Changelog)
+		fmt.Printf("\nChangelog:\n\n%s\n", meta.Changelog)
 	}
 
 	// Confirm.

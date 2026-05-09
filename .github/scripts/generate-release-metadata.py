@@ -66,7 +66,7 @@ def parse_changelog(version: str) -> str:
     for category in CHANGELOG_CATEGORIES:
         entries = data.get(category, [])
         if entries:
-            lines.append(category.capitalize() + ":")
+            lines.append(category.capitalize() + ":\n")
             for entry in entries:
                 lines.append(format_entry(entry))
     return "\n".join(lines)
