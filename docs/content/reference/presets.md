@@ -26,6 +26,7 @@ following presets:
 - [`anthropic`](#anthropic)
 - [`cdn-github`](#cdn-github)
 - [`homebrew`](#homebrew)
+- [`mistral`](#mistral)
 - [`openai`](#openai)
 - [`vcs-github`](#vcs-github)
 
@@ -48,6 +49,7 @@ docs.claude.com:443
 code.claude.com:443
 claude.ai:443
 platform.claude.com:443
+downloads.claude.ai:443
 ```
 
 ### `openai`
@@ -84,6 +86,14 @@ AWS Bedrock Endpoints.
 ```
 bedrock.*.amazonaws.com:443
 bedrock-runtime.*.amazonaws.com:443
+```
+
+### `mistral`
+
+Mistral AI services.
+
+```
+api.mistral.ai:443
 ```
 
 ### `vcs-github`
