@@ -1,0 +1,19 @@
+version: "0.1.0"
+
+added:
+  - msg: SSH-based daemon mode with persistent PTY sessions (up, down, ssh, status commands)
+  - msg: Session selector TUI for detached sessions
+  - msg: Self-update command for binary updates with SHA256 and cosign verification
+  - msg: Session detector and live polling in monitor TUI
+  - msg: Global --version flag
+  - msg: Mistral AI network preset
+  - msg: NODE_USE_ENV_PROXY and grpc_proxy environment variables for sandbox
+
+changed:
+  - msg: Update sandbox image to Ubuntu 26.04
+  - msg: Use "unless-stopped" restart policy for the proxy container
+  - msg: Add downloads.claude.ai:443 to Anthropic network preset
+  - msg: Add vuln.go.dev:443 to Golang network preset
+
+fixed:
+  - msg: Nil pointer dereference in control API log handler
