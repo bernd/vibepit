@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -162,19 +163,20 @@ func findSocket(debug bool, paths ...string) (*dockerclient.Client, error) {
 
 func (c *Client) Close() error { return c.docker.Close() }
 
-// EnsureImage pulls the image if it is not available locally.
-func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) error {
+// EnsureImage pulls the image if it is not available locally. Returns true
+// if the image was pulled, false if it was already present.
+func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) (bool, error) {
 	images, err := c.docker.ImageList(ctx, image.ListOptions{
 		Filters: filters.NewArgs(filters.Arg("reference", ref)),
 	})
 	if err != nil {
-		return fmt.Errorf("list images: %w", err)
+		return false, fmt.Errorf("list images: %w", err)
 	}
 	if len(images) > 0 {
-		return nil
+		return false, nil
 	}
 
-	return c.PullImage(ctx, ref, quiet)
+	return true, c.PullImage(ctx, ref, quiet)
 }
 
 // PullImage pulls the latest version of the image.
@@ -187,16 +189,101 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	defer reader.Close()
 
 	if quiet {
-		// Drain the pull output to complete the operation.
 		_, err = io.Copy(io.Discard, reader)
 	} else {
-		isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
-		err = jsonmessage.DisplayJSONMessagesStream(reader, os.Stdout, os.Stdout.Fd(), isTerminal, nil)
+		err = displayPullProgress(reader)
 	}
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	return nil
+}
+
+// displayPullProgress reads Docker pull JSON messages and shows a single
+// updating status line with aggregated download progress.
+func displayPullProgress(r io.Reader) error {
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+	dec := json.NewDecoder(r)
+
+	type layerProgress struct {
+		current int64
+		total   int64
+	}
+	layers := map[string]*layerProgress{}
+	wroteProgress := false
+
+	for {
+		var msg jsonmessage.JSONMessage
+		if err := dec.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if msg.Error != nil {
+			return msg.Error
+		}
+
+		if msg.ID == "" || msg.Progress == nil {
+			continue
+		}
+
+		lp, ok := layers[msg.ID]
+		if !ok {
+			lp = &layerProgress{}
+			layers[msg.ID] = lp
+		}
+		lp.current = msg.Progress.Current
+		lp.total = msg.Progress.Total
+
+		if !isTerminal {
+			continue
+		}
+
+		var totalBytes, currentBytes int64
+		for _, l := range layers {
+			currentBytes += l.current
+			totalBytes += l.total
+		}
+
+		if currentBytes == 0 && totalBytes == 0 {
+			continue
+		}
+
+		var line string
+		if totalBytes > 0 {
+			pct := min(int(float64(currentBytes)/float64(totalBytes)*100), 100)
+			line = fmt.Sprintf("             %s / %s, %d%%",
+				humanBytes(currentBytes), humanBytes(totalBytes), pct)
+		} else {
+			line = fmt.Sprintf("             %s",
+				humanBytes(currentBytes))
+		}
+		fmt.Fprintf(os.Stdout, "\r\033[K%s", line)
+		wroteProgress = true
+	}
+	if isTerminal && wroteProgress {
+		fmt.Fprintln(os.Stdout)
+	}
+	return nil
+}
+
+func humanBytes(b int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+		gb = 1024 * mb
+	)
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(gb))
+	case b >= mb:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(mb))
+	case b >= kb:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 // RunningSession describes a running sandbox container found by FindRunningSession.
@@ -953,4 +1040,31 @@ func (c *Client) StreamLogs(ctx context.Context, containerID string, w io.Writer
 	defer reader.Close()
 	_, err = io.Copy(w, reader)
 	return err
+}
+
+// ImageRepoDigest returns the repo digest for a locally available image
+// (e.g., "ghcr.io/bernd/vibepit@sha256:abc123"). This pins the exact
+// image content independently of mutable tags.
+func (c *Client) ImageRepoDigest(ctx context.Context, ref string) (string, error) {
+	inspect, err := c.docker.ImageInspect(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("inspect image %s: %w", ref, err)
+	}
+	if len(inspect.RepoDigests) == 0 {
+		return "", fmt.Errorf("image %s has no repo digests (local-only image?)", ref)
+	}
+
+	// Strip tag to match against RepoDigests.
+	refRepo := ref
+	if idx := strings.LastIndex(ref, ":"); idx > 0 {
+		if !strings.Contains(ref[idx:], "/") {
+			refRepo = ref[:idx]
+		}
+	}
+	for _, rd := range inspect.RepoDigests {
+		if strings.HasPrefix(rd, refRepo+"@") {
+			return rd, nil
+		}
+	}
+	return inspect.RepoDigests[0], nil
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/cosign"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
@@ -232,11 +233,29 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		selfBinary = proxyBinary
 	}
 
-	if err := client.EnsureImage(ctx, u.Image, false); err != nil {
+	if _, err := client.EnsureImage(ctx, u.Image, false); err != nil {
 		return nil, cleanups, fmt.Errorf("image: %w", err)
 	}
-	if err := client.EnsureImage(ctx, ctr.ProxyImage, false); err != nil {
+	if !cmd.Bool(localFlag) {
+		digestRef, err := client.ImageRepoDigest(ctx, u.Image)
+		if err != nil {
+			return nil, cleanups, fmt.Errorf("resolve image digest: %w", err)
+		}
+		tui.Status("Verifying", "image signature: %s", u.Image)
+		if err := cosign.VerifyImage(ctx, digestRef); err != nil {
+			return nil, cleanups, fmt.Errorf("sandbox image verification: %w", err)
+		}
+	}
+	if _, err := client.EnsureImage(ctx, ctr.ProxyImage, false); err != nil {
 		return nil, cleanups, fmt.Errorf("proxy image: %w", err)
+	}
+	proxyDigestRef, err := client.ImageRepoDigest(ctx, ctr.ProxyImage)
+	if err != nil {
+		return nil, cleanups, fmt.Errorf("resolve proxy image digest: %w", err)
+	}
+	tui.Status("Verifying", "image signature: %s", ctr.ProxyImage)
+	if err := cosign.VerifyProxyImage(ctx, proxyDigestRef); err != nil {
+		return nil, cleanups, fmt.Errorf("proxy image verification: %w", err)
 	}
 
 	sessionID := xid.New().String()

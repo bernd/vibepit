@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/bernd/vibepit/cosign"
 )
 
 // VerifyCosignBundle verifies the cosign bundle for the archive at archivePath.
@@ -21,26 +23,13 @@ func VerifyCosignBundle(httpClient *http.Client, archivePath, bundleURL string) 
 	}
 	defer os.Remove(bundlePath)
 
-	//nolint:godox
-	// TODO: Implement sigstore-go verification.
-	// The implementer should:
-	// 1. Load bundle with sigstore-go's bundle package
-	// 2. Get trusted root from sigstore TUF
-	// 3. Create verifier with CertificateIdentity policy
-	// 4. Verify the artifact against the bundle
-	//
-	// See: https://pkg.go.dev/github.com/sigstore/sigstore-go
-	// Example pattern:
-	//   root, _ := root.FetchTrustedRoot()
-	//   verifierConfig := verify.VerifierConfig{...}
-	//   verifier, _ := verify.NewSignedEntityVerifier(root, verifierConfig)
-	//   policy := verify.NewPolicy(verify.WithCertificateIdentity(...))
-	//   result, _ := verifier.Verify(entity, policy)
-
-	return fmt.Errorf("cosign verification not yet implemented")
+	if err := cosign.VerifyBlob(archivePath, bundlePath); err != nil {
+		return fmt.Errorf("cosign verification failed: %w", err)
+	}
+	return nil
 }
 
-const maxBundleSize = 10 * 1024 * 1024 // 10 MB — bundles are typically a few KB
+const maxBundleSize = 10 * 1024 * 1024
 
 func downloadBundle(httpClient *http.Client, url string) (string, error) {
 	resp, err := httpClient.Get(url)

@@ -407,7 +407,7 @@ func (s *Session) waitForExit() {
 }
 
 type pipeErrorCloser interface {
-	CloseWithError(error) error
+	CloseWithError(err error) error
 }
 
 // closeVTEPipe closes just the VTE's internal pipe writer to unblock

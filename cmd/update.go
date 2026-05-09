@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/cosign"
 	"github.com/bernd/vibepit/selfupdate"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
@@ -238,12 +239,12 @@ func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion st
 		return err
 	}
 
-	// Verify cosign bundle (skip if bundle URL is empty -- cosign signing
-	// may not yet be deployed in CI).
-	if asset.CosignBundleURL != "" {
-		if err := selfupdate.VerifyCosignBundle(client.HTTPClient, archivePath, asset.CosignBundleURL); err != nil {
-			return err
-		}
+	// Verify cosign bundle.
+	if asset.CosignBundleURL == "" {
+		return fmt.Errorf("release metadata missing cosign bundle URL for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	if err := selfupdate.VerifyCosignBundle(client.HTTPClient, archivePath, asset.CosignBundleURL); err != nil {
+		return err
 	}
 
 	// Extract and replace.
@@ -273,11 +274,28 @@ func runImageUpdate(ctx context.Context) error {
 	}
 	defer client.Close()
 
-	if err := client.PullImage(ctx, imageName(u), false); err != nil {
+	img := imageName(u)
+	if err := client.PullImage(ctx, img, false); err != nil {
 		return fmt.Errorf("pull image: %w", err)
+	}
+	digestRef, err := client.ImageRepoDigest(ctx, img)
+	if err != nil {
+		return fmt.Errorf("resolve image digest: %w", err)
+	}
+	tui.Status("Verifying", "image signature")
+	if err := cosign.VerifyImage(ctx, digestRef); err != nil {
+		return fmt.Errorf("image verification: %w", err)
 	}
 	if err := client.PullImage(ctx, ctr.ProxyImage, false); err != nil {
 		return fmt.Errorf("pull image: %w", err)
+	}
+	proxyDigestRef, err := client.ImageRepoDigest(ctx, ctr.ProxyImage)
+	if err != nil {
+		return fmt.Errorf("resolve proxy image digest: %w", err)
+	}
+	tui.Status("Verifying", "image signature")
+	if err := cosign.VerifyProxyImage(ctx, proxyDigestRef); err != nil {
+		return fmt.Errorf("image verification: %w", err)
 	}
 	fmt.Println("Container images updated.")
 	return nil

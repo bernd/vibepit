@@ -17,18 +17,18 @@ import (
 
 // testManager returns a Manager that uses /bin/sh instead of /bin/bash --login
 // to avoid slow profile loading in test environments.
-func testManager(t testing.TB, limit int) *Manager {
-	t.Helper()
+func testManager(tb testing.TB, limit int) *Manager {
+	tb.Helper()
 	m := NewManager(limit)
 	m.Command = []string{"/bin/sh"}
-	t.Cleanup(func() {
-		terminateTestManager(t, m)
+	tb.Cleanup(func() {
+		terminateTestManager(tb, m)
 	})
 	return m
 }
 
-func terminateTestManager(t testing.TB, m *Manager) {
-	t.Helper()
+func terminateTestManager(tb testing.TB, m *Manager) {
+	tb.Helper()
 
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
@@ -48,7 +48,7 @@ func terminateTestManager(t testing.TB, m *Manager) {
 		terminateTestSession(s, syscall.SIGKILL)
 	}
 	if !waitForTestSessionsExited(sessions, time.Second) {
-		t.Errorf("timed out waiting for test sessions to exit")
+		tb.Errorf("timed out waiting for test sessions to exit")
 	}
 }
 

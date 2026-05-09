@@ -102,9 +102,6 @@ jobs:
       - name: Sign the published Docker image
         if: ${{ github.event_name != 'pull_request' }}
         env:
-          # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
-          TAGS: ${{ steps.meta.outputs.tags }}
+          TAG: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_REVISION }}-uid-${{ matrix.edition.uid }}-gid-${{ matrix.edition.gid }}"
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
-        # This step uses the identity token to provision an ephemeral certificate
-        # against the sigstore community Fulcio instance.
-        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+        run: cosign sign --yes "${TAG}@${DIGEST}"
