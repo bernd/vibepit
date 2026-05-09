@@ -14,8 +14,8 @@ env:
   # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
   # Bump on backwards-incompatible image changes (r1, r2, ...).
-  # Also update imageRevision in cmd/run.go.
-  IMAGE_REVISION: r1
+  # Also update imageRevision in cmd/bootstrap.go.
+  IMAGE_REVISION: r2
 
 jobs:
   build:

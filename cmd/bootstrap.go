@@ -25,7 +25,7 @@ import (
 const (
 	// imageRevision is bumped on backwards-incompatible image changes (r1, r2, ...).
 	// Also update IMAGE_REVISION in .github/workflows/docker-publish.yml.
-	imageRevision       = "r1"
+	imageRevision       = "r2"
 	defaultImagePrefix  = "ghcr.io/bernd/vibepit:" + imageRevision
 	localImage          = "vibepit:latest"
 	homeVolumeName      = "vibepit-home"
