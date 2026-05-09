@@ -1,0 +1,37 @@
+# Copy this file to {VERSION}.yml (e.g., 0.2.0.yml) and fill in the
+# entries for the release. Delete any categories that don't apply.
+#
+# Each entry is a map with a "msg" key. The description is
+# rendered as a bullet point in the release notes.
+
+version: "0.0.0"
+
+added:
+  - msg: New feature or capability
+    pr: 0
+    issue: 0
+
+changed:
+  - msg: Change in existing functionality
+    pr: 0
+    issue: 0
+
+fixed:
+  - msg: Bug fix
+    pr: 0
+    issue: 0
+
+deprecated:
+  - msg: Feature marked for removal in a future release
+    pr: 0
+    issue: 0
+
+removed:
+  - msg: Feature removed in this release
+    pr: 0
+    issue: 0
+
+security:
+  - msg: Security fix or vulnerability patch
+    pr: 0
+    issue: 0

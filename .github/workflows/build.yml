@@ -15,6 +15,7 @@ defaults:
 
 permissions:
   contents: "write"
+  id-token: "write"
 
 jobs:
   build:
@@ -54,9 +55,29 @@ jobs:
       - name: "Build"
         run: "make release-build"
 
-      # TODO: Add attestation
+      - name: "Create Archives"
+        run: "make release-archive"
+
+      - name: "Install Cosign"
+        if: "startsWith(github.ref, 'refs/tags/')"
+        uses: "sigstore/cosign-installer@v4.1.0"
+
+      - name: "Sign Archives"
+        if: "startsWith(github.ref, 'refs/tags/')"
+        run: |
+          for archive in dist/*.tar.gz; do
+            cosign sign-blob --yes --bundle "${archive}.bundle" "$archive"
+          done
+
+      - name: "Render Release Notes"
+        if: "startsWith(github.ref, 'refs/tags/')"
+        run: |
+          pip install pyyaml
+          VERSION="${GITHUB_REF_NAME}" python3 .github/scripts/generate-release-metadata.py \
+            --render-changelog > dist/release-notes.md
+
       - name: "Release"
         if: "startsWith(github.ref, 'refs/tags/')"
-        run: "make release-archive release-publish"
+        run: "make release-publish"
         env:
           GH_TOKEN: "${{ github.token }}"

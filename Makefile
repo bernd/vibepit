@@ -64,14 +64,15 @@ release-archive:
 		tar -czf "dist/$$name.tar.gz" -C dist "$$name"; \
 		rm -rf "dist/$$name"; \
 	done
-	cd dist && shasum -a 256 *.tar.gz > checksums.txt
+	cd dist && sha256sum *.tar.gz > checksums.txt
 
 release-publish:
 	@[ -n "$(VERSION)" ] || { echo "VERSION is required"; exit 1; }
 	gh release create \
 		--draft --prerelease --verify-tag \
 		--title "v$(VERSION)" \
-		v$(VERSION) dist/*.tar.gz dist/checksums.txt
+		$(if $(wildcard dist/release-notes.md),--notes-file dist/release-notes.md,--notes "") \
+		v$(VERSION) dist/*.tar.gz $(wildcard dist/*.bundle) dist/checksums.txt
 
 clean:
 	rm -f $(BINARY) embed/proxy/vibepit

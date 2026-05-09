@@ -1,0 +1,56 @@
+name: "Release Metadata"
+
+on:
+  release:
+    types: ["published"]
+
+permissions:
+  contents: "write"
+
+concurrency:
+  group: "release-metadata"
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: "bash"
+
+jobs:
+  generate:
+    runs-on: "ubuntu-slim"
+
+    steps:
+      - name: "Checkout repository"
+        uses: "actions/checkout@v6"
+        with:
+          ref: "main"
+          fetch-depth: 0
+          token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Setup Python"
+        uses: "actions/setup-python@v6"
+        with:
+          python-version: "3.x"
+
+      - name: "Install PyYAML"
+        run: "pip install pyyaml"
+
+      - name: "Generate release metadata"
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          VERSION: "${{ github.event.release.tag_name }}"
+        run: |
+          TIMESTAMP=$(git log -1 --format=%aI "$VERSION")
+          export TIMESTAMP
+
+          gh release download "$VERSION" --pattern "checksums.txt" --dir /tmp
+
+          python3 .github/scripts/generate-release-metadata.py
+
+      - name: "Commit and push metadata"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/content/releases/
+          git commit -m "chore: generate release metadata for ${{ github.event.release.tag_name }}"
+          git push
