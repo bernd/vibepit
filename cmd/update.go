@@ -10,9 +10,11 @@ import (
 
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/selfupdate"
+	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
 )
@@ -179,15 +181,17 @@ func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion st
 	}
 
 	// Display update info.
-	fmt.Printf("Current version: %s\n", config.Version)
-	fmt.Printf("Target version:  %s (%s)\n", meta.Version, meta.Timestamp)
+	label := lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true)
+	fmt.Printf("%s %s\n", label.Render("Current version:"), config.Version)
+	fmt.Printf("%s  %s (%s)\n", label.Render("Target version:"), meta.Version, meta.Timestamp)
 	if meta.Changelog != "" {
-		fmt.Printf("\nChangelog:\n\n%s\n", meta.Changelog)
+		fmt.Printf("\n%s\n\n%s\n", label.Render("Changelog:"), meta.Changelog)
 	}
 
 	// Confirm.
 	if !yes {
-		fmt.Printf("\nInstall vibepit v%s? [y/N] ", meta.Version)
+		prompt := lipgloss.NewStyle().Foreground(tui.ColorOrange).Bold(true)
+		fmt.Printf(prompt.Render("\nInstall v%s?")+" [y/N] ", meta.Version)
 		var answer string
 		fmt.Scanln(&answer)
 		answer = strings.TrimSpace(strings.ToLower(answer))
