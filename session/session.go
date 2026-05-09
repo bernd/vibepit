@@ -28,6 +28,7 @@ type Session struct {
 	id        string
 	cmd       *exec.Cmd
 	ptmx      *os.File
+	sid       int
 	createdAt time.Time
 	manager   *Manager
 
@@ -68,6 +69,7 @@ func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Sess
 		id:        id,
 		cmd:       cmd,
 		ptmx:      ptmx,
+		sid:       cmd.Process.Pid,
 		createdAt: time.Now(),
 		manager:   mgr,
 		vte:       vt.NewSafeEmulator(int(cols), int(rows)),
@@ -127,10 +129,9 @@ func (s *Session) Info() SessionInfo {
 func (s *Session) Attach(cols, rows uint16) *Client {
 	s.mu.Lock()
 
-	// If the session has already exited (pump set the flag in its error-path
-	// critical section), return a client with its output pre-closed so the
-	// caller sees clean EOF. Do not add to s.clients — nothing will ever
-	// drive it.
+	// If the session has already exited, return a client with its output
+	// pre-closed so the caller sees clean EOF. Do not add to s.clients —
+	// nothing will ever drive it.
 	if s.exited {
 		c := newClient(s)
 		s.mu.Unlock()
@@ -348,11 +349,11 @@ func (s *Session) pump() {
 	}
 }
 
-// waitForExit waits for the shell process to exit, tears down the PTY and
-// VTE in an order that avoids racing pump's final write, and records exit
-// metadata. s.exited is set by pump in its error-path critical section;
-// this function only records exitCode/exitedAt and decides whether to
-// start the tombstone timer.
+// waitForExit waits for the shell process to exit, cleans up descendant
+// processes, tears down the PTY and VTE in an order that avoids racing
+// pump's final write, and records exit metadata. s.exited is set here
+// early (before descendant cleanup) to reject new attaches; pump sets it
+// again idempotently in its error-path critical section.
 func (s *Session) waitForExit() {
 	exitCode := 0
 	if err := s.cmd.Wait(); err != nil {
@@ -360,6 +361,12 @@ func (s *Session) waitForExit() {
 			exitCode = exitErr.ExitCode()
 		}
 	}
+
+	s.mu.Lock()
+	s.exited = true
+	s.mu.Unlock()
+
+	cleanupDescendants(s.cmd.Process.Pid, s.sid)
 
 	// Close the PTY; unblocks pump's Read if it wasn't already EOF.
 	s.ptmx.Close() //nolint:errcheck
