@@ -50,6 +50,7 @@ linters:
     - "gomodguard" # Deprecated
     - "goprintffuncname"
     - "gosmopolitan"
+    - "maintidx"
     - "mnd"
     - "nestif"
     - "nlreturn"

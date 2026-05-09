@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -27,15 +28,36 @@ type Config struct {
 	Sessions      *session.Manager
 }
 
+type execSession struct {
+	command   string
+	startedAt time.Time
+}
+
 // Server wraps a charmbracelet/ssh server with public key authentication.
 type Server struct {
-	server   *charmssh.Server
-	sessions *session.Manager
+	server       *charmssh.Server
+	sessions     *session.Manager
+	mu           sync.Mutex
+	execSessions map[uint64]*execSession
+	execCounter  uint64
+	ptyConns     int
 }
 
 // keepaliveRequestType is the SSH global request name used by both the PTY
 // and exec keepalive paths. It matches the OpenSSH client/server convention.
 const keepaliveRequestType = "keepalive@openssh.com"
+
+const sessionCountRequestType = "session-count@vibepit"
+
+// SessionCountReply is the wire format for the session-count@vibepit reply.
+// Fields are exported for ssh.Marshal/Unmarshal.
+type SessionCountReply struct {
+	PTYConns     uint32
+	AttachedPTY  uint32
+	DetachedPTY  uint32
+	ExecCount    uint32
+	DetachedInfo string
+}
 
 // Connection timing constants. Both keepalive intervals must stay safely
 // below idleConnectionTimeout so silent active sessions keep the
@@ -65,12 +87,19 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		sessions: cfg.Sessions,
+		sessions:     cfg.Sessions,
+		execSessions: make(map[uint64]*execSession),
 	}
 
 	srv := &charmssh.Server{
 		Handler:     s.handleSession,
 		IdleTimeout: idleConnectionTimeout,
+		RequestHandlers: map[string]charmssh.RequestHandler{
+			sessionCountRequestType: func(_ charmssh.Context, _ *charmssh.Server, _ *gossh.Request) (bool, []byte) {
+				reply := s.sessionCount()
+				return true, gossh.Marshal(reply)
+			},
+		},
 	}
 
 	if err := srv.SetOption(charmssh.HostKeyPEM(cfg.HostKeyPEM)); err != nil {
@@ -97,18 +126,88 @@ func (s *Server) Close() error {
 	return s.server.Close()
 }
 
+func (s *Server) registerExec(command string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.execCounter++
+	id := s.execCounter
+	s.execSessions[id] = &execSession{
+		command:   command,
+		startedAt: time.Now(),
+	}
+	return id
+}
+
+func (s *Server) deregisterExec(id uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.execSessions, id)
+}
+
+func (s *Server) sessionCount() SessionCountReply {
+	s.mu.Lock()
+	ptyConns := s.ptyConns
+	execCount := len(s.execSessions)
+	s.mu.Unlock()
+
+	var attached, detached uint32
+	var detachedLines []string
+
+	for _, info := range s.sessions.List() {
+		switch info.Status {
+		case session.Attached:
+			attached++
+		case session.Detached:
+			detached++
+			cmd := info.Command
+			if cmd == "" {
+				cmd = "shell"
+			}
+			age := formatCoarseDuration(time.Since(info.CreatedAt))
+			detachedLines = append(detachedLines, info.ID+"\t"+cmd+"\t"+age)
+		}
+	}
+
+	return SessionCountReply{
+		PTYConns:     uint32(ptyConns),
+		AttachedPTY:  attached,
+		DetachedPTY:  detached,
+		ExecCount:    uint32(execCount),
+		DetachedInfo: strings.Join(detachedLines, "\n"),
+	}
+}
+
 func (s *Server) handleSession(sess charmssh.Session) {
 	ptyReq, winCh, isPty := sess.Pty()
 	if isPty {
 		s.handlePTYSession(sess, ptyReq, winCh)
 	} else {
-		handleExecSession(sess)
+		s.handleExecSession(sess)
 	}
 }
 
 func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan charmssh.Window) {
 	cols, rows := clampPTYSize(ptyReq.Window.Width, ptyReq.Window.Height)
 	mgr := s.sessions
+
+	s.mu.Lock()
+	s.ptyConns++
+	s.mu.Unlock()
+
+	finished := false
+	finishPTY := func(client *session.Client, code int) {
+		if finished {
+			return
+		}
+		finished = true
+		s.mu.Lock()
+		s.ptyConns--
+		s.mu.Unlock()
+		if client != nil {
+			client.Close() //nolint:errcheck
+		}
+		sess.Exit(code) //nolint:errcheck
+	}
 
 	// Build environment from SSH session (includes TERM, etc.).
 	// SSH clients typically don't forward COLORTERM. Fall back to the
@@ -153,7 +252,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		target, err = mgr.Create(cols, rows, sshEnv)
 		if err != nil {
 			fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
-			sess.Exit(1)                                            //nolint:errcheck
+			finishPTY(nil, 1)
 			return
 		}
 	} else {
@@ -177,7 +276,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		)
 		if _, err := p.Run(); err != nil {
 			fmt.Fprintf(sess.Stderr(), "selector: %s\n", err) //nolint:errcheck
-			sess.Exit(1)                                      //nolint:errcheck
+			finishPTY(nil, 1)
 			return
 		}
 		// Instantly unblock BubbleTea's abandoned read goroutine.
@@ -186,7 +285,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		result := screen.result
 		if result == nil {
 			// User quit without selecting.
-			sess.Exit(0) //nolint:errcheck
+			finishPTY(nil, 0)
 			return
 		}
 		if result.sessionID == "" {
@@ -195,21 +294,20 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 			target, err = mgr.Create(cols, rows, sshEnv)
 			if err != nil {
 				fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
-				sess.Exit(1)                                            //nolint:errcheck
+				finishPTY(nil, 1)
 				return
 			}
 		} else {
 			target = mgr.Get(result.sessionID)
 			if target == nil {
 				fmt.Fprintf(sess.Stderr(), "session %s not found\n", result.sessionID) //nolint:errcheck
-				sess.Exit(1)                                                           //nolint:errcheck
+				finishPTY(nil, 1)
 				return
 			}
 		}
 	}
 
 	client := target.Attach(cols, rows)
-	defer client.Close() //nolint:errcheck
 
 	// Forward window resize (writer only).
 	go func() {
@@ -281,16 +379,19 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	}()
 
 	<-done
-	sess.Exit(0) //nolint:errcheck
+	finishPTY(client, 0)
 }
 
-func handleExecSession(sess charmssh.Session) {
+func (s *Server) handleExecSession(sess charmssh.Session) {
 	rawCmd := sess.RawCommand()
 	if rawCmd == "" {
 		fmt.Fprintln(sess.Stderr(), "no command specified") //nolint:errcheck
 		sess.Exit(1)                                        //nolint:errcheck
 		return
 	}
+
+	execID := s.registerExec(rawCmd)
+	defer s.deregisterExec(execID)
 
 	// Execute via the user's shell, matching OpenSSH sshd behavior.
 	// The client shell-escapes individual arguments to preserve

@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/bernd/vibepit/keygen"
@@ -130,4 +134,234 @@ func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
 	output, err := sess.Output(wireCmd)
 	require.NoError(t, err)
 	assert.Equal(t, "a b\n$HOME\n$(uname)\n", string(output))
+}
+
+type fakeTransport struct {
+	sendRequestFn func(name string, wantReply bool, payload []byte) (bool, []byte, error)
+	closed        bool
+}
+
+func (f *fakeTransport) SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error) {
+	return f.sendRequestFn(name, wantReply, payload)
+}
+
+func (f *fakeTransport) Close() error {
+	f.closed = true
+	return nil
+}
+
+func TestHandleLastExit(t *testing.T) {
+	makeReply := func(ptyConns, attached, detached, exec uint32, info string) []byte {
+		reply := sshd.SessionCountReply{
+			PTYConns:     ptyConns,
+			AttachedPTY:  attached,
+			DetachedPTY:  detached,
+			ExecCount:    exec,
+			DetachedInfo: info,
+		}
+		return gossh.Marshal(reply)
+	}
+
+	t.Run("not a TTY skips request", func(t *testing.T) {
+		requestSent := false
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				requestSent = true
+				return true, nil, nil
+			},
+		}
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader(""),
+			stderr:     io.Discard,
+			isTerminal: false,
+			shutdownFn: func() error { return nil },
+		})
+		assert.NoError(t, err)
+		assert.False(t, requestSent)
+	})
+
+	t.Run("SendRequest error exits silently", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return false, nil, fmt.Errorf("connection reset")
+			},
+		}
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader(""),
+			stderr:     io.Discard,
+			isTerminal: true,
+			shutdownFn: func() error { return nil },
+		})
+		assert.NoError(t, err)
+		assert.True(t, transport.closed)
+	})
+
+	t.Run("SendRequest ok=false exits silently", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return false, nil, nil
+			},
+		}
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader(""),
+			stderr:     io.Discard,
+			isTerminal: true,
+			shutdownFn: func() error { return nil },
+		})
+		assert.NoError(t, err)
+		assert.True(t, transport.closed)
+	})
+
+	t.Run("PTYConns > 0 no prompt", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(2, 0, 0, 0, ""), nil
+			},
+		}
+		var stderr bytes.Buffer
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader(""),
+			stderr:     &stderr,
+			isTerminal: true,
+			shutdownFn: func() error { return nil },
+		})
+		assert.NoError(t, err)
+		assert.Empty(t, stderr.String())
+	})
+
+	t.Run("ExecCount > 0 no prompt", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 0, 1, ""), nil
+			},
+		}
+		var stderr bytes.Buffer
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader(""),
+			stderr:     &stderr,
+			isTerminal: true,
+			shutdownFn: func() error { return nil },
+		})
+		assert.NoError(t, err)
+		assert.Empty(t, stderr.String())
+	})
+
+	t.Run("last exit user types n", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 1, 0, "session-1\tshell\t3m"), nil
+			},
+		}
+		shutdownCalled := false
+		var stderr bytes.Buffer
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader("n\n"),
+			stderr:     &stderr,
+			isTerminal: true,
+			shutdownFn: func() error { shutdownCalled = true; return nil },
+		})
+		assert.NoError(t, err)
+		assert.False(t, shutdownCalled)
+		assert.Contains(t, stderr.String(), "last connection")
+		assert.Contains(t, stderr.String(), "session-1")
+	})
+
+	t.Run("last exit user types y", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 0, 0, ""), nil
+			},
+		}
+		shutdownCalled := false
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader("y\n"),
+			stderr:     io.Discard,
+			isTerminal: true,
+			shutdownFn: func() error { shutdownCalled = true; return nil },
+		})
+		assert.NoError(t, err)
+		assert.True(t, shutdownCalled)
+	})
+
+	t.Run("last exit user types yes", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 0, 0, ""), nil
+			},
+		}
+		shutdownCalled := false
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader("YES\n"),
+			stderr:     io.Discard,
+			isTerminal: true,
+			shutdownFn: func() error { shutdownCalled = true; return nil },
+		})
+		assert.NoError(t, err)
+		assert.True(t, shutdownCalled)
+	})
+
+	t.Run("stdin EOF means no", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 0, 0, ""), nil
+			},
+		}
+		shutdownCalled := false
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader(""),
+			stderr:     io.Discard,
+			isTerminal: true,
+			shutdownFn: func() error { shutdownCalled = true; return nil },
+		})
+		assert.NoError(t, err)
+		assert.False(t, shutdownCalled)
+	})
+
+	t.Run("shutdownFn error is propagated", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 0, 0, ""), nil
+			},
+		}
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader("y\n"),
+			stderr:     io.Discard,
+			isTerminal: true,
+			shutdownFn: func() error { return fmt.Errorf("down failed") },
+		})
+		assert.EqualError(t, err, "down failed")
+	})
+
+	t.Run("detached info rendering", func(t *testing.T) {
+		transport := &fakeTransport{
+			sendRequestFn: func(string, bool, []byte) (bool, []byte, error) {
+				return true, makeReply(0, 0, 2, 0, "session-1\tshell\t3m\nsession-2\tbash\t1h2m"), nil
+			},
+		}
+		var stderr bytes.Buffer
+		err := handleLastExit(handleLastExitParams{
+			transport:  transport,
+			stdin:      strings.NewReader("n\n"),
+			stderr:     &stderr,
+			isTerminal: true,
+			shutdownFn: func() error { return nil },
+		})
+		assert.NoError(t, err)
+		output := stderr.String()
+		assert.Contains(t, output, "2 detached session(s) will be killed:")
+		assert.Contains(t, output, "session-1")
+		assert.Contains(t, output, "session-2")
+		assert.Contains(t, output, "shell")
+		assert.Contains(t, output, "1h2m")
+	})
 }

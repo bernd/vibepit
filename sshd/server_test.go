@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,4 +179,263 @@ func TestSSHInputChannelClosesOnReadError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("sshInputChannel did not close after reader EOF")
 	}
+}
+
+func TestExecSessionRegistry(t *testing.T) {
+	s := &Server{
+		sessions:     session.NewManager(50),
+		execSessions: make(map[uint64]*execSession),
+	}
+
+	t.Run("register and deregister", func(t *testing.T) {
+		id := s.registerExec("echo hello")
+		s.mu.Lock()
+		assert.Len(t, s.execSessions, 1)
+		assert.Equal(t, "echo hello", s.execSessions[id].command)
+		assert.False(t, s.execSessions[id].startedAt.IsZero())
+		s.mu.Unlock()
+
+		s.deregisterExec(id)
+		s.mu.Lock()
+		assert.Empty(t, s.execSessions)
+		s.mu.Unlock()
+	})
+
+	t.Run("multiple concurrent registrations", func(t *testing.T) {
+		id1 := s.registerExec("cmd1")
+		id2 := s.registerExec("cmd2")
+		id3 := s.registerExec("cmd3")
+		assert.NotEqual(t, id1, id2)
+		assert.NotEqual(t, id2, id3)
+
+		s.mu.Lock()
+		assert.Len(t, s.execSessions, 3)
+		s.mu.Unlock()
+
+		s.deregisterExec(id2)
+		s.mu.Lock()
+		assert.Len(t, s.execSessions, 2)
+		assert.Nil(t, s.execSessions[id2])
+		s.mu.Unlock()
+
+		s.deregisterExec(id1)
+		s.deregisterExec(id3)
+		s.mu.Lock()
+		assert.Empty(t, s.execSessions)
+		s.mu.Unlock()
+	})
+
+	t.Run("deregister nonexistent is safe", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			s.deregisterExec(9999)
+		})
+	})
+}
+
+func TestExecSessionRegistryConcurrent(t *testing.T) {
+	s := &Server{
+		sessions:     session.NewManager(50),
+		execSessions: make(map[uint64]*execSession),
+	}
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			id := s.registerExec("stress")
+			time.Sleep(time.Millisecond)
+			s.deregisterExec(id)
+		})
+	}
+	wg.Wait()
+
+	s.mu.Lock()
+	assert.Empty(t, s.execSessions)
+	s.mu.Unlock()
+}
+
+func TestSessionCount(t *testing.T) {
+	t.Run("empty state", func(t *testing.T) {
+		s := &Server{
+			sessions:     session.NewManager(50),
+			execSessions: make(map[uint64]*execSession),
+		}
+		reply := s.sessionCount()
+		assert.Equal(t, uint32(0), reply.PTYConns)
+		assert.Equal(t, uint32(0), reply.AttachedPTY)
+		assert.Equal(t, uint32(0), reply.DetachedPTY)
+		assert.Equal(t, uint32(0), reply.ExecCount)
+		assert.Empty(t, reply.DetachedInfo)
+	})
+
+	t.Run("exec sessions only", func(t *testing.T) {
+		s := &Server{
+			sessions:     session.NewManager(50),
+			execSessions: make(map[uint64]*execSession),
+		}
+		id := s.registerExec("long-running")
+		defer s.deregisterExec(id)
+
+		reply := s.sessionCount()
+		assert.Equal(t, uint32(1), reply.ExecCount)
+		assert.Equal(t, uint32(0), reply.AttachedPTY)
+	})
+
+	t.Run("pty conns counted", func(t *testing.T) {
+		s := &Server{
+			sessions:     session.NewManager(50),
+			execSessions: make(map[uint64]*execSession),
+		}
+		s.mu.Lock()
+		s.ptyConns = 2
+		s.mu.Unlock()
+
+		reply := s.sessionCount()
+		assert.Equal(t, uint32(2), reply.PTYConns)
+	})
+
+	t.Run("detached session counted and info populated", func(t *testing.T) {
+		mgr := session.NewManager(50)
+		s := &Server{
+			sessions:     mgr,
+			execSessions: make(map[uint64]*execSession),
+		}
+
+		// Create starts a session with zero clients → Detached.
+		_, err := mgr.Create(80, 24, nil)
+		require.NoError(t, err)
+
+		reply := s.sessionCount()
+		assert.Equal(t, uint32(0), reply.AttachedPTY)
+		assert.Equal(t, uint32(1), reply.DetachedPTY)
+		require.NotEmpty(t, reply.DetachedInfo)
+
+		// Verify tab-delimited format: "id\tcommand\tage"
+		parts := strings.SplitN(reply.DetachedInfo, "\t", 3)
+		require.Len(t, parts, 3)
+		assert.Equal(t, "session-1", parts[0])
+		assert.NotEmpty(t, parts[1]) // command (shell path)
+		assert.NotEmpty(t, parts[2]) // age (e.g. "<1m")
+	})
+
+	t.Run("attached session not in detached info", func(t *testing.T) {
+		mgr := session.NewManager(50)
+		s := &Server{
+			sessions:     mgr,
+			execSessions: make(map[uint64]*execSession),
+		}
+
+		sess, err := mgr.Create(80, 24, nil)
+		require.NoError(t, err)
+
+		// Attach a client → session becomes Attached.
+		c := sess.Attach(80, 24)
+		defer c.Close() //nolint:errcheck
+
+		reply := s.sessionCount()
+		assert.Equal(t, uint32(1), reply.AttachedPTY)
+		assert.Equal(t, uint32(0), reply.DetachedPTY)
+		assert.Empty(t, reply.DetachedInfo)
+	})
+}
+
+func TestPTYConnCounterViaSSH(t *testing.T) {
+	hostPriv, _, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close() //nolint:errcheck
+
+	srv, err := NewServer(Config{
+		HostKeyPEM:    hostPriv,
+		AuthorizedKey: clientPub,
+		Sessions:      session.NewManager(50),
+	})
+	require.NoError(t, err)
+	go srv.Serve(listener) //nolint:errcheck
+	defer srv.Close()      //nolint:errcheck
+
+	signer, err := gossh.ParsePrivateKey(clientPriv)
+	require.NoError(t, err)
+
+	client, err := gossh.Dial("tcp", listener.Addr().String(), &gossh.ClientConfig{
+		User:            "code",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+	})
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+
+	err = sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{})
+	require.NoError(t, err)
+	err = sess.Shell()
+	require.NoError(t, err)
+
+	// Give handlePTYSession time to increment the counter.
+	require.Eventually(t, func() bool {
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		return srv.ptyConns > 0
+	}, 2*time.Second, 10*time.Millisecond)
+
+	srv.mu.Lock()
+	assert.Equal(t, 1, srv.ptyConns)
+	srv.mu.Unlock()
+
+	// Close session; finishPTY should decrement before sess.Exit.
+	sess.Close() //nolint:errcheck
+
+	require.Eventually(t, func() bool {
+		srv.mu.Lock()
+		defer srv.mu.Unlock()
+		return srv.ptyConns == 0
+	}, 2*time.Second, 10*time.Millisecond)
+}
+
+func TestSessionCountViaSSH(t *testing.T) {
+	hostPriv, _, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close() //nolint:errcheck
+
+	srv, err := NewServer(Config{
+		HostKeyPEM:    hostPriv,
+		AuthorizedKey: clientPub,
+		Sessions:      session.NewManager(50),
+	})
+	require.NoError(t, err)
+	go srv.Serve(listener) //nolint:errcheck
+	defer srv.Close()      //nolint:errcheck
+
+	signer, err := gossh.ParsePrivateKey(clientPriv)
+	require.NoError(t, err)
+
+	client, err := gossh.Dial("tcp", listener.Addr().String(), &gossh.ClientConfig{
+		User:            "code",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+	})
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	ok, payload, err := client.SendRequest(sessionCountRequestType, true, nil)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	var reply SessionCountReply
+	err = gossh.Unmarshal(payload, &reply)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), reply.AttachedPTY)
+	assert.Equal(t, uint32(0), reply.DetachedPTY)
+	assert.Equal(t, uint32(0), reply.ExecCount)
+	assert.Equal(t, uint32(0), reply.PTYConns)
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/bernd/vibepit/config"
@@ -140,7 +142,11 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("raw terminal: %w", err)
 	}
-	defer term.Restore(fd, oldState) //nolint:errcheck
+	var restoreOnce sync.Once
+	restoreTerminal := func() {
+		restoreOnce.Do(func() { term.Restore(fd, oldState) }) //nolint:errcheck
+	}
+	defer restoreTerminal()
 
 	w, h, err := term.GetSize(fd)
 	if err != nil {
@@ -161,7 +167,54 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 
 	session.Stdout = os.Stdout
 	session.Stderr = os.Stderr
-	session.Stdin = os.Stdin
+
+	// Use StdinPipe + a channel-based reader instead of session.Stdin.
+	// Setting session.Stdin makes the SSH library start a goroutine that
+	// reads from os.Stdin. After session.Wait(), that goroutine stays
+	// alive (blocked in Read), racing with the shutdown prompt for user
+	// input. Instead, one goroutine owns os.Stdin reads and sends to a
+	// channel; a stoppable copy goroutine routes the channel to the SSH
+	// pipe. After the session ends, we stop the copy goroutine and
+	// redirect the channel to the prompt reader.
+	stdinPipe, err := session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
+	stdinCh := make(chan []byte, 16)
+	go func() {
+		defer close(stdinCh)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				stdinCh <- data
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	stopCopy := make(chan struct{})
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		defer stdinPipe.Close() //nolint:errcheck
+		for {
+			select {
+			case data, ok := <-stdinCh:
+				if !ok {
+					return
+				}
+				if _, err := stdinPipe.Write(data); err != nil {
+					return
+				}
+			case <-stopCopy:
+				return
+			}
+		}
+	}()
 
 	if err := session.Shell(); err != nil {
 		return fmt.Errorf("start shell: %w", err)
@@ -182,7 +235,28 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		}
 	}()
 
-	return session.Wait()
+	waitErr := session.Wait()
+
+	// Stop the copy goroutine and wait for it to exit. After this,
+	// stdinCh has no consumer, so the prompt reader can take over.
+	close(stopCopy)
+	<-copyDone
+
+	restoreTerminal()
+
+	if waitErr != nil {
+		return waitErr
+	}
+
+	return handleLastExit(handleLastExitParams{
+		transport:  conn,
+		stdin:      &channelStdinReader{ch: stdinCh},
+		stderr:     os.Stderr,
+		isTerminal: term.IsTerminal(fd),
+		shutdownFn: func() error {
+			return DownAction(ctx, cmd)
+		},
+	})
 }
 
 // buildRemoteCommand turns an argument vector into a single shell-safe
@@ -200,4 +274,83 @@ func buildRemoteCommand(args []string) string {
 		escaped[i] = sshd.ShellEscape(a)
 	}
 	return strings.Join(escaped, " ")
+}
+
+type sessionCountTransport interface {
+	SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error)
+	Close() error
+}
+
+type handleLastExitParams struct {
+	transport  sessionCountTransport
+	stdin      io.Reader
+	stderr     io.Writer
+	isTerminal bool
+	shutdownFn func() error
+}
+
+func handleLastExit(p handleLastExitParams) error {
+	if !p.isTerminal {
+		return nil
+	}
+
+	ok, payload, err := p.transport.SendRequest("session-count@vibepit", true, nil)
+	p.transport.Close() //nolint:errcheck
+	if err != nil || !ok {
+		return nil //nolint:nilerr // silent exit per spec: old daemon or transport error
+	}
+
+	var reply sshd.SessionCountReply
+	if err := ssh.Unmarshal(payload, &reply); err != nil {
+		return nil //nolint:nilerr // silent exit per spec: malformed reply
+	}
+
+	if reply.PTYConns > 0 || reply.ExecCount > 0 {
+		return nil
+	}
+
+	fmt.Fprintln(p.stderr, "You were the last connection.")
+	if reply.DetachedPTY > 0 && reply.DetachedInfo != "" {
+		fmt.Fprintf(p.stderr, "%d detached session(s) will be killed:\n", reply.DetachedPTY)
+		for line := range strings.SplitSeq(reply.DetachedInfo, "\n") {
+			parts := strings.SplitN(line, "\t", 3)
+			if len(parts) == 3 {
+				fmt.Fprintf(p.stderr, "  %-12s %-8s %s\n", parts[0], parts[1], parts[2])
+			}
+		}
+	}
+	fmt.Fprint(p.stderr, "Shut down the sandbox? [y/N] ")
+
+	reader := bufio.NewReader(p.stdin)
+	answer, err := reader.ReadString('\n')
+	if err != nil {
+		return nil //nolint:nilerr // stdin EOF or read error treated as "no"
+	}
+
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer == "y" || answer == "yes" {
+		return p.shutdownFn()
+	}
+	return nil
+}
+
+// channelStdinReader adapts a byte channel as an io.Reader. Used to
+// redirect stdin from the SSH copy goroutine to the shutdown prompt
+// without competing readers on os.Stdin.
+type channelStdinReader struct {
+	ch  <-chan []byte
+	buf []byte
+}
+
+func (r *channelStdinReader) Read(p []byte) (int, error) {
+	for len(r.buf) == 0 {
+		data, ok := <-r.ch
+		if !ok {
+			return 0, io.EOF
+		}
+		r.buf = data
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
 }
