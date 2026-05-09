@@ -696,6 +696,8 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		"HTTPS_PROXY=" + proxyURL,
 		"http_proxy=" + proxyURL,
 		"https_proxy=" + proxyURL,
+		"grpc_proxy=" + proxyURL,
+		"NODE_USE_ENV_PROXY=1", // Required for Node.js built-in fetch/http clients to honor proxy env vars
 		"NO_PROXY=localhost,127.0.0.1",
 		"no_proxy=localhost,127.0.0.1",
 		fmt.Sprintf("JAVA_TOOL_OPTIONS=-Dhttps.proxyHost=%[1]s -Dhttps.proxyPort=%[2]d -Dhttp.proxyHost=%[1]s -Dhttp.proxyPort=%[2]d", cfg.ProxyIP, cfg.ProxyPort),
