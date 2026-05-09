@@ -1,0 +1,35 @@
+{
+  "version": "0.1.0",
+  "timestamp": "2026-05-09T19:27:31+02:00",
+  "changelog": "Added:\n- SSH-based daemon mode with persistent PTY sessions (up, down, ssh, status commands)\n- Session selector TUI for detached sessions\n- Self-update command for binary updates with SHA256 and cosign verification\n- Session detector and live polling in monitor TUI\n- Global --version flag\n- Mistral AI network preset\n- NODE_USE_ENV_PROXY and grpc_proxy environment variables for sandbox\nChanged:\n- Update sandbox image to Ubuntu 26.04\n- Use \"unless-stopped\" restart policy for the proxy container\n- Add downloads.claude.ai:443 to Anthropic network preset\n- Add vuln.go.dev:443 to Golang network preset\nFixed:\n- Nil pointer dereference in control API log handler",
+  "assets": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-linux-x86_64.tar.gz",
+      "sha256": "1399ed4f2acdc2030620ccc8f699104576b0725739a2b06627a2c8a2c36132a4",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-linux-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-linux-aarch64.tar.gz",
+      "sha256": "98d6ca16ae234707d789497abc2909376b39da8d830aaef90cf4f1909fc02831",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-linux-aarch64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-darwin-x86_64.tar.gz",
+      "sha256": "0898e9dc5d5e747990c4d4ab0738b65984a478060a97a6c28180000f4bba50c1",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-darwin-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-darwin-aarch64.tar.gz",
+      "sha256": "9f4890bc500c3ee11e40795f7c7868256f0ec058013e5c0a7bfbc42c8a188ec9",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.1.0/vibepit-0.1.0-darwin-aarch64.tar.gz.bundle"
+    }
+  ]
+}
