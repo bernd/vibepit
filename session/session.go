@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -44,7 +45,7 @@ type Session struct {
 	rows       uint16
 
 	pumpDone    chan struct{} // closed when pump goroutine exits; barrier for vte.Close
-	drainDone   chan struct{} // closed by drainVTE on exit; awaited after vte.Close so no reader outlives the emulator
+	drainDone   chan struct{} // closed by drainVTE on exit; awaited before vte.Close so no reader races with close
 	cleanup     chan struct{}
 	cleanupOnce sync.Once
 }
@@ -296,9 +297,9 @@ func (s *Session) WriteInput(c *Client, p []byte) (int, error) {
 // drainVTE continuously reads from the VTE's internal response pipe. The VTE
 // generates responses for terminal queries (DA, DSR, cursor position, etc.).
 // If this pipe isn't drained, Write() blocks when the buffer fills up.
-// drainVTE closes drainDone when it exits; waitForExit waits on this *after*
-// calling vte.Close(), so no goroutine is still reading the emulator when
-// session teardown returns.
+// drainVTE closes drainDone when it exits. waitForExit first closes the VTE's
+// response pipe to unblock this read, then waits on drainDone before closing
+// the emulator itself.
 func (s *Session) drainVTE() {
 	defer close(s.drainDone)
 	buf := make([]byte, 1024)
@@ -376,13 +377,19 @@ func (s *Session) waitForExit() {
 	// the emulator's internal state (-race flags it).
 	<-s.pumpDone
 
-	// Close the VTE; this closes the internal pipe, unblocking drainVTE's
-	// vte.Read and allowing it to exit.
-	s.vte.Close() //nolint:errcheck
+	// Close the VTE response pipe to unblock drainVTE. Do not call vte.Close
+	// while drainVTE is inside vte.Read: vt-go's Read and Close race on the
+	// emulator's unprotected closed flag. Closing the pipe writer wakes Read
+	// without touching that flag.
+	pipeClosed := closeVTEPipe(s.vte)
 
 	// Wait for drainVTE to exit fully before proceeding. This ensures no
 	// goroutine is accessing the emulator after we return.
 	<-s.drainDone
+
+	if pipeClosed {
+		s.vte.Close() //nolint:errcheck
+	}
 
 	s.mu.Lock()
 	s.exitCode = exitCode
@@ -397,6 +404,23 @@ func (s *Session) waitForExit() {
 	if !hasClients {
 		go s.expireTombstone()
 	}
+}
+
+type pipeErrorCloser interface {
+	CloseWithError(error) error
+}
+
+// closeVTEPipe closes just the VTE's internal pipe writer to unblock
+// drainVTE's Read without touching the emulator's closed flag. Returns true
+// if only the pipe was closed (caller must still call vte.Close), or false
+// if vte.Close was called as a fallback (caller must not double-close).
+func closeVTEPipe(vte *vt.SafeEmulator) bool {
+	if closer, ok := vte.InputPipe().(pipeErrorCloser); ok {
+		closer.CloseWithError(io.EOF) //nolint:errcheck
+		return true
+	}
+	vte.Close() //nolint:errcheck
+	return false
 }
 
 func (s *Session) expireTombstone() {

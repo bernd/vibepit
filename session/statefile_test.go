@@ -15,7 +15,7 @@ import (
 func TestStateFile_WrittenOnCreate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
-	m := testManager(50)
+	m := testManager(t, 50)
 	m.SetStateFilePath(path)
 
 	_, err := m.Create(80, 24, nil)
@@ -47,7 +47,7 @@ func TestStateFile_WrittenOnCreate(t *testing.T) {
 func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.json")
-	m := testManager(50)
+	m := testManager(t, 50)
 	m.SetStateFilePath(path)
 
 	// Seed 3 sessions with the hook disabled so none of these Creates park.

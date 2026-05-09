@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,14 +17,70 @@ import (
 
 // testManager returns a Manager that uses /bin/sh instead of /bin/bash --login
 // to avoid slow profile loading in test environments.
-func testManager(limit int) *Manager {
+func testManager(t testing.TB, limit int) *Manager {
+	t.Helper()
 	m := NewManager(limit)
 	m.Command = []string{"/bin/sh"}
+	t.Cleanup(func() {
+		terminateTestManager(t, m)
+	})
 	return m
 }
 
+func terminateTestManager(t testing.TB, m *Manager) {
+	t.Helper()
+
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	for _, s := range sessions {
+		terminateTestSession(s, syscall.SIGTERM)
+	}
+	if waitForTestSessionsExited(sessions, time.Second) {
+		return
+	}
+
+	for _, s := range sessions {
+		terminateTestSession(s, syscall.SIGKILL)
+	}
+	if !waitForTestSessionsExited(sessions, time.Second) {
+		t.Errorf("timed out waiting for test sessions to exit")
+	}
+}
+
+func terminateTestSession(s *Session, signal syscall.Signal) {
+	if s == nil || s.cmd == nil || s.cmd.Process == nil || s.Exited() {
+		return
+	}
+	syscall.Kill(-s.cmd.Process.Pid, signal) //nolint:errcheck
+}
+
+func waitForTestSessionsExited(sessions []*Session, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		allExited := true
+		for _, s := range sessions {
+			if s != nil && !s.Exited() {
+				allExited = false
+				break
+			}
+		}
+		if allExited {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestManager_CreateAndList(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 	require.NotNil(t, s)
@@ -36,7 +93,7 @@ func TestManager_CreateAndList(t *testing.T) {
 }
 
 func TestManager_Limit(t *testing.T) {
-	m := testManager(1)
+	m := testManager(t, 1)
 	_, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 	_, err = m.Create(80, 24, nil)
@@ -44,7 +101,7 @@ func TestManager_Limit(t *testing.T) {
 }
 
 func TestManager_Get(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, _ := m.Create(80, 24, nil)
 	got := m.Get(s.ID())
 	assert.Equal(t, s, got)
@@ -52,7 +109,7 @@ func TestManager_Get(t *testing.T) {
 }
 
 func TestSession_AttachDetach(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -71,7 +128,7 @@ func TestSession_AttachDetach(t *testing.T) {
 }
 
 func TestSession_WriterPromotion(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -98,7 +155,7 @@ func TestSession_WriterPromotion(t *testing.T) {
 }
 
 func TestSession_TakeOver(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -123,7 +180,7 @@ func TestSession_TakeOver(t *testing.T) {
 }
 
 func TestSession_FanOut(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -171,7 +228,7 @@ func TestSession_FanOut(t *testing.T) {
 }
 
 func TestSession_Resize(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -192,7 +249,7 @@ func TestSession_Resize(t *testing.T) {
 }
 
 func TestSession_ShellExit(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -230,7 +287,7 @@ func TestSession_ShellExit(t *testing.T) {
 }
 
 func TestSession_SlowConsumerDisconnected(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -266,7 +323,7 @@ func TestSession_SlowConsumerDisconnected(t *testing.T) {
 }
 
 func TestSession_ReplayOnAttach(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -315,7 +372,7 @@ ready:
 // then showed stale screen state. This test fails under the old async
 // design and passes with synchronous in-pump vte.Write.
 func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -406,7 +463,7 @@ func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
 func TestSession_AttachAfterExitNeverHangs(t *testing.T) {
 	const iterations = 200
 	for i := range iterations {
-		m := testManager(50)
+		m := testManager(t, 50)
 		s, err := m.Create(80, 24, nil)
 		require.NoError(t, err)
 
@@ -564,7 +621,7 @@ func TestRenderVTEScrollback_WideCharacters(t *testing.T) {
 // differently-sized terminal would render at the old VTE dimensions until
 // a later Resize event happened.
 func TestSession_AttachAsWriterResizesVTE(t *testing.T) {
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -609,7 +666,7 @@ func TestSession_AttachReplayBeforeLiveOutput(t *testing.T) {
 	attachReplayTestHook = func() { time.Sleep(10 * time.Millisecond) }
 	defer func() { attachReplayTestHook = prev }()
 
-	m := testManager(50)
+	m := testManager(t, 50)
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)
 
@@ -682,7 +739,7 @@ func TestSession_AttachReplayBeforeLiveOutput(t *testing.T) {
 // so a bug that injects 0x0c into the PTY is directly observable on the
 // writer's output channel.
 func TestSession_NonWriterAltScreenAttachNoPTYInjection(t *testing.T) {
-	m := NewManager(50)
+	m := testManager(t, 50)
 	m.Command = []string{"/bin/sh", "-c", "stty raw -echo; exec cat"}
 	s, err := m.Create(80, 24, nil)
 	require.NoError(t, err)

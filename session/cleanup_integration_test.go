@@ -74,24 +74,29 @@ func TestCleanupDescendants_KillsOrphanedGrandchild(t *testing.T) {
 		grandchildPID = pid
 		return true
 	}, 5*time.Second, 50*time.Millisecond, "grandchild PID file never appeared")
+	t.Cleanup(func() {
+		syscall.Kill(grandchildPID, syscall.SIGKILL) //nolint:errcheck
+	})
 
 	// Verify grandchild is alive.
-	err = syscallKillCheck(grandchildPID)
-	require.NoError(t, err, "grandchild should be alive before cleanup")
+	require.True(t, processLive(grandchildPID), "grandchild should be alive before cleanup")
 
 	// Run cleanup.
 	cleanupDescendants(shellPID, sid)
 
 	// Verify grandchild is dead.
-	err = syscallKillCheck(grandchildPID)
-	assert.Error(t, err, "grandchild should be dead after cleanup")
+	assert.False(t, processLive(grandchildPID), "grandchild should be dead after cleanup")
 }
 
-// syscallKillCheck sends signal 0 to check if a process exists.
-func syscallKillCheck(pid int) error {
-	p, err := os.FindProcess(pid)
+func processLive(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
 	if err != nil {
-		return err
+		return false
 	}
-	return p.Signal(syscall.Signal(0))
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if state, ok := strings.CutPrefix(line, "State:"); ok {
+			return !strings.HasPrefix(strings.TrimSpace(state), "Z")
+		}
+	}
+	return true
 }
