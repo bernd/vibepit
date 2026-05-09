@@ -12,7 +12,7 @@ import (
 // parseProcStat extracts PID, PGID, and SID from a /proc/<pid>/stat line.
 // Field 2 (comm) is parenthesized and may contain spaces or nested parens,
 // so parsing starts after the last ')'.
-func parseProcStat(line string) (pid, pgid, sid int, ok bool) {
+func parseProcStat(line string) (int, int, int, bool) {
 	closeParen := strings.LastIndex(line, ")")
 	if closeParen < 0 || closeParen+2 >= len(line) {
 		return 0, 0, 0, false
@@ -34,11 +34,11 @@ func parseProcStat(line string) (pid, pgid, sid int, ok bool) {
 		return 0, 0, 0, false
 	}
 
-	pgid, err = strconv.Atoi(fields[2])
+	pgid, err := strconv.Atoi(fields[2])
 	if err != nil {
 		return 0, 0, 0, false
 	}
-	sid, err = strconv.Atoi(fields[3])
+	sid, err := strconv.Atoi(fields[3])
 	if err != nil {
 		return 0, 0, 0, false
 	}
