@@ -1,5 +1,5 @@
 ---
-description: Complete reference for vibepit commands, flags, and arguments including run, up, down, ssh, status, allow-http, allow-dns, sessions, monitor, and update.
+description: Complete reference for vibepit commands, flags, and arguments including run, up, down, ssh, status, allow-http, allow-dns, sessions, monitor, update, and self-update.
 ---
 
 # CLI Reference
@@ -410,14 +410,70 @@ vibepit monitor [flags]
 
 ## `update`
 
-Pull the latest sandbox and proxy container images.
+Update the vibepit binary and pull the latest container images.
 
 ```
-vibepit update
+vibepit update [flags]
 ```
+
+### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--bin` | bool | `false` | Update the binary only (skip image pull) |
+| `--images` | bool | `false` | Update container images only (skip binary update) |
+| `--check` | bool | `false` | Check for available updates without installing |
+| `--list` | bool | `false` | List available releases |
+| `--use` | string | | Install a specific version (implies `--bin`) |
+| `--pre` | bool | `false` | Use the prerelease channel |
+| `-y`, `--yes` | bool | `false` | Skip the confirmation prompt |
 
 ### Behavior
 
-- Pulls the latest sandbox image for your UID/GID combination (e.g., `ghcr.io/bernd/vibepit:r1-uid-1000-gid-1000`).
-- Pulls the latest proxy base image (`gcr.io/distroless/base-debian13:latest`).
+By default, `vibepit update` updates both the binary and the container images.
+Use `--bin` or `--images` to update only one. The two flags are mutually
+exclusive.
+
+**Binary update:**
+
+- Checks the release channel for a newer version and downloads it.
+- Verifies the download with SHA-256 checksums and cosign signature bundles
+  (when available).
+- Replaces the running binary in place.
+- If vibepit was installed via a package manager (Homebrew, Snap, Nix, etc.),
+  the binary update is skipped with a message to use the package manager instead.
+- Use `--use <version>` to install a specific version regardless of what the
+  channel reports as latest.
+- Use `--pre` to check the prerelease channel instead of the stable channel.
+
+**Image update:**
+
+- Pulls the latest sandbox image for your UID/GID combination (e.g.,
+  `ghcr.io/bernd/vibepit:r1-uid-1000-gid-1000`).
+- Pulls the latest proxy base image.
+
+### Examples
+
+```bash
+# Update everything (binary + images)
+vibepit update
+
+# Check if an update is available
+vibepit update --check
+
+# List available releases
+vibepit update --list
+
+# Update binary only, skip confirmation
+vibepit update --bin -y
+
+# Update images only
+vibepit update --images
+
+# Install a specific version
+vibepit update --use 0.2.0
+
+# Check the prerelease channel
+vibepit update --check --pre
+```
 

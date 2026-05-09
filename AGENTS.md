@@ -69,7 +69,7 @@ Current root commands are defined in `cmd/root.go` and include:
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
 - `sessions` -- list active sessions.
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
-- `update` -- pull latest runtime images.
+- `update` -- update binary and pull latest runtime images.
 
 When docs and behavior differ, treat `cmd/root.go` and command files under
 `cmd/` as the source of truth.
