@@ -263,7 +263,7 @@ func displayPullProgress(r io.Reader) error {
 		wroteProgress = true
 	}
 	if isTerminal && wroteProgress {
-		fmt.Fprintln(os.Stdout)
+		fmt.Fprintf(os.Stdout, "\r\033[K             done\n")
 	}
 	return nil
 }
