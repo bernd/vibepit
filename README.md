@@ -6,9 +6,6 @@ Run AI coding agents in isolated containers with network filtering.
 Vibepit launches a sandboxed dev environment with a filtering proxy that
 controls which domains your agent can reach.
 
-> [!CAUTION]
-> Vibepit is still in alpha and under heavy development. Expect breaking changes.
-
 > [!WARNING]
 > Container isolation is not as strong as VM isolation. Kernel vulnerabilities,
 > misconfigurations, or container runtime bugs can weaken the sandbox. Vibepit
@@ -91,7 +88,7 @@ These targets use [`uv`](https://docs.astral.sh/uv/) to manage Python dependenci
 
 ## Contributing
 
-Vibepit is in early alpha. We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues). Please open an issue to discuss proposed changes before creating a pull request.
+We welcome bug reports and feedback via [GitHub Issues](https://github.com/bernd/vibepit/issues). Please open an issue to discuss proposed changes before creating a pull request.
 
 ## AI Transparency
 
