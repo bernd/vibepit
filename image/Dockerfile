@@ -44,6 +44,7 @@ RUN apt-get update \
     unzip \
     vim \
     wget \
+    xxd \
     zip \
     zstd \
   && locale-gen en_US.UTF-8 \
