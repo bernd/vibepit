@@ -193,11 +193,15 @@ func RenderBanner(width, height int) string {
 	return renderFullBanner(width)
 }
 
+func RenderNameWithGradient() string {
+	return applyGradient("VIBEPIT", ColorCyan, ColorPurple)
+}
+
 // renderCompactBanner produces a single-line branding banner without session info.
 func renderCompactBanner(width int) string {
 	fieldChar := lipgloss.NewStyle().Foreground(ColorField).Render("╱")
 
-	name := applyGradient("VIBEPIT", ColorCyan, ColorPurple)
+	name := RenderNameWithGradient()
 	tagline := lipgloss.NewStyle().Foreground(ColorOrange).Italic(true).Render("I pity the vibes")
 
 	leftPad := strings.Repeat(fieldChar, 3)

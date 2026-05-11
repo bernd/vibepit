@@ -16,6 +16,7 @@ import (
 	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/sshd"
+	"github.com/bernd/vibepit/ward"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
@@ -136,7 +137,37 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	// Interactive mode.
+	// Interactive mode — wrap in ward for notification bar unless
+	// already running inside a ward process.
+	if os.Getenv("VIBEPIT_WARD_PARENT") == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve executable: %w", err)
+		}
+		// One slot is enough: this channel only preloads the initial status
+		// before ward.Run starts its status-forwarding goroutine.
+		statusCh := make(chan ward.StatusUpdate, 1)
+		statusCh <- ward.StatusUpdate{
+			Message: fmt.Sprintf("╱╱ %s ╱╱ %s", strings.ReplaceAll(projectRoot, os.Getenv("HOME"), "~"), sandbox.SessionID),
+		}
+		w := ward.NewWrapper(ward.Options{
+			Command: append([]string{exe}, os.Args[1:]...),
+			Env:     []string{fmt.Sprintf("VIBEPIT_WARD_PARENT=%d", os.Getpid())},
+			Status:  statusCh,
+			OnKey: func(ctx context.Context, key byte, target string) (string, error) {
+				return "", nil
+			},
+		})
+		exitCode, err := w.Run(ctx)
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return &ctr.ExitError{Code: exitCode}
+		}
+		return nil
+	}
+
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -152,10 +183,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		w, h = 80, 24
 	}
-	termEnv := os.Getenv("TERM")
-	if termEnv == "" {
-		termEnv = "xterm-256color"
-	}
+	termEnv := containerTerm()
 
 	if err := session.RequestPty(termEnv, h, w, ssh.TerminalModes{
 		ssh.ECHO:          1,
