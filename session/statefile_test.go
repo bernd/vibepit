@@ -56,22 +56,20 @@ func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Now install the parking hook: the next writer to enter it snapshots
-	// 3 sessions, then blocks until we release it.
+	// Now install the parking hook: the next writer to enter it blocks before
+	// taking the serialized state-file snapshot.
 	parked := make(chan struct{})
 	release := make(chan struct{})
 	var first atomic.Bool
-	prev := stateFileWriteTestHook
-	stateFileWriteTestHook = func() {
+	setStateFileWriteTestHook(t, m, func() {
 		if !first.Swap(true) {
 			close(parked)
 			<-release
 		}
-	}
-	defer func() { stateFileWriteTestHook = prev }()
+	})
 
-	// Trigger a writer whose snapshot is 3 sessions. It parks inside the
-	// hook after snapshotting, before writing/renaming.
+	// Trigger a writer while 3 sessions exist. It parks inside the hook before
+	// writing/renaming.
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		m.onSessionChanged()
@@ -87,9 +85,8 @@ func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Let the parked writer go — it now writes+renames its stale
-	// 3-session snapshot, which under the bug overwrites the current
-	// 5-session state on disk.
+	// Let the parked writer go. Under the old bug, this writer could overwrite
+	// the current 5-session state on disk with a stale 3-session snapshot.
 	close(release)
 	wg.Wait()
 
@@ -100,4 +97,18 @@ func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 	assert.Len(t, sessions, 5,
 		"final state file must reflect all 5 sessions; a stale writer "+
 			"overwrote with an older snapshot")
+}
+
+func setStateFileWriteTestHook(t *testing.T, m *Manager, hook func()) {
+	t.Helper()
+	m.mu.Lock()
+	prev := m.stateFileWriteTestHook
+	m.stateFileWriteTestHook = hook
+	m.mu.Unlock()
+
+	t.Cleanup(func() {
+		m.mu.Lock()
+		m.stateFileWriteTestHook = prev
+		m.mu.Unlock()
+	})
 }

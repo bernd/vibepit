@@ -39,6 +39,10 @@ type Manager struct {
 	// overwrite a fresh one via the rename.
 	stateFileMu sync.Mutex
 
+	// stateFileWriteTestHook is nil in production; tests set it to coordinate
+	// state-file writer interleavings for deterministic race coverage.
+	stateFileWriteTestHook func()
+
 	// Command is the shell command and arguments used for new sessions.
 	// Defaults to ["/bin/bash", "--login"] when empty.
 	Command []string
