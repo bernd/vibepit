@@ -56,7 +56,7 @@ func cachedBinary(data []byte, dir string) (string, error) {
 		return "", fmt.Errorf("create cache dir: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, 0o555); err != nil {
 		return "", fmt.Errorf("write cached binary: %w", err)
 	}
 
