@@ -38,7 +38,7 @@ func TestCachedBinary(t *testing.T) {
 
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		assert.Equal(t, os.FileMode(0o555), info.Mode().Perm())
 	})
 
 	t.Run("reuses cached file", func(t *testing.T) {
