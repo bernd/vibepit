@@ -54,7 +54,7 @@ def format_entry(entry: dict) -> str:
     return line
 
 
-def parse_changelog(version: str) -> str:
+def parse_changelog(version: str, as_markdown: bool = False) -> str:
     changelog_file = Path(f"docs/changelogs/{version}.yml")
     if not changelog_file.exists():
         return ""
@@ -62,11 +62,13 @@ def parse_changelog(version: str) -> str:
     with open(changelog_file) as f:
         data = yaml.safe_load(f)
 
+    header_prefix = "\n### " if as_markdown else "\n"
+
     lines = []
     for category in CHANGELOG_CATEGORIES:
         entries = data.get(category, [])
         if entries:
-            lines.append(category.capitalize() + ":\n")
+            lines.append(header_prefix + category.capitalize() + ":")
             for entry in entries:
                 lines.append(format_entry(entry))
     return "\n".join(lines)
@@ -136,7 +138,7 @@ def render_changelog_cmd():
         sys.exit("VERSION environment variable is required")
 
     bare_version = version.lstrip("v")
-    changelog = parse_changelog(bare_version)
+    changelog = parse_changelog(bare_version, True)
     if changelog:
         print(changelog)
 
