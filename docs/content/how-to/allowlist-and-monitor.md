@@ -123,7 +123,7 @@ vibepit allow-dns --session <session-id> internal.example.com
 Retrieve session IDs with:
 
 ```bash
-vibepit sessions
+vibepit status
 ```
 
 When multiple sessions exist and you omit `--session`, an interactive selector

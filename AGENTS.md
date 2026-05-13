@@ -69,7 +69,6 @@ Current root commands are defined in `cmd/root.go` and include:
 - `allow-dns` -- add DNS allowlist entries at runtime.
 - `proxy` -- internal command used inside the proxy container.
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
-- `sessions` -- list active sessions.
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
 - `update` -- update binary and pull latest runtime images.
 
@@ -96,7 +95,7 @@ Built with `urfave/cli/v3`.
   config.
 - `proxy` runs the proxy server inside the proxy container.
 - `vibed` runs the SSH daemon inside the sandbox container (internal).
-- `sessions` and `monitor` provide session discovery and interactive control.
+- `monitor` provides interactive control.
 - `update` refreshes local runtime images.
 
 ### Proxy (`proxy/`)
@@ -206,7 +205,7 @@ Run the smallest set that proves correctness for your change:
   expected inside nested Vibepit sandbox; otherwise start Docker/Podman and
   verify socket permissions.
 - `allow-http` / `allow-dns` / `monitor` fail to connect:
-  ensure a matching session is running (`go run . sessions`).
+  ensure a matching session is running (`go run . status`).
 - Image pull/update failures:
   expected under network isolation unless registry domains are allowlisted.
 

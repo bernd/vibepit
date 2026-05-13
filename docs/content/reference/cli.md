@@ -1,5 +1,5 @@
 ---
-description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, sessions, monitor, update, and self-update.
+description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, monitor, update, and self-update.
 ---
 
 # CLI Reference
@@ -261,6 +261,12 @@ vibepit status [project-path]
 |----------|-------------|
 | `project-path` | Path to the project directory. Defaults to the current working directory. |
 
+### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-v`, `--verbose` | bool | `false` | Enable verbose output |
+
 ### Output
 
 When run inside a project directory (or given a project path), displays the
@@ -279,8 +285,8 @@ Example output:
       SSH   127.0.0.1:52847
 ```
 
-If no sessions are running at all, prints `No running session for <path>` (when
-in a project) or `No active sessions.` (when outside a project).
+If no sessions are running at all, prints `No active session for <path>` (when
+in a project) or `No active sessions` (when outside a project).
 
 ---
 
@@ -381,34 +387,6 @@ vibepit allow-dns '*.example.com'
 # Allow without saving to config
 vibepit allow-dns --no-save example.com
 ```
-
----
-
-## `sessions`
-
-List all active sandbox sessions.
-
-```
-vibepit sessions
-```
-
-### Output format
-
-Each line contains three columns:
-
-| Column | Description |
-|--------|-------------|
-| Session ID | Unique identifier for the session |
-| Project directory | Absolute path to the project |
-| Control port | Host port for the session's control API |
-
-Example output:
-
-```
-cq1abc2def3gh4ij   /home/user/my-project (port 41923)
-```
-
-If no sessions are running, the output is `No active sessions.`
 
 ---
 

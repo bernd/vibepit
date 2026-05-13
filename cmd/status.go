@@ -17,7 +17,7 @@ const statusVerboseFlag = "verbose"
 func StatusCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "status",
-		Usage: "Show session status",
+		Usage: "List project sessions",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    statusVerboseFlag,
@@ -68,7 +68,7 @@ func StatusAction(ctx context.Context, cmd *cli.Command) error {
 	if len(otherSessions) > 0 {
 		isHome := os.Getenv("HOME") == projectRoot
 		if !hasProjectSession && !isHome {
-			fmt.Println(warnStyle.Render("No active sessions for " + projectRoot))
+			fmt.Println(warnStyle.Render("No active session for " + projectRoot))
 		}
 		if !isHome {
 			fmt.Println()
