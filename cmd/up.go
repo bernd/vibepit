@@ -132,7 +132,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	// bare TCP dial succeeds even before the sandbox daemon is up. We
 	// verify readiness by reading the SSH version banner ("SSH-2.0-...")
 	// which is only sent after the sandbox daemon accepts.
-	tui.Status("Waiting", "for daemon")
+	tui.Status("Awaiting", "sandbox startup")
 	sshAddr := fmt.Sprintf("127.0.0.1:%d", sshPort)
 	sshReady := false
 	deadline := time.Now().Add(30 * time.Second)
