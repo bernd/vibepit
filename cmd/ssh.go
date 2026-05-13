@@ -3,17 +3,14 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 
-	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/sshd"
 	"github.com/bernd/vibepit/ward"
@@ -36,67 +33,9 @@ func SSHCommand() *cli.Command {
 }
 
 func SSHAction(ctx context.Context, cmd *cli.Command) error {
-	client, err := ctr.NewClient(ctr.WithDebug(cmd.Root().Bool(debugFlag)))
+	conn, sandbox, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
 	if err != nil {
 		return err
-	}
-	defer client.Close()
-
-	// Always resolve project root from cwd — all positional args are the
-	// remote command, not a project path.
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	projectRoot, err := config.FindProjectRoot(wd)
-	if err != nil {
-		return err
-	}
-
-	sandbox, err := client.FindRunningSession(ctx, projectRoot)
-	if err != nil {
-		return err
-	}
-	if sandbox == nil {
-		return fmt.Errorf("no running sandbox found — run 'vibepit up' first")
-	}
-
-	// SSH port is published on the proxy container (forwarded to sandbox).
-	proxyID, err := client.FindProxyContainerID(ctx, sandbox.SessionID)
-	if err != nil {
-		return err
-	}
-	port, err := client.FindPublishedPort(ctx, proxyID, ctr.SSHContainerPort)
-	if err != nil {
-		return fmt.Errorf("find SSH port: %w", err)
-	}
-
-	sessDir := sessionDir(sandbox.SessionID)
-	privateKey, err := os.ReadFile(filepath.Join(sessDir, SSHClientPrivFile))
-	if err != nil {
-		return fmt.Errorf("read ssh key: %w (credentials missing — run 'vibepit down && vibepit up')", err)
-	}
-	hostPubKey, err := os.ReadFile(filepath.Join(sessDir, SSHHostPubFile))
-	if err != nil {
-		return fmt.Errorf("read host key: %w", err)
-	}
-
-	signer, err := ssh.ParsePrivateKey(privateKey)
-	if err != nil {
-		return fmt.Errorf("parse private key: %w", err)
-	}
-	hostKey, _, _, _, err := ssh.ParseAuthorizedKey(hostPubKey)
-	if err != nil {
-		return fmt.Errorf("parse host key: %w", err)
-	}
-
-	conn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port), &ssh.ClientConfig{
-		User:            "code",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(hostKey),
-	})
-	if err != nil {
-		return fmt.Errorf("ssh connect: %w", err)
 	}
 	defer conn.Close() //nolint:errcheck
 
@@ -105,37 +44,6 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("ssh session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck
-
-	// Command mode — shell-escape each argument before joining so
-	// spaces, quotes, $VAR, $(cmd), and globs survive the wire as
-	// literals. The server runs the result via `shell -c`, matching
-	// OpenSSH exec semantics.
-	cmdArgs := cmd.Args().Slice()
-	if len(cmdArgs) > 0 {
-		session.Stdout = os.Stdout
-		session.Stderr = os.Stderr
-
-		// Use StdinPipe so the remote command can read from our stdin
-		// (piped or terminal) without blocking session.Wait() after the
-		// command exits. Wait() only waits for stdout/stderr completion;
-		// the stdin copy goroutine is interrupted when the session closes.
-		stdinPipe, err := session.StdinPipe()
-		if err != nil {
-			return fmt.Errorf("stdin pipe: %w", err)
-		}
-		go func() {
-			io.Copy(stdinPipe, os.Stdin) //nolint:errcheck
-			stdinPipe.Close()            //nolint:errcheck
-		}()
-
-		if err := session.Run(buildRemoteCommand(cmdArgs)); err != nil {
-			if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
-				return &ctr.ExitError{Code: exitErr.ExitStatus()}
-			}
-			return err
-		}
-		return nil
-	}
 
 	// Interactive mode — wrap in ward for notification bar unless
 	// already running inside a ward process.
@@ -148,7 +56,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		// before ward.Run starts its status-forwarding goroutine.
 		statusCh := make(chan ward.StatusUpdate, 1)
 		statusCh <- ward.StatusUpdate{
-			Message: fmt.Sprintf("╱╱ %s ╱╱ %s", strings.ReplaceAll(projectRoot, os.Getenv("HOME"), "~"), sandbox.SessionID),
+			Message: fmt.Sprintf("╱╱ %s ╱╱ %s", strings.ReplaceAll(sandbox.ProjectDir, os.Getenv("HOME"), "~"), sandbox.SessionID),
 		}
 		w := ward.NewWrapper(ward.Options{
 			Command: append([]string{exe}, os.Args[1:]...),

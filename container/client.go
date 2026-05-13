@@ -290,6 +290,7 @@ func humanBytes(b int64) string {
 type RunningSession struct {
 	ContainerID string
 	SessionID   string
+	ProjectDir  string
 }
 
 // FindRunningSession returns a running sandbox container for the given project
@@ -308,6 +309,7 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*Ru
 		return &RunningSession{
 			ContainerID: containers[0].ID,
 			SessionID:   containers[0].Labels[LabelSessionID],
+			ProjectDir:  projectDir,
 		}, nil
 	}
 	return nil, nil

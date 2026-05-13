@@ -46,6 +46,7 @@ func RootCommand() *cli.Command {
 			UpCommand(),
 			DownCommand(),
 			SSHCommand(),
+			ExecCommand(),
 			AllowHTTPCommand(),
 			AllowDNSCommand(),
 			ProxyCommand(),
