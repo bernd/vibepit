@@ -42,12 +42,12 @@ The `vibepit` binary runs on your host machine and orchestrates everything:
 2. **Starts the proxy container** on that network with a static IP.
 3. **Starts the sandbox container** configured to route all traffic through the proxy.
 4. **Generates ephemeral mTLS credentials** so that only the CLI can talk to the proxy's control API.
-5. **Attaches your terminal** to the sandbox container's shell (in `run` mode) or **waits for the SSH daemon** to accept connections (in `up` mode).
+5. **Attaches your terminal** to the sandbox container's shell (in `run` mode) or **waits for the daemon** to accept connections (in `up` mode).
 
 The CLI supports two operating modes:
 
 - **`run` mode** (default): attaches your terminal directly to the sandbox container. The session lifecycle is tied to the first `vibepit` process — when you exit, the containers are cleaned up.
-- **Daemon mode** (`up`/`ssh`/`down`): starts the containers in the background with an SSH server. You connect with `vibepit ssh`, and sessions inside the sandbox persist across SSH disconnects. The containers run until you explicitly stop them with `vibepit down`.
+- **Daemon mode** (`up`/`connect`/`down`): starts the containers in the background with an SSH server. You connect with `vibepit connect`, and sessions inside the sandbox persist across disconnects. The containers run until you explicitly stop them with `vibepit down`.
 
 After setup, the CLI also provides runtime commands — `allow-http`, `allow-dns`, `monitor`, and `status` — that communicate with the proxy's control API to modify the allowlist, observe traffic, or inspect session state. See the [CLI Reference](../reference/cli.md) for command details.
 
@@ -116,7 +116,7 @@ Each Vibepit session generates two ephemeral Ed25519 keypairs:
 - A **client keypair** — the private key stays on the host, the public key is passed to the sandbox container as the authorized key.
 - A **host keypair** — the private key is bind-mounted into the sandbox container, the public key stays on the host for host key verification.
 
-Both keypairs are stored in the session credentials directory (`$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`). When `vibepit ssh` connects, it uses the client private key for authentication and verifies the server's host key against the stored public key.
+Both keypairs are stored in the session credentials directory (`$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`). When `vibepit connect` connects, it uses the client private key for authentication and verifies the server's host key against the stored public key.
 
 ### Port forwarding
 
@@ -126,13 +126,13 @@ The SSH port is not published directly from the sandbox container. Instead, the 
 
 The SSH server manages persistent shell sessions inside the sandbox. Each shell session is a PTY-backed process that survives SSH client disconnects:
 
-- When you connect with `vibepit ssh` and detached sessions exist, the server presents a selector screen where you can reattach to an existing session or start a new one.
+- When you connect with `vibepit connect` and detached sessions exist, the server presents a selector screen where you can reattach to an existing session or start a new one.
 - Sessions persist until the shell process exits or the sandbox container stops.
 - The server enforces a limit of 50 concurrent sessions.
 
 ### Command execution
 
-`vibepit ssh` also supports non-interactive command execution. When arguments are passed (e.g., `vibepit ssh ls -la`), the server runs the command via the user's shell and returns its exit code without creating a persistent session.
+`vibepit exec` supports non-interactive command execution. When a command is passed (e.g., `vibepit exec ls -la`), the server runs the command via the user's shell and returns its exit code without creating a persistent session.
 
 ## Session Lifecycle
 
@@ -162,7 +162,7 @@ When you exit the shell, the sandbox container's entrypoint exits and the contai
 3. Removes the session network.
 4. Deletes the credential files from the session directory.
 
-### Daemon mode (`up`/`ssh`/`down`)
+### Daemon mode (`up`/`connect`/`down`)
 
 #### Startup
 
@@ -173,7 +173,7 @@ When you exit the shell, the sandbox container's entrypoint exits and the contai
 
 #### Connect
 
-You connect to the running session with `vibepit ssh`. See [SSH Server](#ssh-server) for authentication, session management, and command execution details.
+You connect to the running session with `vibepit connect`. See [SSH Server](#ssh-server) for authentication, session management, and command execution details.
 
 #### Cleanup
 

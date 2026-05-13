@@ -92,7 +92,7 @@ In daemon mode (`vibepit up`), the sandbox container runs an SSH server for remo
 3. The host private key is bind-mounted read-only into the sandbox container. The client public key is passed via environment variable.
 4. Only public key authentication is accepted — no passwords.
 5. The SSH server verifies the connecting client's key against the single authorized public key.
-6. The SSH client (`vibepit ssh`) verifies the server's host key against the stored public key, preventing MITM attacks.
+6. The SSH client (`vibepit connect`) verifies the server's host key against the stored public key, preventing MITM attacks.
 
 All SSH credentials are deleted when the session ends (`vibepit down`). Because keys are never reused across sessions, a compromised key cannot grant access to another.
 

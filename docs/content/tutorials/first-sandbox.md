@@ -165,8 +165,8 @@ creating a new one.
 ## Alternative: daemon mode
 
 Instead of attaching your terminal directly, you can run the sandbox in the
-background with an SSH server. This is useful when you want sessions that
-persist across disconnects or when running AI agents that connect via SSH.
+background. This is useful when you want sessions that persist across
+disconnects or when running AI agents that connect via SSH.
 
 ### Start the session
 
@@ -177,21 +177,21 @@ vibepit up
 This starts the sandbox and proxy containers in the background and prints the
 SSH address when ready.
 
-### Connect via SSH
+### Connect to the sandbox
 
 ```bash
-vibepit ssh
+vibepit connect
 ```
 
 Each connection opens a shell session inside the sandbox. If you disconnect
 (close the terminal, network drop), the shell session continues running. When
-you reconnect, the SSH server presents a selector where you can reattach to the
+you reconnect, the server presents a selector where you can reattach to the
 previous session or start a new one.
 
 You can also run a single command without an interactive shell:
 
 ```bash
-vibepit ssh ls -la
+vibepit exec ls -la
 ```
 
 ### Check status

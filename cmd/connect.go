@@ -3,17 +3,14 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 
-	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/sshd"
 	"github.com/bernd/vibepit/ward"
@@ -22,124 +19,40 @@ import (
 	"golang.org/x/term"
 )
 
-func SSHCommand() *cli.Command {
+const connectBarFlag = "bar"
+
+func ConnectCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "ssh",
-		Usage: "Connect to running sandbox via SSH",
-		// All args after "ssh" are the remote command and may contain
-		// dashes (e.g. "vibepit ssh cat -e -"). If we add flags to
-		// this subcommand, replace this with manual arg parsing or a
-		// "--" separator.
-		SkipFlagParsing: true,
-		Action:          SSHAction,
+		Name:    "connect",
+		Aliases: []string{"c"},
+		Usage:   "Connect to the running sandbox",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    connectBarFlag,
+				Usage:   "Enable status bar [EXPERIMENTAL]",
+				Aliases: []string{"b"},
+			},
+		},
+		Action: ConnectAction,
 	}
 }
 
-func SSHAction(ctx context.Context, cmd *cli.Command) error {
-	client, err := ctr.NewClient(ctr.WithDebug(cmd.Root().Bool(debugFlag)))
+func ConnectAction(ctx context.Context, cmd *cli.Command) error {
+	conn, sandbox, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
 	if err != nil {
 		return err
-	}
-	defer client.Close()
-
-	// Always resolve project root from cwd — all positional args are the
-	// remote command, not a project path.
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	projectRoot, err := config.FindProjectRoot(wd)
-	if err != nil {
-		return err
-	}
-
-	sandbox, err := client.FindRunningSession(ctx, projectRoot)
-	if err != nil {
-		return err
-	}
-	if sandbox == nil {
-		return fmt.Errorf("no running sandbox found — run 'vibepit up' first")
-	}
-
-	// SSH port is published on the proxy container (forwarded to sandbox).
-	proxyID, err := client.FindProxyContainerID(ctx, sandbox.SessionID)
-	if err != nil {
-		return err
-	}
-	port, err := client.FindPublishedPort(ctx, proxyID, ctr.SSHContainerPort)
-	if err != nil {
-		return fmt.Errorf("find SSH port: %w", err)
-	}
-
-	sessDir := sessionDir(sandbox.SessionID)
-	privateKey, err := os.ReadFile(filepath.Join(sessDir, SSHClientPrivFile))
-	if err != nil {
-		return fmt.Errorf("read ssh key: %w (credentials missing — run 'vibepit down && vibepit up')", err)
-	}
-	hostPubKey, err := os.ReadFile(filepath.Join(sessDir, SSHHostPubFile))
-	if err != nil {
-		return fmt.Errorf("read host key: %w", err)
-	}
-
-	signer, err := ssh.ParsePrivateKey(privateKey)
-	if err != nil {
-		return fmt.Errorf("parse private key: %w", err)
-	}
-	hostKey, _, _, _, err := ssh.ParseAuthorizedKey(hostPubKey)
-	if err != nil {
-		return fmt.Errorf("parse host key: %w", err)
-	}
-
-	conn, err := ssh.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port), &ssh.ClientConfig{
-		User:            "code",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(hostKey),
-	})
-	if err != nil {
-		return fmt.Errorf("ssh connect: %w", err)
 	}
 	defer conn.Close() //nolint:errcheck
 
 	session, err := conn.NewSession()
 	if err != nil {
-		return fmt.Errorf("ssh session: %w", err)
+		return fmt.Errorf("connect session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck
 
-	// Command mode — shell-escape each argument before joining so
-	// spaces, quotes, $VAR, $(cmd), and globs survive the wire as
-	// literals. The server runs the result via `shell -c`, matching
-	// OpenSSH exec semantics.
-	cmdArgs := cmd.Args().Slice()
-	if len(cmdArgs) > 0 {
-		session.Stdout = os.Stdout
-		session.Stderr = os.Stderr
-
-		// Use StdinPipe so the remote command can read from our stdin
-		// (piped or terminal) without blocking session.Wait() after the
-		// command exits. Wait() only waits for stdout/stderr completion;
-		// the stdin copy goroutine is interrupted when the session closes.
-		stdinPipe, err := session.StdinPipe()
-		if err != nil {
-			return fmt.Errorf("stdin pipe: %w", err)
-		}
-		go func() {
-			io.Copy(stdinPipe, os.Stdin) //nolint:errcheck
-			stdinPipe.Close()            //nolint:errcheck
-		}()
-
-		if err := session.Run(buildRemoteCommand(cmdArgs)); err != nil {
-			if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
-				return &ctr.ExitError{Code: exitErr.ExitStatus()}
-			}
-			return err
-		}
-		return nil
-	}
-
 	// Interactive mode — wrap in ward for notification bar unless
 	// already running inside a ward process.
-	if os.Getenv("VIBEPIT_WARD_PARENT") == "" {
+	if cmd.Bool(connectBarFlag) && os.Getenv("VIBEPIT_WARD_PARENT") == "" {
 		exe, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("resolve executable: %w", err)
@@ -148,7 +61,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 		// before ward.Run starts its status-forwarding goroutine.
 		statusCh := make(chan ward.StatusUpdate, 1)
 		statusCh <- ward.StatusUpdate{
-			Message: fmt.Sprintf("╱╱ %s ╱╱ %s", strings.ReplaceAll(projectRoot, os.Getenv("HOME"), "~"), sandbox.SessionID),
+			Message: fmt.Sprintf("╱╱ %s ╱╱ %s", strings.ReplaceAll(sandbox.ProjectDir, os.Getenv("HOME"), "~"), sandbox.SessionID),
 		}
 		w := ward.NewWrapper(ward.Options{
 			Command: append([]string{exe}, os.Args[1:]...),
@@ -285,23 +198,6 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 			return DownAction(ctx, cmd)
 		},
 	})
-}
-
-// buildRemoteCommand turns an argument vector into a single shell-safe
-// command line for the remote side's "shell -c" invocation. Each argument
-// is shell-escaped so metacharacters (spaces, quotes, $, globs) survive
-// the round trip as literals instead of being re-parsed by the remote
-// shell. Matches the contract documented on the server side in
-// sshd.handleExecSession.
-func buildRemoteCommand(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	escaped := make([]string, len(args))
-	for i, a := range args {
-		escaped[i] = sshd.ShellEscape(a)
-	}
-	return strings.Join(escaped, " ")
 }
 
 type sessionCountTransport interface {

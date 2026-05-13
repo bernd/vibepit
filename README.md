@@ -56,7 +56,7 @@ Or run in daemon mode with SSH access:
 
 ```sh
 vibepit up
-vibepit ssh
+vibepit connect
 vibepit down
 ```
 

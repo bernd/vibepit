@@ -70,7 +70,7 @@ to reach the control API.
 1. List active sessions:
 
     ```bash
-    vibepit sessions
+    vibepit status
     ```
 
 2. If no sessions are listed, start one with `vibepit run`.

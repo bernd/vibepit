@@ -312,10 +312,9 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		os.Remove(tmpFile.Name()) //nolint:errcheck
 	})
 
-	tui.Status("Generating", "mTLS credentials")
 	creds, err := proxy.GenerateMTLSCredentials(30 * 24 * time.Hour)
 	if err != nil {
-		return nil, cleanups, fmt.Errorf("mtls: %w", err)
+		return nil, cleanups, fmt.Errorf("generating mTLS credentials: %w", err)
 	}
 
 	sessDir, err := WriteSessionCredentials(sessionID, creds)
@@ -325,7 +324,6 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	cleanups = append(cleanups, func() {
 		CleanupSessionCredentials(sessionID) //nolint:errcheck
 	})
-	tui.Status("Session", "%s (credentials in %s)", sessionID, sessDir)
 
 	proxyCfg := ctr.ProxyContainerConfig{
 		BinaryPath:     selfBinary,
@@ -346,7 +344,7 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	}
 
 	tui.Status("Starting", "proxy container")
-	proxyContainerID, controlPort, err := client.StartProxyContainer(ctx, proxyCfg)
+	proxyContainerID, _, err := client.StartProxyContainer(ctx, proxyCfg)
 	if err != nil {
 		return nil, cleanups, fmt.Errorf("proxy container: %w", err)
 	}
@@ -354,7 +352,6 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		tui.Status("Stopping", "proxy container")
 		client.StopAndRemove(ctx, proxyContainerID) //nolint:errcheck
 	})
-	tui.Status("Listening", "control API on 127.0.0.1:%s", controlPort)
 
 	return &sessionInfra{
 		SessionID:        sessionID,

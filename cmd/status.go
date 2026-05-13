@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"charm.land/lipgloss/v2"
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	ctr "github.com/bernd/vibepit/container"
@@ -10,10 +12,19 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+const statusVerboseFlag = "verbose"
+
 func StatusCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "status",
-		Usage:  "Show session status",
+		Name:  "status",
+		Usage: "List project sessions",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    statusVerboseFlag,
+				Aliases: []string{"v"},
+				Usage:   "Enable verbose output",
+			},
+		},
 		Action: StatusAction,
 	}
 }
@@ -25,44 +36,57 @@ func StatusAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close() //nolint:errcheck
 
-	projectRoot, _ := resolveProjectRoot(cmd)
-
-	// If we resolved a project root, try to show status for that project.
-	if projectRoot != "" {
-		session, err := client.FindRunningSession(ctx, projectRoot)
-		if err != nil {
-			return err
-		}
-		if session != nil {
-			return printSessionStatus(ctx, client, session.SessionID, projectRoot)
-		}
-	}
-
-	// No project-specific session found — list all running sessions.
 	sessions, err := client.ListProxySessions(ctx)
 	if err != nil {
 		return err
 	}
+
+	isVerbose := cmd.Bool(statusVerboseFlag)
+	projectRoot, _ := resolveProjectRoot(cmd)
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ColorField)
+	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(tui.ColorOrange)
+
 	if len(sessions) == 0 {
-		if projectRoot != "" {
-			fmt.Printf("No running session for %s\n", projectRoot)
-		} else {
-			fmt.Println("No active sessions.")
-		}
+		fmt.Println(warnStyle.Render("No active sessions"))
 		return nil
 	}
-	for i, s := range sessions {
+
+	var hasProjectSession bool
+	var otherSessions []ctr.ProxySession
+
+	for _, session := range sessions {
+		if session.ProjectDir == projectRoot {
+			fmt.Println(headerStyle.Render("This project:"))
+			hasProjectSession = true
+			if err := printSessionStatus(ctx, client, session.SessionID, projectRoot, isVerbose); err != nil {
+				return err
+			}
+		} else {
+			otherSessions = append(otherSessions, session)
+		}
+	}
+	if len(otherSessions) > 0 {
+		isHome := os.Getenv("HOME") == projectRoot
+		if !hasProjectSession && !isHome {
+			fmt.Println(warnStyle.Render("No active session for " + projectRoot))
+		}
+		if !isHome {
+			fmt.Println()
+			fmt.Println(headerStyle.Render("Other projects:"))
+		}
+	}
+	for i, s := range otherSessions {
 		if i > 0 {
 			fmt.Println()
 		}
-		if err := printSessionStatus(ctx, client, s.SessionID, s.ProjectDir); err != nil {
+		if err := printSessionStatus(ctx, client, s.SessionID, s.ProjectDir, isVerbose); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, projectDir string) error {
+func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, projectDir string, verbose bool) error {
 	tui.Status("Session", "%s", sessionID)
 	tui.Status("Project", "%s", projectDir)
 
@@ -97,8 +121,11 @@ func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, proj
 			sshAddr = fmt.Sprintf("127.0.0.1:%d", port)
 		}
 	}
-	tui.Status("API", "%s", apiAddr)
-	tui.Status("SSH", "%s", sshAddr)
+
+	if verbose {
+		tui.Status("API", "%s", apiAddr)
+		tui.Status("SSH", "%s", sshAddr)
+	}
 
 	return nil
 }

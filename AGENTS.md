@@ -39,7 +39,8 @@ go run . -a example.com:443  # allow additional domain:port
 go run . -p vcs-github       # enable additional network preset
 go run . --reconfigure       # re-run interactive setup
 go run . up                  # start in daemon mode with SSH server
-go run . ssh                 # connect to running daemon-mode session
+go run . connect             # connect to running daemon-mode session
+go run . exec ls -la         # execute command in the sandbox
 go run . status              # show session status
 go run . down                # stop daemon-mode session
 ```
@@ -61,13 +62,13 @@ Current root commands are defined in `cmd/root.go` and include:
 - `run` (default) -- launch or attach to a sandbox session.
 - `up` -- start sandbox and proxy containers in daemon mode with SSH server.
 - `down` -- stop and remove sandbox and proxy containers.
-- `ssh` -- connect to a running sandbox via SSH (interactive or command mode).
+- `connect` -- connect to a running sandbox (interactive shell).
+- `exec` -- execute a command in the sandbox (non-interactive).
 - `status` -- show session status including container uptime and SSH address.
 - `allow-http` -- add HTTP(S) allowlist entries at runtime.
 - `allow-dns` -- add DNS allowlist entries at runtime.
 - `proxy` -- internal command used inside the proxy container.
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
-- `sessions` -- list active sessions.
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
 - `update` -- update binary and pull latest runtime images.
 
@@ -86,14 +87,15 @@ Built with `urfave/cli/v3`.
   run in the background with an SSH server. Returns immediately after startup.
 - `down` stops and removes all containers for a session and cleans up
   credentials.
-- `ssh` connects to a running daemon-mode session via SSH with ephemeral
-  Ed25519 keys. Supports interactive shells and remote command execution.
+- `connect` connects to a running daemon-mode session via SSH with ephemeral
+  Ed25519 keys. Opens an interactive shell.
+- `exec` executes a command in the sandbox via SSH and returns its exit code.
 - `status` shows session info including container uptime and published ports.
 - `allow-http` / `allow-dns` call the control API and can persist to project
   config.
 - `proxy` runs the proxy server inside the proxy container.
 - `vibed` runs the SSH daemon inside the sandbox container (internal).
-- `sessions` and `monitor` provide session discovery and interactive control.
+- `monitor` provides interactive control.
 - `update` refreshes local runtime images.
 
 ### Proxy (`proxy/`)
@@ -203,7 +205,7 @@ Run the smallest set that proves correctness for your change:
   expected inside nested Vibepit sandbox; otherwise start Docker/Podman and
   verify socket permissions.
 - `allow-http` / `allow-dns` / `monitor` fail to connect:
-  ensure a matching session is running (`go run . sessions`).
+  ensure a matching session is running (`go run . status`).
 - Image pull/update failures:
   expected under network isolation unless registry domains are allowlisted.
 
