@@ -44,9 +44,9 @@ func RootCommand() *cli.Command {
 			// Order matters here!
 			RunCommand(),
 			UpCommand(),
-			DownCommand(),
-			SSHCommand(),
+			ConnectCommand(),
 			ExecCommand(),
+			DownCommand(),
 			AllowHTTPCommand(),
 			AllowDNSCommand(),
 			ProxyCommand(),

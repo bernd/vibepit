@@ -19,24 +19,25 @@ import (
 	"golang.org/x/term"
 )
 
-const sshBarFlag = "bar"
+const connectBarFlag = "bar"
 
-func SSHCommand() *cli.Command {
+func ConnectCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "ssh",
-		Usage: "Connect to running sandbox via SSH",
+		Name:    "connect",
+		Aliases: []string{"c"},
+		Usage:   "Connect to the running sandbox",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
-				Name:    sshBarFlag,
+				Name:    connectBarFlag,
 				Usage:   "Enable status bar [EXPERIMENTAL]",
 				Aliases: []string{"b"},
 			},
 		},
-		Action: SSHAction,
+		Action: ConnectAction,
 	}
 }
 
-func SSHAction(ctx context.Context, cmd *cli.Command) error {
+func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 	conn, sandbox, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
 	if err != nil {
 		return err
@@ -45,13 +46,13 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 
 	session, err := conn.NewSession()
 	if err != nil {
-		return fmt.Errorf("ssh session: %w", err)
+		return fmt.Errorf("connect session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck
 
 	// Interactive mode — wrap in ward for notification bar unless
 	// already running inside a ward process.
-	if cmd.Bool(sshBarFlag) && os.Getenv("VIBEPIT_WARD_PARENT") == "" {
+	if cmd.Bool(connectBarFlag) && os.Getenv("VIBEPIT_WARD_PARENT") == "" {
 		exe, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("resolve executable: %w", err)

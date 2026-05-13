@@ -14,14 +14,14 @@ Vibepit offers two ways to run a sandbox:
 
 - **`vibepit run`** (default) — attaches your terminal directly. The session
   ends when you exit. Best for quick, interactive use.
-- **`vibepit up` + `vibepit ssh`** — runs the sandbox in the background with an
+- **`vibepit up` + `vibepit connect`** — runs the sandbox in the background with an
   SSH server. Sessions persist across disconnects and you can reconnect with
-  `vibepit ssh`. Stop with `vibepit down`. Best for long-running agents or
+  `vibepit connect`. Stop with `vibepit down`. Best for long-running agents or
   agents that connect via SSH.
 
 Both modes use the same network isolation, allowlist rules, and container
 hardening. The examples below use `vibepit run`, but you can substitute
-`vibepit up` followed by `vibepit ssh` for daemon mode.
+`vibepit up` followed by `vibepit connect` for daemon mode.
 
 ## Discovery workflow
 

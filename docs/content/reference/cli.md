@@ -1,5 +1,5 @@
 ---
-description: Complete reference for vibepit commands, flags, and arguments including run, up, down, ssh, status, allow-http, allow-dns, sessions, monitor, update, and self-update.
+description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, sessions, monitor, update, and self-update.
 ---
 
 # CLI Reference
@@ -174,19 +174,21 @@ vibepit down ~/projects/my-app
 
 ---
 
-## `ssh`
+## `connect`
 
-Connect to a running sandbox via SSH.
+Aliases: `c`
+
+Connect to a running sandbox.
 
 ```
-vibepit ssh [command...]
+vibepit connect
 ```
 
-### Arguments
+### Flags
 
-| Argument | Description |
-|----------|-------------|
-| `command...` | Optional remote command to execute. If omitted, opens an interactive shell. |
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-b`, `--bar` | bool | `false` | Enable status bar [EXPERIMENTAL] |
 
 ### Behavior
 
@@ -195,25 +197,52 @@ vibepit ssh [command...]
 - Loads the SSH client key from the session credentials directory.
 - Connects to `127.0.0.1` on the published SSH port with public key
   authentication.
-- **Interactive mode** (no arguments): requests a PTY, starts a shell, and
-  forwards terminal resize events (`SIGWINCH`).
-- **Command mode** (arguments given): executes the command on the remote side
-  and returns its exit code. Stdin, stdout, and stderr are forwarded.
-- When connecting interactively and detached sessions exist inside the sandbox,
-  the SSH server presents a session selector. You can reattach to a previous
-  session or start a new one.
+- Requests a PTY, starts a shell, and forwards terminal resize events
+  (`SIGWINCH`).
+- When detached sessions exist inside the sandbox, the SSH server presents a
+  session selector. You can reattach to a previous session or start a new one.
 
 ### Examples
 
 ```bash
 # Open an interactive shell
-vibepit ssh
+vibepit connect
+```
 
+---
+
+## `exec`
+
+Execute a command in the sandbox.
+
+```
+vibepit exec <command...>
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `command...` | The remote command to execute. |
+
+### Behavior
+
+- Resolves the project root from the current working directory and finds the
+  running session.
+- Loads the SSH client key from the session credentials directory.
+- Connects to `127.0.0.1` on the published SSH port with public key
+  authentication.
+- Executes the command on the remote side and returns its exit code. Stdin,
+  stdout, and stderr are forwarded.
+
+### Examples
+
+```bash
 # Run a single command
-vibepit ssh ls -la
+vibepit exec ls -la
 
-# Run a command with pipes (quote to avoid local shell interpretation)
-vibepit ssh cat /etc/os-release
+# Run a command that reads a file
+vibepit exec cat /etc/os-release
 ```
 
 ---
