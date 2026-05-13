@@ -19,16 +19,20 @@ import (
 	"golang.org/x/term"
 )
 
+const sshBarFlag = "bar"
+
 func SSHCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "ssh",
 		Usage: "Connect to running sandbox via SSH",
-		// All args after "ssh" are the remote command and may contain
-		// dashes (e.g. "vibepit ssh cat -e -"). If we add flags to
-		// this subcommand, replace this with manual arg parsing or a
-		// "--" separator.
-		SkipFlagParsing: true,
-		Action:          SSHAction,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    sshBarFlag,
+				Usage:   "Enable status bar [EXPERIMENTAL]",
+				Aliases: []string{"b"},
+			},
+		},
+		Action: SSHAction,
 	}
 }
 
@@ -47,7 +51,7 @@ func SSHAction(ctx context.Context, cmd *cli.Command) error {
 
 	// Interactive mode — wrap in ward for notification bar unless
 	// already running inside a ward process.
-	if os.Getenv("VIBEPIT_WARD_PARENT") == "" {
+	if cmd.Bool(sshBarFlag) && os.Getenv("VIBEPIT_WARD_PARENT") == "" {
 		exe, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("resolve executable: %w", err)
