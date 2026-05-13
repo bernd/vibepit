@@ -16,7 +16,7 @@ import (
 func UpCommand() *cli.Command {
 	return &cli.Command{
 		Name:   "up",
-		Usage:  "Start a sandbox session in daemon mode (with SSH server)",
+		Usage:  "Start a sandbox session in daemon mode",
 		Flags:  sandboxFlags(),
 		Action: UpAction,
 	}
