@@ -47,6 +47,32 @@ RUN apt-get update \
     xxd \
     zip \
     zstd \
+  # Playwright runtime dependencies for Chromium and Firefox
+  && apt-get install -y --no-install-recommends \
+    libasound2t64 \
+    libatk-bridge2.0-0t64 \
+    libatk1.0-0t64 \
+    libatspi2.0-0t64 \
+    libcairo-gobject2\
+    libcairo2 \
+    libcups2t64 \
+    libxcursor1\
+    libgbm1 \
+    libgdk-pixbuf-2.0-0\
+    libglib2.0-0t64 \
+    libgtk-3-0t64\
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0\
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
   && locale-gen en_US.UTF-8 \
   && apt-get autoremove --purge -y \
   && apt-get clean \
