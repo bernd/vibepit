@@ -1,0 +1,23 @@
+version: "0.2.0"
+
+added:
+  - msg: Experimental terminal notification bar for interactive sessions
+  - msg: Non-interactive command execution via new `exec` command
+  - msg: Cosign signature verification for binary updates and container images
+  - msg: Playwright browser dependencies (Chromium, Firefox) in sandbox image
+    pr: "7"
+  - msg: xxd tool in sandbox image
+
+changed:
+  - msg: Rename `ssh` command to `connect`
+  - msg: Reduce session startup verbosity
+  - msg: Improve `status` command output
+  - msg: Improve formatting of changelog in update command
+  - msg: Update dependencies
+
+fixed:
+  - msg: Permissions on cached vibepit binary on macOS
+  - msg: Image download progress output
+
+removed:
+  - msg: Remove obsolete `sessions` command (replaced by `status`)
