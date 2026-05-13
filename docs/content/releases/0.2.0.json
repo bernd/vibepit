@@ -1,7 +1,7 @@
 {
   "version": "0.2.0",
   "timestamp": "2026-05-14T01:33:51+02:00",
-  "changelog": "Added:\n\n- Experimental terminal notification bar for interactive sessions\n- Non-interactive command execution via new `exec` command\n- Cosign signature verification for binary updates and container images\n- Playwright browser dependencies (Chromium, Firefox) in sandbox image ([#7](https://github.com/bernd/vibepit/pull/7))\n- xxd tool in sandbox image\nChanged:\n\n- Rename `ssh` command to `connect`\n- Reduce session startup verbosity\n- Improve `status` command output\n- Improve formatting of changelog in update command\n- Update dependencies\nFixed:\n\n- Permissions on cached vibepit binary on macOS\n- Image download progress output\nRemoved:\n\n- Remove obsolete `sessions` command (replaced by `status`)",
+  "changelog": "\nAdded:\n\n- Experimental terminal notification bar for interactive sessions\n- Non-interactive command execution via new `exec` command\n- Cosign signature verification for binary updates and container images\n- Playwright browser dependencies (Chromium, Firefox) in sandbox image ([#7](https://github.com/bernd/vibepit/pull/7))\n- xxd tool in sandbox image\n\nChanged:\n\n- Rename `ssh` command to `connect`\n- Reduce session startup verbosity\n- Improve `status` command output\n- Improve formatting of changelog in update command\n- Update dependencies\n\nFixed:\n\n- Permissions on cached vibepit binary on macOS\n- Image download progress output\n\nRemoved:\n\n- Remove obsolete `sessions` command (replaced by `status`)",
   "assets": [
     {
       "os": "linux",
