@@ -68,7 +68,6 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Generate SSH keypairs for daemon mode.
-	tui.Status("Generating", "SSH keypairs")
 	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
 	if err != nil {
 		return fmt.Errorf("generate client SSH keypair: %w", err)
@@ -133,7 +132,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	// bare TCP dial succeeds even before the sandbox daemon is up. We
 	// verify readiness by reading the SSH version banner ("SSH-2.0-...")
 	// which is only sent after the sandbox daemon accepts.
-	tui.Status("Waiting", "for SSH daemon")
+	tui.Status("Waiting", "for daemon")
 	sshAddr := fmt.Sprintf("127.0.0.1:%d", sshPort)
 	sshReady := false
 	deadline := time.Now().Add(30 * time.Second)
@@ -162,7 +161,6 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 
 	succeeded = true
 
-	tui.Status("Listening", "SSH on 127.0.0.1:%d", sshPort)
 	tui.Status("Ready", "session %s", infra.SessionID)
 	fmt.Println()
 
