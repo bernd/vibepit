@@ -9,9 +9,27 @@ import (
 	"strings"
 
 	"github.com/adrg/xdg"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	cosignlib "github.com/sigstore/cosign/v2/pkg/cosign"
+	ociremote "github.com/sigstore/cosign/v2/pkg/oci/remote"
 )
+
+// anonymousRegistryOpts forces cosign to use anonymous registry access for
+// signature lookups. Without this, cosign's defaults pull credentials from
+// the user's Docker/Podman keychain — and stale or revoked ghcr.io PATs in
+// that keychain cause the token endpoint to return DENIED instead of falling
+// back to anonymous. Vibepit's images and their signatures are public, so no
+// user credentials are ever needed.
+var anonymousRegistryOpts = []ociremote.Option{
+	ociremote.WithRemoteOptions(remote.WithAuth(authn.Anonymous)),
+}
+
+// fetchTrustedRoot returns the Sigstore trusted root used for image
+// signature verification. Held in a variable so tests can swap in a stub
+// that doesn't require a live TUF round trip.
+var fetchTrustedRoot = cosignlib.TrustedRoot
 
 var cacheFile = filepath.Join(xdg.CacheHome, "vibepit", "verified-image-digests")
 
@@ -36,7 +54,7 @@ func VerifyImage(ctx context.Context, imageRef string) error {
 		return fmt.Errorf("parse image reference: %w", err)
 	}
 
-	trustedRoot, err := cosignlib.TrustedRoot()
+	trustedRoot, err := fetchTrustedRoot()
 	if err != nil {
 		return fmt.Errorf("fetch sigstore trusted root: %w", err)
 	}
@@ -48,6 +66,7 @@ func VerifyImage(ctx context.Context, imageRef string) error {
 			Issuer:        OIDCIssuer,
 			SubjectRegExp: ImageSANRegex,
 		}},
+		RegistryClientOpts: anonymousRegistryOpts,
 	}
 
 	_, _, err = cosignlib.VerifyImageSignatures(ctx, ref, co)
@@ -71,7 +90,7 @@ func VerifyProxyImage(ctx context.Context, imageRef string) error {
 		return fmt.Errorf("parse image reference: %w", err)
 	}
 
-	trustedRoot, err := cosignlib.TrustedRoot()
+	trustedRoot, err := fetchTrustedRoot()
 	if err != nil {
 		return fmt.Errorf("fetch sigstore trusted root: %w", err)
 	}
@@ -83,6 +102,7 @@ func VerifyProxyImage(ctx context.Context, imageRef string) error {
 			Issuer:  ProxyImageOIDCIssuer,
 			Subject: ProxyImageSubject,
 		}},
+		RegistryClientOpts: anonymousRegistryOpts,
 	}
 
 	_, _, err = cosignlib.VerifyImageSignatures(ctx, ref, co)
