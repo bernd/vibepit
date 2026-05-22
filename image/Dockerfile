@@ -7,15 +7,19 @@ RUN apt-get update \
   && apt-get dist-upgrade -V -y \
   && apt-get install -y --no-install-recommends \
     7zip \
+    apt-utils \
     build-essential \
     bzip2 \
     ca-certificates \
     cabextract \
     curl \
     cpio \
+    createrepo-c \
+    dpkg-dev \
     file \
     fzf \
     git \
+    gpg \
     htop \
     info \
     ipcalc \
@@ -35,6 +39,7 @@ RUN apt-get update \
     pwgen \
     python3 \
     ripgrep \
+    rpm \
     rsync \
     shellcheck \
     sqlite3 \
