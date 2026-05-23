@@ -62,6 +62,14 @@
   domains:
     - "api.mistral.ai:443"
 
+- name: "jetbrains"
+  group: "Infrastructure"
+  description: "JetBrains AI services"
+  domains:
+    - "ingrazzio-cloud-prod.labs.jb.gg:443"
+    - "junie.jetbrains.com:443"
+    - "oauth.account.jetbrains.com:443"
+
 - name: "vcs-github"
   group: "Infrastructure"
   description: "GitHub"
