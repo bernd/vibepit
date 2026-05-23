@@ -96,6 +96,16 @@ Mistral AI services.
 api.mistral.ai:443
 ```
 
+### `jetbrains`
+
+JetBrains AI services.
+
+```
+ingrazzio-cloud-prod.labs.jb.gg:443
+junie.jetbrains.com:443
+oauth.account.jetbrains.com:443
+```
+
 ### `vcs-github`
 
 GitHub.
