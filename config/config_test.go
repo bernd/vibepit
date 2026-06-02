@@ -114,16 +114,161 @@ func TestAppendAllowHTTP(t *testing.T) {
 		assert.Contains(t, cfg.AllowHTTP, "esm.sh:*")
 	})
 
-	t.Run("creates allow-http section from commented template", func(t *testing.T) {
+	t.Run("inserts into allow-http when another list follows", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "network.yaml")
-		os.WriteFile(path, []byte("presets:\n  - node\n\n# allow-http:\n#   - api.openai.com:443\n"), 0o644)
+		os.WriteFile(path, []byte("allow-http:\n  - github.com:443\n\nallow-host-ports:\n  - 3000\n"), 0o644)
 
 		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
 
 		cfg := &ProjectConfig{}
 		require.NoError(t, loadFile(path, cfg))
+
+		assert.Contains(t, cfg.AllowHTTP, "github.com:443")
 		assert.Contains(t, cfg.AllowHTTP, "bun.sh:443")
+		assert.Equal(t, []int{3000}, cfg.AllowHostPorts)
+	})
+
+	t.Run("adds to existing flow-style allow-http section", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		os.WriteFile(path, []byte("allow-http: [github.com:443]\nallow-host-ports:\n  - 3000\n"), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		cfg := &ProjectConfig{}
+		require.NoError(t, loadFile(path, cfg))
+
+		assert.Contains(t, cfg.AllowHTTP, "github.com:443")
+		assert.Contains(t, cfg.AllowHTTP, "bun.sh:443")
+		assert.Equal(t, []int{3000}, cfg.AllowHostPorts)
+	})
+
+	t.Run("preserves comments and blank lines while appending a new allow-http section", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "# project network\npresets:\n  - node # package manager\n\n# local services\nallow-host-ports:\n  - 3000 # web app\n"
+		want := "# project network\npresets:\n  - node # package manager\n\n# local services\nallow-host-ports:\n  - 3000 # web app\n\nallow-http:\n  - bun.sh:443\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("preserves blank lines when appending to existing block allow-http section", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "presets:\n  - homebrew\n  - openai\n\n# Additional domains to allow HTTP access for this project.\nallow-http:\n  - storage.googleapis.com:443\n\n# Domains that only need DNS resolution (no HTTP proxy).\n# allow-dns:\n#   - internal.corp.example.com\n"
+		want := "presets:\n  - homebrew\n  - openai\n\n# Additional domains to allow HTTP access for this project.\nallow-http:\n  - storage.googleapis.com:443\n  - foo:8080\n\n# Domains that only need DNS resolution (no HTTP proxy).\n# allow-dns:\n#   - internal.corp.example.com\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"foo:8080"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("creates allow-http section from commented template", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "presets:\n  - node\n\n# allow-http:\n#   - api.openai.com:443\n"
+		want := "presets:\n  - node\n\nallow-http:\n  - bun.sh:443\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("keeps header comment above the section when replacing the default template", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "# Vibepit network config for this project.\n\n# Presets bundle common domains for a language ecosystem.\npresets:\n  - default\n  - pkg-node\n\n# Additional domains to allow HTTP access for this project.\n# allow-http:\n#   - api.openai.com:443\n#   - api.anthropic.com:443\n\n# Domains that only need DNS resolution (no HTTP proxy).\n# allow-dns:\n#   - internal.corp.example.com\n"
+		want := "# Vibepit network config for this project.\n\n# Presets bundle common domains for a language ecosystem.\npresets:\n  - default\n  - pkg-node\n\n# Additional domains to allow HTTP access for this project.\nallow-http:\n  - bun.sh:443\n\n# Domains that only need DNS resolution (no HTTP proxy).\n# allow-dns:\n#   - internal.corp.example.com\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("appends to allow-http with a null value", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "presets:\n  - node\nallow-http:\nallow-host-ports:\n  - 3000\n"
+		want := "presets:\n  - node\nallow-http:\n  - bun.sh:443\nallow-host-ports:\n  - 3000\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("tolerates non-standard spacing in the commented template", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "presets:\n  - node\n\n# allow-http:\n#  - foo:443\n#- bar:443\n"
+		want := "presets:\n  - node\n\nallow-http:\n  - new:443\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"new:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("does not treat a freeform comment line as a commented template", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "presets:\n  - node\n# allow-http: see other config\n"
+		want := "presets:\n  - node\n# allow-http: see other config\n\nallow-http:\n  - bun.sh:443\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
+	})
+
+	t.Run("appends to allow-http with an explicit null value", func(t *testing.T) {
+		for _, nullVal := range []string{"null", "~"} {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "network.yaml")
+			os.WriteFile(path, []byte("presets:\n  - node\nallow-http: "+nullVal+"\n"), 0o644)
+
+			require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+			cfg := &ProjectConfig{}
+			require.NoError(t, loadFile(path, cfg))
+			assert.Equal(t, []string{"bun.sh:443"}, cfg.AllowHTTP,
+				"explicit %q value should be replaced with a real list", nullVal)
+		}
+	})
+
+	t.Run("preserves CRLF line endings when appending", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		before := "allow-http:\r\n  - github.com:443\r\n"
+		want := "allow-http:\r\n  - github.com:443\r\n  - bun.sh:443\r\n"
+		os.WriteFile(path, []byte(before), 0o644)
+
+		require.NoError(t, AppendAllowHTTP(path, []string{"bun.sh:443"}))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(data))
 	})
 
 	t.Run("deduplicates existing entries", func(t *testing.T) {
