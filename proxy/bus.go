@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -82,7 +83,12 @@ func NewBus(opts BusOptions) (*Bus, error) {
 		return nil, err
 	}
 	ns, err := natsserver.NewServer(&natsserver.Options{
-		Host:      "127.0.0.1",
+		// Bind all interfaces: in production the proxy runs in a container and
+		// the host reaches the control port via Docker's published-port DNAT to
+		// the bridge IP, not loopback. The auth boundary (TLSMap +
+		// RequireAndVerifyClientCert) gates every connection regardless of bind,
+		// and the host port is published only to 127.0.0.1 on the host side.
+		Host:      "0.0.0.0",
 		Port:      portOrEphemeral(opts.Port),
 		JetStream: true,
 		StoreDir:  storeDir,
@@ -103,7 +109,10 @@ func NewBus(opts BusOptions) (*Bus, error) {
 		return nil, fmt.Errorf("nats server not ready")
 	}
 
-	nc, err := nats.Connect(ns.ClientURL(),
+	// Dial our own server over loopback (the server cert's SAN is 127.0.0.1),
+	// using the bound port even though the listener is on 0.0.0.0.
+	loopbackURL := fmt.Sprintf("tls://127.0.0.1:%d", ns.Addr().(*net.TCPAddr).Port)
+	nc, err := nats.Connect(loopbackURL,
 		nats.Secure(opts.InternalTLS), nats.Timeout(natsReadyTimeout))
 	if err != nil {
 		ns.Shutdown()
@@ -135,8 +144,11 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	return &Bus{ns: ns, nc: nc, js: js, storeDir: storeDir, opts: opts}, nil
 }
 
-// ClientURL returns the TLS URL external clients dial.
-func (b *Bus) ClientURL() string { return b.ns.ClientURL() }
+// ClientURL returns the loopback TLS URL clients dial (the server cert's SAN is
+// 127.0.0.1; the listener binds 0.0.0.0 for container DNAT reachability).
+func (b *Bus) ClientURL() string {
+	return fmt.Sprintf("tls://127.0.0.1:%d", b.ns.Addr().(*net.TCPAddr).Port)
+}
 
 // Addr returns the listener host:port (used by tests / port discovery).
 func (b *Bus) Addr() string { return b.ns.Addr().String() }
