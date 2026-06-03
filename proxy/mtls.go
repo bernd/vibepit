@@ -247,6 +247,24 @@ func (c *MTLSCredentials) ClientTLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
+// clientTLSFromPEM builds a client TLS config from PEM material, pinning the CA.
+func clientTLSFromPEM(certPEM, keyPEM, caPEM []byte) (*tls.Config, error) {
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load client keypair: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("failed to parse CA certificate")
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		ServerName:   "127.0.0.1",
+	}, nil
+}
+
 const (
 	EnvProxyTLSKey  = "VIBEPIT_PROXY_TLS_KEY"
 	EnvProxyTLSCert = "VIBEPIT_PROXY_TLS_CERT"
