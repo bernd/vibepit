@@ -199,3 +199,25 @@ func TestServerTLSConfigFromEnvMissing(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, tlsCfg)
 }
+
+func TestLoadInternalClientTLSConfigFromEnv(t *testing.T) {
+	creds, err := GenerateMTLSCredentials(time.Hour)
+	require.NoError(t, err)
+	t.Setenv(EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
+	t.Setenv(EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
+	t.Setenv(EnvProxyCACert, string(creds.CACertPEM()))
+
+	cfg, err := LoadInternalClientTLSConfigFromEnv()
+	require.NoError(t, err)
+	require.Len(t, cfg.Certificates, 1)
+	require.NotNil(t, cfg.RootCAs)
+	assert.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion)
+	assert.Equal(t, "127.0.0.1", cfg.ServerName)
+}
+
+func TestLoadInternalClientTLSConfigFromEnvMissing(t *testing.T) {
+	// With no env vars set, the loader refuses to build a config.
+	cfg, err := LoadInternalClientTLSConfigFromEnv()
+	require.Error(t, err)
+	assert.Nil(t, cfg)
+}

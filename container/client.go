@@ -600,19 +600,21 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 
 // ProxyContainerConfig holds the parameters for starting the in-network proxy.
 type ProxyContainerConfig struct {
-	BinaryPath     string
-	ConfigPath     string
-	NetworkID      string
-	ProxyIP        string
-	ControlAPIPort int
-	Name           string
-	SessionID      string
-	TLSKeyPEM      string
-	TLSCertPEM     string
-	CACertPEM      string
-	ProjectDir     string
-	NoRestart      bool // when true, omits the restart policy so the proxy stops with the session
-	SSHPort        int  // when > 0, publish this port for SSH forwarding to sandbox
+	BinaryPath      string
+	ConfigPath      string
+	NetworkID       string
+	ProxyIP         string
+	ControlAPIPort  int
+	Name            string
+	SessionID       string
+	TLSKeyPEM       string
+	TLSCertPEM      string
+	CACertPEM       string
+	InternalCertPEM string
+	InternalKeyPEM  string
+	ProjectDir      string
+	NoRestart       bool // when true, omits the restart policy so the proxy stops with the session
+	SSHPort         int  // when > 0, publish this port for SSH forwarding to sandbox
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
@@ -627,6 +629,8 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			"VIBEPIT_PROXY_TLS_KEY="+cfg.TLSKeyPEM,
 			"VIBEPIT_PROXY_TLS_CERT="+cfg.TLSCertPEM,
 			"VIBEPIT_PROXY_CA_CERT="+cfg.CACertPEM,
+			"VIBEPIT_PROXY_INTERNAL_CERT="+cfg.InternalCertPEM,
+			"VIBEPIT_PROXY_INTERNAL_KEY="+cfg.InternalKeyPEM,
 		)
 	}
 

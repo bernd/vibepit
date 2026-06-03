@@ -326,17 +326,19 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	})
 
 	proxyCfg := ctr.ProxyContainerConfig{
-		BinaryPath:     selfBinary,
-		ConfigPath:     tmpFile.Name(),
-		NetworkID:      netInfo.ID,
-		ProxyIP:        netInfo.ProxyIP,
-		ControlAPIPort: controlAPIPort,
-		Name:           "vibepit-proxy-" + sessionID,
-		SessionID:      sessionID,
-		TLSKeyPEM:      string(creds.ServerKeyPEM()),
-		TLSCertPEM:     string(creds.ServerCertPEM()),
-		CACertPEM:      string(creds.CACertPEM()),
-		ProjectDir:     projectRoot,
+		BinaryPath:      selfBinary,
+		ConfigPath:      tmpFile.Name(),
+		NetworkID:       netInfo.ID,
+		ProxyIP:         netInfo.ProxyIP,
+		ControlAPIPort:  controlAPIPort,
+		Name:            "vibepit-proxy-" + sessionID,
+		SessionID:       sessionID,
+		TLSKeyPEM:       string(creds.ServerKeyPEM()),
+		TLSCertPEM:      string(creds.ServerCertPEM()),
+		CACertPEM:       string(creds.CACertPEM()),
+		InternalCertPEM: string(creds.InternalClientCertPEM()),
+		InternalKeyPEM:  string(creds.InternalClientKeyPEM()),
+		ProjectDir:      projectRoot,
 	}
 	if opts.Daemon {
 		proxyCfg.NoRestart = true

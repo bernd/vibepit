@@ -251,6 +251,9 @@ const (
 	EnvProxyTLSKey  = "VIBEPIT_PROXY_TLS_KEY"
 	EnvProxyTLSCert = "VIBEPIT_PROXY_TLS_CERT"
 	EnvProxyCACert  = "VIBEPIT_PROXY_CA_CERT"
+
+	EnvProxyInternalCert = "VIBEPIT_PROXY_INTERNAL_CERT"
+	EnvProxyInternalKey  = "VIBEPIT_PROXY_INTERNAL_KEY"
 )
 
 // LoadServerTLSConfigFromEnv reads PEM-encoded TLS material from environment
@@ -282,5 +285,32 @@ func LoadServerTLSConfigFromEnv() (*tls.Config, error) {
 		Certificates: []tls.Certificate{serverCert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    caPool,
+	}, nil
+}
+
+// LoadInternalClientTLSConfigFromEnv builds the TLS config the proxy uses to
+// dial its own embedded NATS server over the loopback listener, presenting the
+// vibepit-internal client cert and pinning the session CA.
+func LoadInternalClientTLSConfigFromEnv() (*tls.Config, error) {
+	certPEM := os.Getenv(EnvProxyInternalCert)
+	keyPEM := os.Getenv(EnvProxyInternalKey)
+	caPEM := os.Getenv(EnvProxyCACert)
+	if certPEM == "" || keyPEM == "" || caPEM == "" {
+		return nil, fmt.Errorf("internal client TLS env vars must be set: %s, %s, %s",
+			EnvProxyInternalCert, EnvProxyInternalKey, EnvProxyCACert)
+	}
+	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		return nil, fmt.Errorf("load internal client keypair: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("failed to parse CA certificate from %s", EnvProxyCACert)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		ServerName:   "127.0.0.1",
 	}, nil
 }
