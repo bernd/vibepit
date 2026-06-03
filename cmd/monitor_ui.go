@@ -23,8 +23,6 @@ const (
 	statusSaved             // saved to persistent allow list
 )
 
-const pollInterval = time.Second
-
 const disconnectGracePeriod = 3 * time.Second
 
 var disconnectGraceTicks = int(disconnectGracePeriod / tui.TickInterval)
@@ -41,8 +39,9 @@ type monitorScreen struct {
 	client         *ControlClient
 	onBack         func() tui.Screen
 	cursor         tui.Cursor
-	pollCursor     uint64
-	pollInFlight   bool
+	logCh          chan proxy.LogEntry
+	stopLogs       func()
+	subscribed     bool
 	items          []logItem
 	newCount       int
 	firstTickSeen  bool
@@ -65,10 +64,20 @@ type allowResultMsg struct {
 	err    error
 }
 
-// logsPollResultMsg is returned by async log polling.
-type logsPollResultMsg struct {
-	entries []proxy.LogEntry
-	err     error
+// logEntryMsg carries a single log entry delivered by the subscription.
+type logEntryMsg proxy.LogEntry
+
+// subscribeErrMsg is returned when starting the log subscription fails.
+type subscribeErrMsg struct{ err error }
+
+// subscriptionStartedMsg confirms the log subscription is live and carries the
+// stop function used to tear it down. It is delivered to the main Update
+// goroutine so the stop func is never written from a cmd goroutine.
+type subscriptionStartedMsg struct{ stop func() }
+
+// waitForLog blocks on the subscription channel and yields the next entry.
+func waitForLog(ch <-chan proxy.LogEntry) tea.Cmd {
+	return func() tea.Msg { return logEntryMsg(<-ch) }
 }
 
 func allowValueForEntry(entry proxy.LogEntry) string {
@@ -112,6 +121,10 @@ func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea
 }
 
 func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
+	if s.stopLogs != nil {
+		s.stopLogs()
+		s.stopLogs = nil
+	}
 	if s.client != nil {
 		s.client.Close()
 	}
@@ -119,10 +132,19 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 	return s.onBack()
 }
 
-func (s *monitorScreen) pollLogsCmd(afterID uint64) tea.Cmd {
+// startSubscription opens the log subscription on a cmd goroutine and reports
+// the result via a message. It must not mutate any screen field: the channel is
+// created by Update on the main goroutine and passed in, and the stop function
+// is returned through subscriptionStartedMsg so Update owns all field writes.
+// Reading s.client here is safe because it is set before the screen runs and is
+// never mutated.
+func (s *monitorScreen) startSubscription(ch chan proxy.LogEntry) tea.Cmd {
 	return func() tea.Msg {
-		entries, err := s.client.LogsAfter(afterID)
-		return logsPollResultMsg{entries: entries, err: err}
+		stop, err := s.client.SubscribeLogs(ch)
+		if err != nil {
+			return subscribeErrMsg{err: err}
+		}
+		return subscriptionStartedMsg{stop: stop}
 	}
 }
 
@@ -177,36 +199,36 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			}
 		}
 
-	case logsPollResultMsg:
-		s.pollInFlight = false
-		if msg.err != nil {
-			if s.onBack != nil {
-				if s.disconnectTick < 0 {
-					s.disconnectTick = 0
-				}
-				w.SetError(fmt.Errorf("session %s disconnected", s.session.SessionID))
-			} else {
-				w.SetError(msg.err)
+	case subscriptionStartedMsg:
+		s.stopLogs = msg.stop
+		return s, waitForLog(s.logCh)
+
+	case subscribeErrMsg:
+		if s.onBack != nil {
+			if s.disconnectTick < 0 {
+				s.disconnectTick = 0
 			}
-			break
+			w.SetError(fmt.Errorf("session %s disconnected", s.session.SessionID))
+		} else {
+			w.SetError(msg.err)
 		}
+
+	case logEntryMsg:
 		s.disconnectTick = -1
 		w.ClearError()
 
 		wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
-		for _, e := range msg.entries {
-			s.items = append(s.items, logItem{entry: e})
-			s.pollCursor = e.ID
-		}
+		s.items = append(s.items, logItem{entry: proxy.LogEntry(msg)})
 		s.cursor.ItemCount = len(s.items)
-		if !wasAtEnd && len(msg.entries) > 0 && len(s.items) > s.cursor.Offset+s.cursor.VpHeight {
-			s.newCount += len(msg.entries)
+		if !wasAtEnd && len(s.items) > s.cursor.Offset+s.cursor.VpHeight {
+			s.newCount++
 		}
-		if wasAtEnd && len(s.items) > 0 {
+		if wasAtEnd {
 			s.cursor.Pos = len(s.items) - 1
 			s.newCount = 0
 			s.cursor.EnsureVisible()
 		}
+		return s, waitForLog(s.logCh)
 
 	case tui.TickMsg:
 		if s.onBack != nil && s.disconnectTick >= 0 {
@@ -215,18 +237,17 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 				return s.transitionBack(w), nil
 			}
 			s.firstTickSeen = true
-			return s, nil // Don't poll while disconnected.
+			return s, nil // Don't reconnect while disconnected.
 		}
 
-		if (w.IntervalElapsed(pollInterval) || !s.firstTickSeen) && !s.pollInFlight {
+		if !s.firstTickSeen {
 			s.firstTickSeen = true
-			if s.client == nil {
-				break
+			if s.client != nil && !s.subscribed {
+				s.subscribed = true
+				s.logCh = make(chan proxy.LogEntry, 256)
+				return s, s.startSubscription(s.logCh)
 			}
-			s.pollInFlight = true
-			return s, s.pollLogsCmd(s.pollCursor)
 		}
-		s.firstTickSeen = true
 	}
 
 	return s, nil

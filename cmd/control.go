@@ -1,20 +1,21 @@
 package cmd
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
-// ControlClient talks to a running proxy's control API over mTLS.
+// ControlClient talks to a running proxy's embedded NATS control bus over mTLS.
 type ControlClient struct {
-	http    *http.Client
-	baseURL string
+	nc *nats.Conn
+	js jetstream.JetStream
 }
 
 func NewControlClient(session *SessionInfo) (*ControlClient, error) {
@@ -25,95 +26,102 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load TLS credentials: %w", err)
 	}
-	return &ControlClient{
-		http: &http.Client{
-			Timeout:   5 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: tlsCfg},
-		},
-		baseURL: fmt.Sprintf("https://127.0.0.1:%s", session.ControlPort),
-	}, nil
-}
-
-// Close releases idle connections held by the underlying HTTP transport.
-func (c *ControlClient) Close() {
-	c.http.CloseIdleConnections()
-}
-
-func (c *ControlClient) Logs() ([]proxy.LogEntry, error) {
-	var entries []proxy.LogEntry
-	if err := c.get("/logs", &entries); err != nil {
-		return nil, err
+	nc, err := nats.Connect(
+		fmt.Sprintf("tls://127.0.0.1:%s", session.ControlPort),
+		nats.Secure(tlsCfg),
+		nats.Timeout(5*time.Second),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(500*time.Millisecond),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("connect control bus: %w", err)
 	}
-	return entries, nil
+	js, err := jetstream.New(nc)
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("jetstream: %w", err)
+	}
+	return &ControlClient{nc: nc, js: js}, nil
 }
 
-func (c *ControlClient) LogsAfter(afterID uint64) ([]proxy.LogEntry, error) {
-	var entries []proxy.LogEntry
-	if err := c.get(fmt.Sprintf("/logs?after=%d", afterID), &entries); err != nil {
-		return nil, err
+func (c *ControlClient) Close() { c.nc.Close() }
+
+func decodeReply(msg *nats.Msg, into any) error {
+	if code := msg.Header.Get("Nats-Service-Error-Code"); code != "" {
+		return fmt.Errorf("%s: %s", code, msg.Header.Get("Nats-Service-Error"))
 	}
-	return entries, nil
+	if into == nil {
+		return nil
+	}
+	return json.Unmarshal(msg.Data, into)
+}
+
+func (c *ControlClient) request(subj string, body any, into any) error {
+	data := []byte("{}")
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		data = b
+	}
+	msg, err := c.nc.Request(subj, data, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", subj, err)
+	}
+	return decodeReply(msg, into)
 }
 
 func (c *ControlClient) Stats() (map[string]proxy.DomainStats, error) {
 	var stats map[string]proxy.DomainStats
-	if err := c.get("/stats", &stats); err != nil {
-		return nil, err
-	}
-	return stats, nil
+	return stats, c.request(proxy.SubjectStats, nil, &stats)
 }
 
 func (c *ControlClient) Config() (*config.MergedConfig, error) {
 	var cfg config.MergedConfig
-	if err := c.get("/config", &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	return &cfg, c.request(proxy.SubjectConfig, nil, &cfg)
 }
 
-// AllowHTTP adds domains to the proxy HTTP allowlist and returns the entries that were added.
 func (c *ControlClient) AllowHTTP(entries []string) ([]string, error) {
-	return c.postAllow("/allow-http", entries)
+	return c.postAllow(proxy.SubjectAllowHTTP, entries)
 }
 
-// AllowDNS adds domains to the proxy DNS allowlist and returns the entries that were added.
 func (c *ControlClient) AllowDNS(entries []string) ([]string, error) {
-	return c.postAllow("/allow-dns", entries)
+	return c.postAllow(proxy.SubjectAllowDNS, entries)
 }
 
-func (c *ControlClient) postAllow(path string, entries []string) ([]string, error) {
-	body, err := json.Marshal(map[string]any{"entries": entries})
-	if err != nil {
-		return nil, fmt.Errorf("marshal allow entries: %w", err)
-	}
-	resp, err := c.http.Post(c.baseURL+path, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("POST %s: %s", path, resp.Status)
-	}
-
+func (c *ControlClient) postAllow(subj string, entries []string) ([]string, error) {
 	var result struct {
 		Added []string `json:"added"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode %s response: %w", path, err)
+	if err := c.request(subj, map[string]any{"entries": entries}, &result); err != nil {
+		return nil, err
 	}
 	return result.Added, nil
 }
 
-func (c *ControlClient) get(path string, dest any) error {
-	resp, err := c.http.Get(c.baseURL + path)
+// SubscribeLogs delivers retained history then live entries in stream order.
+// The returned function stops the consumer.
+func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), error) {
+	ctx := context.Background()
+	stream, err := c.js.Stream(ctx, proxy.StreamLogs)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", path, err)
+		return nil, fmt.Errorf("stream: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", path, resp.Status)
+	cons, err := stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ordered consumer: %w", err)
 	}
-	return json.NewDecoder(resp.Body).Decode(dest)
+	cc, err := cons.Consume(func(m jetstream.Msg) {
+		var e proxy.LogEntry
+		if json.Unmarshal(m.Data(), &e) == nil {
+			ch <- e
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("consume: %w", err)
+	}
+	return cc.Stop, nil
 }

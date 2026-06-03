@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/config"
@@ -16,12 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type roundTripFunc func(req *http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
 
 func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 	s := newMonitorScreen(&SessionInfo{
@@ -35,7 +27,6 @@ func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 	for i := range n {
 		s.items = append(s.items, logItem{
 			entry: proxy.LogEntry{
-				ID:     uint64(i + 1),
 				Domain: fmt.Sprintf("domain%d.com", i),
 				Action: proxy.ActionBlock,
 				Source: proxy.SourceProxy,
@@ -307,11 +298,9 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 100, Height: 6})
 		s.cursor.Pos = 2 // not at end (4)
 
-		s.Update(logsPollResultMsg{
-			entries: []proxy.LogEntry{
-				{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
-			},
-		}, w)
+		s.Update(logEntryMsg(proxy.LogEntry{
+			Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy,
+		}), w)
 
 		assert.Equal(t, 1, s.newCount)
 		assert.Equal(t, 2, s.cursor.Pos)
@@ -327,25 +316,10 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 	})
 }
 
-func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
-	requests := 0
-	client := &ControlClient{
-		http: &http.Client{
-			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				requests++
-				assert.Equal(t, "/logs", req.URL.Path)
-				assert.Equal(t, "after=0", req.URL.RawQuery)
-				body := `[{"id":11,"domain":"api.openai.com","port":"443","action":"block","source":"proxy"}]`
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Status:     "200 OK",
-					Body:       io.NopCloser(strings.NewReader(body)),
-					Header:     make(http.Header),
-				}, nil
-			}),
-		},
-		baseURL: "https://proxy.local",
-	}
+func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+	client := newCmdTestClient(t, bus, creds)
 
 	s := newMonitorScreen(&SessionInfo{
 		SessionID:  "test123456",
@@ -355,20 +329,38 @@ func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
+	// First tick should create the channel and start the subscription exactly
+	// once. The channel is created on the Update goroutine, not in the cmd.
 	_, cmd := s.Update(tui.TickMsg{}, w)
-	require.NotNil(t, cmd, "tick should return async poll command")
-	assert.Len(t, s.items, 0, "Update should not fetch logs synchronously")
-	assert.True(t, s.pollInFlight)
+	require.NotNil(t, cmd, "first tick should start the log subscription")
+	assert.True(t, s.subscribed)
+	require.NotNil(t, s.logCh, "Update should create the log channel on the main goroutine")
 
+	// Subsequent ticks must not start another subscription.
 	_, secondCmd := s.Update(tui.TickMsg{}, w)
-	assert.Nil(t, secondCmd, "should not start another poll while one is in-flight")
+	assert.Nil(t, secondCmd, "should not re-subscribe after the first tick")
 
-	_, followCmd := s.Update(cmd(), w)
-	assert.Nil(t, followCmd)
-	assert.False(t, s.pollInFlight)
-	require.Len(t, s.items, 1)
-	assert.Equal(t, uint64(11), s.pollCursor)
-	assert.Equal(t, 1, requests)
+	// Executing the subscription command establishes the consumer and reports a
+	// stop function via subscriptionStartedMsg — it must not mutate any field.
+	startMsg := cmd()
+	started, ok := startMsg.(subscriptionStartedMsg)
+	require.True(t, ok, "subscription command should yield a subscriptionStartedMsg")
+	require.NotNil(t, started.stop)
+	assert.Nil(t, s.stopLogs, "cmd goroutine must not write s.stopLogs")
+
+	// Update stores the stop func and arms the first channel read.
+	_, readCmd := s.Update(started, w)
+	require.NotNil(t, readCmd, "subscriptionStartedMsg should arm the channel read")
+	require.NotNil(t, s.stopLogs, "Update should store the stop func")
+
+	// A published entry flows through the channel and yields a logEntryMsg.
+	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "api.openai.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	msg := readCmd()
+	entry, ok := msg.(logEntryMsg)
+	require.True(t, ok, "channel read should yield a logEntryMsg")
+	assert.Equal(t, "api.openai.com", proxy.LogEntry(entry).Domain)
 }
 
 func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
@@ -379,12 +371,7 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
 		require.NoError(t, os.WriteFile(projectPath, []byte("presets:\n  - default\n"), 0o644))
 
-		httpAllowlist, err := proxy.NewHTTPAllowlist(nil)
-		require.NoError(t, err)
-		dnsAllowlist, err := proxy.NewDNSAllowlist(nil)
-		require.NoError(t, err)
-		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist)
-		client := testControlClient(t, api)
+		httpAllowlist, dnsAllowlist, client := newCmdTestClientWithAllowlists(t)
 		screen := newMonitorScreen(&SessionInfo{
 			SessionID:  "test123456",
 			ProjectDir: projectDir,
@@ -452,12 +439,12 @@ func TestMonitorScreen_EscWithoutOnBack(t *testing.T) {
 }
 
 func TestMonitorScreen_DisconnectTransition(t *testing.T) {
-	t.Run("poll error starts disconnect timer", func(t *testing.T) {
+	t.Run("subscribe error starts disconnect timer", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+		s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
 		assert.Equal(t, 0, s.disconnectTick, "disconnectTick should be 0 on first error")
 	})
 
@@ -466,7 +453,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+		s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
 
 		// Simulate 11 ticks — should stay on monitor.
 		for range 11 {
@@ -482,7 +469,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 	t.Run("no transition without onBack", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		// onBack is nil.
-		s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+		s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
 
 		for range 20 {
 			screen, _ := s.Update(tui.TickMsg{}, w)
@@ -508,8 +495,30 @@ func TestMonitorScreen_DisconnectFooterMessage(t *testing.T) {
 	s, w := makeTestSetup(5)
 	s.onBack = func() tui.Screen { return &testStubScreen{} }
 
-	s.Update(logsPollResultMsg{err: fmt.Errorf("connection refused")}, w)
+	s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
 	require.Error(t, w.Err())
 	assert.Contains(t, w.Err().Error(), "test123456")
 	assert.Contains(t, w.Err().Error(), "disconnected")
+}
+
+func TestMonitor_LiveDelivery(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+
+	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "live.com", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	client := newCmdTestClient(t, bus, creds)
+
+	ch := make(chan proxy.LogEntry, 8)
+	stop, err := client.SubscribeLogs(ch)
+	require.NoError(t, err)
+	defer stop()
+
+	select {
+	case e := <-ch:
+		assert.Equal(t, "live.com", e.Domain)
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive live log entry within 3s")
+	}
 }
