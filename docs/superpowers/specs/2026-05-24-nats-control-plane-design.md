@@ -1,38 +1,54 @@
-# NATS Control Plane: Replace HTTP Control API with Embedded NATS Server
+# NATS Control Plane: Replace HTTP Control API with Embedded NATS Hub
 
 ## Overview
 
 Replace the HTTP+mTLS control API on the proxy container with an embedded NATS
-server. Preserve today's five endpoints as NATS subjects (request/reply for
-queries and mutations, subscription for live log delivery). Reuse the existing
-mTLS material for transport security and use TLS cert mapping for per-role
-permissions. This is a transport swap only — feature behavior (logs, stats,
-config, allow-http, allow-dns) is unchanged.
+server that becomes the **central communication hub** for the proxy, sandbox,
+and host. Preserve today's five control operations (queries, mutations, live
+log delivery) over NATS subjects. Reuse the existing mTLS material for transport
+security and use TLS cert mapping for per-role permissions.
 
-The motivation is to enable future bidirectional messaging patterns (e.g.,
-proxy-initiated approval requests surfaced through ward's status bar, or
-in-sandbox observability publishing) without inventing them in this spec. This
-spec establishes the bus and the role/permission schema so those follow-ups are
-additive.
+Live logs move onto a **JetStream stream** (memory-backed) so that the stream
+itself is the authoritative, ordered log ring and clients consume it with
+ordered consumers — backfill and live tail in a single subscription. From the
+user's perspective the features (logs, stats, config, allow-http, allow-dns) are
+unchanged; the transport and the log-delivery mechanism change underneath.
+
+The motivation is to establish a single bus that future bidirectional patterns
+build on additively (e.g. proxy-initiated approval requests surfaced through
+ward's status bar, in-sandbox observability publishing). This spec lays down the
+bus, the JetStream log stream, and the role/permission schema; the follow-ups
+are additive.
 
 ## Scope
 
 In scope:
 - Replace `proxy/api.go` (HTTP control API) and the third HTTP server in
-  `proxy/server.go` with an embedded NATS server.
-- Define the subject map mirroring today's endpoints.
+  `proxy/server.go` with an embedded NATS server (`JetStream` enabled,
+  **memory storage**).
+- Create a memory-backed JetStream stream for logs; producers publish to it,
+  consumers read it with ordered consumers.
+- Define the subject map mirroring today's operations.
 - Refactor `cmd/control.go`'s `ControlClient` to use NATS as transport while
-  keeping its public method surface.
-- Mint two client certs per session (`vibepit-user`, `vibepit-sandbox`) and
+  keeping its public method surface (with log methods simplified — see below).
+- Mint three client certs per session (`vibepit-internal`, `vibepit-user`,
+  `vibepit-sandbox`) and
   configure NATS users with per-role permissions.
-- Flip live log delivery from polling to subscription.
-- Replace the `LogEntry.ID` integer counter with a producer-assigned ULID.
+- Flip live log delivery from polling to an ordered-consumer subscription.
+- Replace `LogBuffer` (in-memory ring + history responder) with a small
+  `StatsAggregator` (in-process stream consumer that folds entries into the
+  `DomainStats` map and answers `stats`). The stream owns history.
+- Remove the producer-assigned `LogEntry.ID` counter; ordering and dedup use the
+  server-assigned JetStream **stream sequence**.
 
 Out of scope (explicit, deferred to follow-up specs):
 - Proxy → ward bidirectional block-approval flow.
 - Sandbox-side NATS client (`vibed` connecting as `sandbox`). The cert is
   minted but not distributed.
-- JetStream / persistence across proxy restarts.
+- **Persistence across proxy restarts.** The log stream uses memory storage, so
+  a proxy restart empties it — matching today's behavior. Adopting JetStream
+  with memory storage is deliberately *not* the same as durable persistence;
+  switching to file storage + a mounted volume later is additive.
 - Cross-session bus multiplexing or multi-tenant accounts.
 
 ## Architecture
@@ -46,179 +62,276 @@ published port that `ControlAPIPort` exposes today. The field name
 `ControlAPIPort` and JSON tag `control-api-port` are kept — only the protocol
 underneath changes.
 
+JetStream is enabled with **memory storage**. A `StoreDir` is still required for
+JetStream account/metadata even when streams are memory-backed; it points at a
+writable path in the proxy container (the proxy container has a writable rootfs;
+`/tmp` is a safe choice). The NATS **monitoring HTTP port (8222) is explicitly
+left disabled** so nothing unauthenticated is exposed.
+
 ### Components
 
 ```
-HTTPProxy ─┐
-           ├─► publish "logs.events" (entry+ULID) ──┬─► LogBuffer (store + dedupe by ULID)
-DNSServer ─┘                                        ├─► monitor TUI (subscriber)
-                                                    └─► ward (subscriber — future use)
+HTTPProxy ─┐   PublishAsync                ┌─► monitor   (ordered consumer: history + live)
+           ├─► "logs.events" ─► [JetStream ├─► ward      (ordered consumer — future use)
+DNSServer ─┘                    log stream]└─► StatsAggregator (in-process consumer ─► DomainStats)
+                                  ▲ authoritative ring (MaxMsgs, DiscardOld, memory)
 
-CLI ──► request "logs.history" ──► LogBuffer
-CLI ──► request "stats"         ──► LogBuffer
-CLI ──► request "allow.http"    ──► AllowlistHandler ──► HTTPAllowlist
-CLI ──► request "allow.dns"     ──► AllowlistHandler ──► DNSAllowlist
-CLI ──► request "config"        ──► ConfigHandler    ──► ProxyConfig
+CLI ──► request "stats"      ──► StatsAggregator ──► DomainStats
+CLI ──► request "config"     ──► ConfigHandler   ──► ProxyConfig
+CLI ──► request "allow.http" ──► AllowlistHandler ──► HTTPAllowlist
+CLI ──► request "allow.dns"  ──► AllowlistHandler ──► DNSAllowlist
 ```
 
 `HTTPProxy` and `DNSServer` lose their `*LogBuffer` field. They take a thin
-publisher dependency (a `*nats.Conn` or `LogPublisher` interface) and stamp
-each entry with a ULID drawn from a shared monotonic source. They never import
-`LogBuffer`.
+publisher dependency (a JetStream `Publisher` interface over the proxy's internal
+NATS client) and `PublishAsync` each entry to `logs.events`. They never import the
+stream or the aggregator.
 
-`LogBuffer` becomes a pure consumer plus history responder. It subscribes to
-`logs.events`, stores entries in its ring (deduping by ULID), and answers
-`logs.history` and `stats` request/reply.
+The **JetStream stream** is the authoritative, ordered log ring. It is configured
+with `Storage: Memory`, `MaxMsgs: 10000` (today's `LogBufferCapacity`),
+`Discard: DiscardOld`, capturing subject `logs.events`. History is served by
+replaying the stream; there is no separate history responder and no hand-rolled
+ring.
+
+`StatsAggregator` is a small in-process **durable** consumer over the stream. It
+folds each delivered entry into the `map[string]*DomainStats` and answers the
+`stats` request/reply. Because it consumes every delivered message once
+(independent of stream retention), stats stay session-cumulative — not capped at
+the 10k retained entries. It must be durable / keep up so it sees each message
+exactly once (no drop-and-recreate that would double-count or miss).
 
 `AllowlistHandler` and `ConfigHandler` are small new types in `proxy/bus.go`
 holding the allowlist references / config; each registers a single subject.
 
-A new `proxy/bus.go` wraps embedding/lifecycle of the nats-server and
-registers in-process handlers. The `ControlAPI` type is deleted; its glue
-moves into the bus handlers.
+A new `proxy/bus.go` wraps embedding/lifecycle of the nats-server, stream
+creation, the internal client, and handler/consumer registration. The
+`ControlAPI` type is deleted; its glue moves into the bus.
 
 ### Roles, Certificates, and Permissions
 
-The session mints two client certs at startup, both signed by the same
+The session mints **three** client certs at startup, all signed by the same
 ephemeral CA from `proxy/mtls.go`:
 
 | Cert CN | Purpose | Distribution |
 |---|---|---|
+| `vibepit-internal` | The proxy's own connection — producers (`HTTPProxy`, `DNSServer`) and in-process handlers (`StatsAggregator`, `AllowlistHandler`, `ConfigHandler`). | Stays in the proxy process; never written to a session dir. Lives only in proxy memory. |
 | `vibepit-user` | All host-side tools: `allow-http`, `allow-dns`, `monitor`, `ward` | Written to the same location today's single client cert is written. |
-| `vibepit-sandbox` | Future in-sandbox `vibed` observability publisher. | Minted but not distributed in this spec. Sits unused until a follow-up wires sandbox-side delivery. |
+| `vibepit-sandbox` | Future in-sandbox `vibed` observability publisher. | Minted but **not written to disk** in this spec. Sits unused until a follow-up wires sandbox-side delivery. |
 
-NATS is configured with `TLSMap: true` (`verify_and_map`), extracting the
-cert CN to map to a NATS user. The user/permission config:
+NATS is configured with `TLSMap: true` (`verify_and_map`) and `TLSRequired:
+true` / `ClientAuth: RequireAndVerifyClientCert`. **Every** connection — the
+proxy's own included — is authenticated by mapping its client cert to a NATS
+user. There is no password user and no `InProcessServer` connection (see the
+verified note below for why).
+
+> **Cert→user mapping is by full subject DN, not bare CN.** Verified against
+> nats-server v2.14.2 (`server/auth.go:checkClientTLSCertSubject`): with no email
+> or DNS SAN on the cert, the server matches the user against the certificate's
+> RFC2253 subject DN string. A CN-only cert (`Subject.CommonName =
+> "vibepit-user"`) maps to NATS user **`"CN=vibepit-user"`**, *not*
+> `"vibepit-user"`. The `Username` fields below are therefore full DNs.
+
+The user/permission config:
 
 ```
-user (CN=vibepit-user):
-  publish:   ["allow.http", "allow.dns", "logs.history", "stats", "config"]
-  subscribe: ["logs.events", "_INBOX.>"]
+"CN=vibepit-internal":   # the proxy itself
+  publish:   [">"]
+  subscribe: [">"]
 
-sandbox (CN=vibepit-sandbox):
+"CN=vibepit-user":       # host tools
+  publish:
+    - "stats"
+    - "config"
+    - "allow.http"
+    - "allow.dns"
+    # JetStream API for the ordered log consumer. Fully stream-scoped: the host
+    # client uses the `jetstream` package and binds to VIBEPIT_LOGS by name, so
+    # no account-wide "$JS.API.STREAM.NAMES" / "$JS.API.INFO" is needed.
+    - "$JS.API.STREAM.INFO.VIBEPIT_LOGS"
+    - "$JS.API.CONSUMER.CREATE.VIBEPIT_LOGS.>"
+    - "$JS.API.CONSUMER.INFO.VIBEPIT_LOGS.>"
+    - "$JS.API.CONSUMER.DELETE.VIBEPIT_LOGS.>"
+    - "$JS.API.CONSUMER.MSG.NEXT.VIBEPIT_LOGS.>"
+  subscribe:
+    - "_INBOX.>"          # request/reply + ordered-consumer (pull) delivery
+
+"CN=vibepit-sandbox":    # future obs publisher
   publish:   ["obs.>"]
   subscribe: ["_INBOX.>"]
 ```
 
-In-process subscribers (LogBuffer, AllowlistHandler, ConfigHandler) connect
-via `nats.InProcessServer(ns)`, which bypasses the TLS listener entirely (the
-client is a Go object connected directly to the server). They authenticate as
-a dedicated `internal` user with broad publish/subscribe permissions, using a
-process-local credential generated at startup that never leaves the proxy
-binary. External connections are required to present a verified client cert
-by `TLSRequired: true` and `ClientAuth: RequireAndVerifyClientCert`.
+> **Why no InProcessServer.** The original plan had the proxy connect in-process
+> with a password user. A prototype against nats-server v2.14.2 disproved it:
+> with global `TLSMap: true`, the server requires a client cert on **every**
+> connection (`auth.go`: *"User required in cert, no TLS connection state"*), and
+> an `InProcessServer` connection has no TLS state, so it is rejected
+> (`Authorization Violation`) regardless of any password. The fix — verified
+> end-to-end — is to give the proxy its own `vibepit-internal` client cert and
+> connect over the **loopback TLS listener** (`tls://127.0.0.1:ControlAPIPort`)
+> like any other client. This keeps a single uniform cert-mapped auth model. The
+> only cost is loopback TLS framing on the log path instead of an in-memory pipe
+> — negligible for this volume.
 
-The cert generation in `proxy/mtls.go` extends to mint multiple client certs
-with distinct CNs. `WriteSessionCredentials` writes per-role files
-(`user-cert.pem` / `user-key.pem`, `sandbox-cert.pem` / `sandbox-key.pem`).
-`LoadSessionTLSConfig` extends to take a role string (`"user"` today,
-`"sandbox"` later) and load the corresponding pair. The shared `ca.pem` is
-unchanged.
+> **Host client uses the `github.com/nats-io/nats.go/jetstream` package** (not
+> the legacy `nats.go` JetStream context). It binds to `VIBEPIT_LOGS` by name
+> (`js.Stream(ctx, "VIBEPIT_LOGS")`) and creates an ordered consumer on that
+> stream handle, so the publish ACL is fully stream-scoped — no account-wide
+> `$JS.API.STREAM.NAMES`/`$JS.API.INFO`. The required grants are exactly the five
+> `$JS.API.*.VIBEPIT_LOGS*` subjects above, verified end-to-end.
+
+Verified end-to-end by the prototype: all three certs map to their expected
+users; the `vibepit-user` cert — with only the stream-scoped grants above —
+binds the stream by name, creates an ordered consumer (`jetstream` package,
+`DeliverAllPolicy`), and reads a backfilled log entry from the memory stream; the
+sandbox cert is allowed to publish `obs.>` and is denied `allow.http` (the denial
+arrives as an async permission violation — see the wire-format caveat).
+
+The cert generation in `proxy/mtls.go` extends to mint the three client certs
+with distinct CNs. `WriteSessionCredentials` writes only the `vibepit-user` pair
+(`user-cert.pem` / `user-key.pem`); the `vibepit-internal` pair stays in proxy
+memory and the `vibepit-sandbox` pair is minted but not written this spec.
+`LoadSessionTLSConfig` (in `cmd/session.go`) extends to take a role string
+(`"user"` today, `"sandbox"` later) and load the corresponding pair. The shared
+`ca.pem` is unchanged.
 
 ## Subject Map
 
 | Today (HTTP) | NATS subject | Pattern |
 |---|---|---|
-| `GET /logs` (initial + polling backfill) | `logs.history` | request/reply |
-| `GET /logs` (live tail, was polled) | `logs.events` | subscribe (push) |
+| `GET /logs` (initial + polling backfill) | `logs.events` via JetStream **ordered consumer** (`DeliverAll`) | stream consume |
+| `GET /logs` (live tail, was polled) | same ordered consumer (continues into live) | stream consume |
 | `GET /stats` | `stats` | request/reply |
 | `GET /config` | `config` | request/reply |
 | `POST /allow-http` | `allow.http` | request/reply |
 | `POST /allow-dns` | `allow.dns` | request/reply |
 | — (reserved) | `obs.>` | publish (sandbox role) |
 
+There is no `logs.history` subject. History and live tail are the same ordered
+consumer: `DeliverAll` replays the retained stream in order, then transitions
+seamlessly into live delivery. This removes the separate history endpoint, the
+`since`/`safetyMargin` cursor logic, and the client-side dedup set.
+
 ## Wire Format
 
-JSON throughout. The reply convention follows the NATS Service framework:
-success returns the typed result as the raw JSON body; errors return an empty
-body with service headers.
+JSON throughout.
+
+**Request/reply** (`stats`, `config`, `allow.http`, `allow.dns`) follows the
+NATS service-error header convention (the header convention only — not the full
+`micro` service framework): success returns the typed result as the raw JSON
+body; errors return an empty body with headers:
 
 ```
 Nats-Service-Error-Code: <int>   (absent on success)
 Nats-Service-Error:       <human message>   (absent on success)
 ```
 
-Error codes used: `400` for invalid request payloads, `500` for handler-internal
-failures. Auth and subject-not-found errors are handled by NATS itself at the
-protocol layer and never reach a handler.
+Error codes: `400` for invalid request payloads, `500` for handler-internal
+failures.
+
+> **Permission-denied UX caveat.** A NATS publish-permission violation is
+> reported as an *asynchronous* connection error, not as a synchronous reply, so
+> a denied request/reply call surfaces as a 5s **timeout**, not a clean error.
+> `ControlClient` installs a `nats.ErrorHandler` to capture async permission
+> violations and surface a useful message; the mTLS permission test asserts via
+> that handler, not via the request return value.
+
+**Log stream entries** are published to `logs.events` as raw `LogEntry` JSON
+(no envelope, no ID field). Ordering and dedup use the JetStream stream sequence
+from message metadata (`msg.Metadata().Sequence.Stream`), not a payload field.
 
 Subject-specific payloads:
 
 | Subject | Request body | Reply body (success) |
 |---|---|---|
-| `logs.history` | `{"since": "2026-05-24T10:00:00Z"}` (omitempty → full ring) | `[]LogEntry` |
 | `stats` | `{}` | `map[string]DomainStats` |
 | `config` | `{}` | `MergedConfig` |
 | `allow.http` | `{"entries": [...]}` | `{"added": [...]}` |
 | `allow.dns` | `{"entries": [...]}` | `{"added": [...]}` |
-| `logs.events` (pub) | — | `LogEntry` (raw, no envelope) |
+| `logs.events` (pub) | `LogEntry` (raw) | — (consumed via stream) |
 
-`logs.events` is published "naked" because there is no reply and no need for
-status indication — failures during publish drop the entry, which matches
-today's HTTP polling semantics.
+### Producer publish semantics
 
-### Log Entry ID: ULID
+Producers (`HTTPProxy`, `DNSServer`) use `js.PublishAsync` to avoid blocking the
+proxy/DNS hot path on a publish round trip. A bounded pending-ack window
+(`jetstream.WithPublishAsyncMaxPending(N)`) applies back-pressure: when the
+window is full the publish **blocks** rather than drops, preserving the stream's
+authoritative/lossless guarantee. (This is the one place hot-path latency trades
+off against losslessness; the window size is the tunable. Synchronous
+`js.Publish` remains an option since the stream is local (memory storage in the
+same process), but async keeps the hot path clear under burst.)
 
-`LogEntry.ID` changes from `uint64` to `string`, containing a ULID (26-char
-Crockford base32, 48-bit ms timestamp + 80-bit random/monotonic). Producers
-(`HTTPProxy`, `DNSServer`) draw IDs from a shared `ulid.MonotonicReader`
-guarded by a mutex, so all entries from this process are globally monotonic
-without inter-producer coordination beyond the shared source.
+> **Verified.** A 20,000-message burst through a window of 64 produced 0
+> per-call errors and 20,000/20,000 messages in the stream — `PublishAsync`
+> back-pressures by blocking the caller (longest call ~0.6ms), never dropping.
+> Note the flip side: a sustained-overload publisher goroutine (an HTTP/DNS
+> handler) will block here, which is the intended back-pressure.
 
-ULID rationale over alternatives:
-- Millisecond timestamp resolution narrows the `since` cursor's replay window
-  for reconnect backfill.
-- Lexicographically sortable and monotonic within the same millisecond when
-  using the monotonic variant.
-- Zero transitive deps (`github.com/oklog/ulid/v2`).
+### Log Entry ID
 
-### Backfill Cursor
-
-`logs.history` accepts an optional `since` timestamp. On startup or reconnect,
-the client sends `since = lastSeenTime - safetyMargin` (default `1 * time.Second`
-— enough to cover loopback latency and near-simultaneous publishers, since
-client and proxy share a clock) and dedupes the response against its
-locally-known ULID set. Initial startup with no prior state sends no `since`
-and gets the full ring (up to `LogBufferCapacity = 10000`).
+`LogEntry.ID` is **removed**. The producer-assigned `uint64` counter (and the
+considered ULID alternative) are unnecessary: JetStream assigns a totally
+ordered, monotonic `uint64` **stream sequence** server-side. Consumers use it for
+ordering and dedup; if a stable display ID is wanted it is derived from the
+stream sequence at consume time, not stored in the payload. This removes the
+`nextID` state from producers entirely and drops the `github.com/oklog/ulid/v2`
+dependency that an earlier revision proposed.
 
 ## Server Lifecycle
 
 ### Startup (`proxy.Server.Run`)
 
 1. Load TLS material (server cert + CA) from env vars; load the existing
-   `MTLSCredentials` machinery extended to mint two client certs.
+   `MTLSCredentials` machinery extended to mint three client certs
+   (`vibepit-internal`, `vibepit-user`, `vibepit-sandbox`).
 2. Construct embedded `nats-server` with:
    - `Host: "0.0.0.0"`, `Port: cfg.ControlAPIPort`
-   - `Users: []*server.User{userU, sandboxU, internalU}`
+   - `Users: []*server.User{internalU, userU, sandboxU}` (keyed by full subject
+     DN, e.g. `"CN=vibepit-internal"`)
    - `TLSConfig: tlsCfg`, `TLSMap: true`, `TLSRequired: true`
-   - `JetStream: false`, `NoSigs: true`
+   - `JetStream: true`, `StoreDir: "/tmp/vibepit-js"` (memory streams; dir is
+     for JS metadata)
+   - monitoring port disabled, `NoSigs: true`
 3. Start the server; wait for `ReadyForConnections(5 * time.Second)`.
-4. Connect the in-process `internal` client (loopback TLS, or
-   `nats.InProcessServer(ns)`). Register subscribers: `LogBuffer` on
-   `logs.events`, handlers on `logs.history`, `stats`, `config`,
-   `allow.http`, `allow.dns`. Call `nc.Flush()` to ack registrations.
-5. Start the HTTP proxy, DNS server, and SSH forwarder (only after step 4
-   completes, so no log entry can be published before `LogBuffer` is
-   subscribed).
+4. Connect the proxy's own client over the loopback TLS listener
+   (`tls://127.0.0.1:ControlAPIPort`) with the `vibepit-internal` cert. (Not
+   `InProcessServer` — global `TLSMap` requires a cert on every connection; see
+   the verified note under Roles.)
+5. Create the JetStream log stream: `Name: VIBEPIT_LOGS`, `Subjects:
+   ["logs.events"]`, `Storage: Memory`, `MaxMsgs: 10000`, `Discard: DiscardOld`.
+6. Register the consumers/handlers on the internal connection: `StatsAggregator`
+   (durable consumer over the stream, `DeliverAll`), and request/reply handlers
+   on `stats`, `config`, `allow.http`, `allow.dns`. Call `nc.Flush()` to ack
+   registrations.
+7. Start the HTTP proxy, DNS server, and SSH forwarder (only after step 6, so
+   the stream and aggregator exist before any entry is published). Producers
+   publish over the same internal connection.
 
 ### Shutdown (`ctx.Done()`)
 
 1. Stop HTTP proxy, DNS server, SSH forwarder with the existing 5-second
    deadline.
-2. `nc.Drain()` on the in-process client — blocks until handler queues empty.
+2. Flush outstanding `PublishAsync` acks, then `nc.Drain()` on the internal
+   client — blocks until handler/consumer queues empty.
 3. `ns.Shutdown()` on the embedded NATS server.
 
 Bus errors flow to the existing `errCh` in `Server.Run` like HTTP/DNS errors.
 
 ## Host Client Refactor (`cmd/control.go`)
 
-`ControlClient`'s public surface stays identical except for the log delivery
-changes — `monitor`, `allow-http`, `allow-dns`, and `monitor_ui` need no
-structural changes for the non-log methods.
+`ControlClient`'s public surface stays identical for the non-log methods; the log
+methods simplify substantially because the ordered consumer subsumes
+backfill+live+reconnect. It uses the `github.com/nats-io/nats.go/jetstream`
+package (binds the log stream by name, keeping the publish ACL stream-scoped).
 
 ```go
+import (
+    "github.com/nats-io/nats.go"
+    "github.com/nats-io/nats.go/jetstream"
+)
+
 type ControlClient struct {
     nc *nats.Conn
+    js jetstream.JetStream
 }
 
 func NewControlClient(session *SessionInfo) (*ControlClient, error) {
@@ -230,13 +343,16 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
         nats.Timeout(5*time.Second),
         nats.MaxReconnects(-1),
         nats.ReconnectWait(500*time.Millisecond),
+        nats.ErrorHandler(asyncErrHandler), // surfaces permission violations
     )
     if err != nil { return nil, err }
-    return &ControlClient{nc: nc}, nil
+    js, err := jetstream.New(nc)
+    if err != nil { nc.Close(); return nil, err }
+    return &ControlClient{nc: nc, js: js}, nil
 }
 ```
 
-A shared reply decoder handles service-error headers:
+Shared reply decoder for the request/reply methods:
 
 ```go
 func decodeReply(msg *nats.Msg, into any) error {
@@ -252,82 +368,89 @@ Method changes:
 
 | Method | New behavior |
 |---|---|
-| `Logs()` | `Request("logs.history", {}, 5s)` + `decodeReply` |
-| `LogsAfter(id uint64)` | **Removed.** Replaced by `LogsSince(t time.Time)` |
-| `LogsSince(t time.Time) ([]LogEntry, error)` | **New.** Backfill with optional `since`. Zero `time.Time` → full ring. |
-| `SubscribeLogs(ch chan<- LogEntry) (unsub func(), error)` | **New.** `nc.Subscribe("logs.events", ...)`, decodes into channel. |
-| `OnReconnect(fn func())` | **New.** Thin wrapper over `nats.ReconnectHandler`; lets the UI run gap-fill logic on reconnect without owning the `*nats.Conn` directly. |
+| `Logs()` | **Removed.** It had no production caller (test-only), and the ordered consumer subsumes one-shot history. Tests read history via `SubscribeLogs` (read-N-then-unsub) or a test ordered consumer. |
+| `LogsAfter(id uint64)` | **Removed.** Its only production caller was the monitor poll loop; backfill is now part of the ordered consumer. |
+| `LogsSince(t time.Time)` | **Not introduced.** No `since` cursor — the ordered consumer replays from the start of the retained stream. |
+| `SubscribeLogs(ch chan<- LogEntry) (unsub func(), error)` | **New.** `js.Stream(ctx, "VIBEPIT_LOGS")` → `stream.OrderedConsumer(ctx, {DeliverPolicy: DeliverAllPolicy})` → `cons.Consume(...)`, decoding each `jetstream.Msg` into the channel — history first, then live, in stream order. `unsub` calls `ConsumeContext.Stop()`. Reconnect/gap recovery is internal to the ordered consumer (**verified**: across a real connection drop, messages published during the outage were backfilled in order on reconnect, no gaps, 0 duplicates). |
+| `OnReconnect(fn func())` | **Optional.** Thin wrapper over `nats.ReconnectHandler` for connection-status UI only; log gap-fill is automatic, so it is no longer needed for correctness. |
 | `Stats()` / `Config()` / `AllowHTTP()` / `AllowDNS()` | Same signatures; internals use `Request` + `decodeReply`. |
-| `Close()` | `nc.Close()` instead of `CloseIdleConnections()`. |
+| `Close()` | `nc.Close()`. |
 
 ### Monitor TUI Changes
 
 `cmd/monitor_ui.go`:
-- Startup: call `LogsSince(time.Time{})` once for backfill, record the
-  highest ULID seen.
-- Call `SubscribeLogs(ch)`; the Bubble Tea loop receives a "new log entry"
-  message from the channel and appends after dedupe.
-- The existing `pollLogsCmd(afterID)` and poll cadence are removed — delivery
-  is purely event-driven.
-- Register a reconnect callback via `ControlClient.OnReconnect`: on
-  reconnect, call `LogsSince(lastSeenTime - safetyMargin)` and dedupe to
-  fill the gap. The subscription itself is auto-resumed by the NATS client.
+- Call `SubscribeLogs(ch)` once. The ordered consumer delivers retained history
+  first, then live entries, in order. The Bubble Tea loop receives a "new log
+  entry" message per channel item and appends.
+- Dedup by stream sequence as a cheap safety net (ordered consumers can redeliver
+  from the last acked sequence after a reconnect).
+- `pollLogsCmd`, `pollCursor`, and the 1s poll cadence are **removed** — delivery
+  is event-driven and ordered.
+- No separate startup backfill call and no `since`/`safetyMargin` reconnect
+  logic; the ordered consumer owns both.
 
 ### CLI Tools
 
 `allow-http`, `allow-dns`, and `update` need no structural changes — they are
-short-lived, so reconnect logic does not apply. Initial dial either succeeds
-or returns a user-visible error.
+short-lived request/reply callers. Initial dial either succeeds or returns a
+user-visible error (the async error handler covers permission violations).
 
 ## Testing
 
 ### Proxy package
 
-- New `proxy/bus_test.go` — starts an embedded NATS server in-process, dials
-  a test client, asserts each subject's handler. Replaces `api_test.go`.
-- `LogBuffer` tests: publish to `logs.events` from a test client, assert ring
-  contents and dedupe behavior; request `logs.history` with various `since`
-  values; request `stats`.
-- `HTTPProxy` and `DNSServer` tests stop reaching into `LogBuffer`. They
-  assert via a test subscriber on `logs.events`.
-- `proxy/mtls_test.go` extends to cover dual-cert minting and CN-to-user
-  mapping (load `vibepit-sandbox` cert, attempt to publish to `allow.http`,
-  expect permission denied).
+- New `proxy/bus_test.go` — starts an embedded NATS server with JetStream
+  (memory) in-process, dials a test client, asserts each request/reply subject's
+  handler and the log stream end-to-end. Replaces `api_test.go`.
+- Log stream tests: `PublishAsync` to `logs.events`, assert an ordered consumer
+  reads them in stream order; assert `MaxMsgs`/`DiscardOld` retention; assert the
+  stream sequence is monotonic.
+- `StatsAggregator` tests: publish entries, assert the `DomainStats` map folds
+  correctly and that stats remain cumulative beyond the retained window.
+- `HTTPProxy` and `DNSServer` tests stop reaching into a ring. They assert via a
+  test ordered consumer on `logs.events`.
+- `proxy/mtls_test.go` extends to cover dual-cert minting and CN-to-user mapping.
+  The permission test loads the `vibepit-sandbox` cert, attempts to publish to
+  `allow.http`, and asserts the violation arrives via the **async error handler**
+  (not a synchronous denial; see the wire-format caveat).
 
 ### Host package
 
-- `cmd/control_test.go` boots an in-process bus + handlers and exercises
-  `ControlClient` end-to-end (no HTTP test server). Covers happy path and
-  service-error-header path.
+- `cmd/control_test.go` boots an in-process bus + JetStream + handlers and
+  exercises `ControlClient` end-to-end (no HTTP test server). Covers happy path
+  and service-error-header path.
 - `cmd/monitor_ui_test.go` replaces the mock HTTP server pattern with a test
-  bus; live-log delivery is driven by publishing to `logs.events` from the
-  test. Reconnect/dedupe is its own subtest.
+  bus; live-log delivery is driven by publishing to `logs.events`. Ordered
+  delivery and post-reconnect dedup are their own subtests.
 
 ### Integration
 
 `integration_test.go` keeps its end-to-end shape (real container, real bus).
-URLs and transport are adjusted; the scenarios are unchanged.
+Transport is adjusted; the scenarios are unchanged.
 
 ## Files Touched
 
 New:
-- `proxy/bus.go` — embedded NATS server lifecycle, in-process client,
-  subscriber registration, `AllowlistHandler`, `ConfigHandler`.
+- `proxy/bus.go` — embedded NATS server + JetStream lifecycle, log stream
+  creation, internal client, `StatsAggregator`, `AllowlistHandler`,
+  `ConfigHandler`.
 - `proxy/bus_test.go` — replaces `api_test.go`.
 
 Modified:
-- `proxy/server.go` — startup sequence, lifecycle, drop control HTTP server.
-- `proxy/log.go` — `LogEntry.ID` to string (ULID); add subscriber loop; add
-  `since` filtering for history; drop direct `Append` from external callers.
-- `proxy/http.go`, `proxy/dns.go` — take publisher dependency, stamp ULIDs.
-- `proxy/mtls.go` — mint two client certs per session; extend
-  `LoadSessionTLSConfig` with a role argument.
-- `cmd/control.go` — swap `http.Client` for `*nats.Conn`; new
-  `LogsSince`/`SubscribeLogs`; remove `LogsAfter`.
-- `cmd/monitor_ui.go` — subscribe-driven log loop, reconnect handler.
-- `cmd/bootstrap.go` — adjust cert distribution for the renamed/extended
-  `LoadSessionTLSConfig`.
-- `cmd/session.go` — `WriteSessionCredentials` writes per-role cert pairs;
+- `proxy/server.go` — startup sequence (stream + consumers before producers),
+  lifecycle, drop control HTTP server.
+- `proxy/log.go` — `LogBuffer` ring/history responder removed; `StatsAggregator`
+  added (in-process stream consumer + `stats` responder). `LogEntry.ID` removed.
+- `proxy/http.go`, `proxy/dns.go` — take a JetStream publisher dependency,
+  `PublishAsync` to `logs.events`; drop `*LogBuffer` field.
+- `proxy/mtls.go` — mint three client certs per session (`vibepit-internal`
+  stays in proxy memory; `vibepit-user` written; `vibepit-sandbox` minted only).
+- `cmd/control.go` — swap `http.Client` for `*nats.Conn` + `jetstream.JetStream`;
+  new ordered-consumer `SubscribeLogs`/`Logs`; remove `LogsAfter`; add async
+  error handler.
+- `cmd/monitor_ui.go` — ordered-consumer-driven log loop; remove polling.
+- `cmd/bootstrap.go` — adjust cert distribution for the extended cert minting.
+- `cmd/session.go` — `WriteSessionCredentials` writes the `vibepit-user` pair;
   `LoadSessionTLSConfig` takes a role argument.
 
 Deleted:
@@ -335,20 +458,29 @@ Deleted:
 
 ## New Dependencies
 
-- `github.com/nats-io/nats-server/v2`
-- `github.com/nats-io/nats.go`
-- `github.com/oklog/ulid/v2`
+- `github.com/nats-io/nats-server/v2` (embedded server; JetStream included)
+- `github.com/nats-io/nats.go` (client) — host client and proxy use its
+  `github.com/nats-io/nats.go/jetstream` subpackage (the newer API), not the
+  legacy `nc.JetStream()` context.
 
-`nats-server` is the largest add (a few MB of compiled code with JetStream
-disabled). Acceptable for what the bus enables.
+Verified against `nats-server/v2 v2.14.2` + `nats.go v1.52.0` in the prototype.
+`oklog/ulid` is **not** added — the JetStream stream sequence replaces the need
+for a producer-generated orderable ID. `nats-server` is the largest add: a
+measured **+9.4 MB stripped (+36%)** on the real binary (~26 MB → ~36 MB) when
+linking `server.NewServer` + `jetstream.New`. Acceptable for a tool shipped as
+release archives, but it nearly doubles download size — a conscious tradeoff for
+what the central hub enables.
 
 ## Migration Notes
 
 This is a single-commit, non-backward-compatible swap of internal transport.
 There is no version negotiation between client and server, no overlap period,
-and no migration shim — every CLI invocation and every running session share
-one binary, so a single release flips both sides simultaneously.
+and no migration shim — every CLI invocation and every running session share one
+binary, so a single release flips both sides simultaneously.
 
-Users running an older client against a newer proxy (or vice versa) during
-upgrade will see connection errors; they should re-run their session under
-the new binary. This matches today's behavior on any proxy-side change.
+> The proxy runs `vibepit proxy` from a **separately tagged container image**
+> (`docker-publish.yml`). Confirm the released CLI binary and the image's proxy
+> binary are version-locked; otherwise an image lag opens a NATS-client-vs-old-
+> proxy skew window. Users hitting skew during upgrade see connection errors and
+> should re-run their session under the new binary — matching today's behavior on
+> any proxy-side change.
