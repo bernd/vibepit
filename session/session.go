@@ -46,6 +46,7 @@ type Session struct {
 
 	pumpDone    chan struct{} // closed when pump goroutine exits; barrier for vte.Close
 	drainDone   chan struct{} // closed by drainVTE on exit; awaited before vte.Close so no reader races with close
+	exitDone    chan struct{} // closed when waitForExit fully returns, after the final onSessionChanged/state-file write
 	cleanup     chan struct{}
 	cleanupOnce sync.Once
 }
@@ -78,6 +79,7 @@ func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Sess
 		rows:      rows,
 		pumpDone:  make(chan struct{}),
 		drainDone: make(chan struct{}),
+		exitDone:  make(chan struct{}),
 		cleanup:   make(chan struct{}),
 	}
 
@@ -356,6 +358,12 @@ func (s *Session) pump() {
 // early (before descendant cleanup) to reject new attaches; pump sets it
 // again idempotently in its error-path critical section.
 func (s *Session) waitForExit() {
+	// exitDone signals that the entire exit-handling sequence — including the
+	// final onSessionChanged/state-file write below — has completed. Teardown
+	// (e.g. test cleanup) waits on this rather than s.exited, which is set
+	// early and does not cover the trailing state-file write.
+	defer close(s.exitDone)
+
 	exitCode := 0
 	if err := s.cmd.Wait(); err != nil {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {

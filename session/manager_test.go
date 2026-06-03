@@ -40,14 +40,18 @@ func terminateTestManager(tb testing.TB, m *Manager) {
 	for _, s := range sessions {
 		terminateTestSession(s, syscall.SIGTERM)
 	}
-	if waitForTestSessionsExited(sessions, time.Second) {
+	if waitForTestSessionsExited(sessions, 2*time.Second) {
 		return
 	}
 
 	for _, s := range sessions {
 		terminateTestSession(s, syscall.SIGKILL)
 	}
-	if !waitForTestSessionsExited(sessions, time.Second) {
+	// Generous budget: exitDone only closes once waitForExit fully returns,
+	// which includes cleanupDescendants — it re-scans for surviving child
+	// processes with up to 5x1s sleeps before SIGKILLing them. A session that
+	// spawned a background job can therefore take several seconds to drain.
+	if !waitForTestSessionsExited(sessions, 10*time.Second) {
 		tb.Errorf("timed out waiting for test sessions to exit")
 	}
 }
@@ -59,24 +63,32 @@ func terminateTestSession(s *Session, signal syscall.Signal) {
 	syscall.Kill(-s.cmd.Process.Pid, signal) //nolint:errcheck
 }
 
+// waitForTestSessionsExited blocks until every session has fully torn down,
+// i.e. its waitForExit goroutine has returned (exitDone closed) after running
+// the trailing onSessionChanged/state-file write. Waiting on exitDone rather
+// than s.Exited() is what keeps cleanup from racing t.TempDir's RemoveAll: a
+// late state-file write must not land in the temp dir after teardown returns.
 func waitForTestSessionsExited(sessions []*Session, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	for {
-		allExited := true
-		for _, s := range sessions {
-			if s != nil && !s.Exited() {
-				allExited = false
-				break
-			}
+	for _, s := range sessions {
+		if s == nil {
+			continue
 		}
-		if allExited {
-			return true
+		// Fast path: already fully torn down, avoid racing a 0-duration timer.
+		select {
+		case <-s.exitDone:
+			continue
+		default:
 		}
-		if time.Now().After(deadline) {
+		timer := time.NewTimer(time.Until(deadline))
+		select {
+		case <-s.exitDone:
+			timer.Stop()
+		case <-timer.C:
 			return false
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
+	return true
 }
 
 func TestManager_CreateAndList(t *testing.T) {
