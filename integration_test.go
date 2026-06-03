@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/proxy"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,14 +25,6 @@ func mustParseURL(raw string) *url.URL {
 		panic(err)
 	}
 	return u
-}
-
-func controlAPIPostJSON(t *testing.T, client *http.Client, url string, body string) *http.Response {
-	t.Helper()
-
-	resp, err := client.Post(url, "application/json", bytes.NewBufferString(body))
-	require.NoError(t, err, "control API POST request")
-	return resp
 }
 
 func mustGetFreePort(t *testing.T) int {
@@ -67,6 +59,8 @@ func TestProxyServerIntegration(t *testing.T) {
 	t.Setenv(proxy.EnvProxyTLSKey, string(creds.ServerKeyPEM()))
 	t.Setenv(proxy.EnvProxyTLSCert, string(creds.ServerCertPEM()))
 	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
+	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
+	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
 
 	proxyPort := mustGetFreePort(t)
 	controlPort := mustGetFreePort(t)
@@ -95,34 +89,41 @@ func TestProxyServerIntegration(t *testing.T) {
 	go srv.Run(ctx)
 	time.Sleep(500 * time.Millisecond)
 
-	// Build an mTLS client for the control API.
+	// Connect to the NATS control bus with the user client cert.
 	clientTLS, err := creds.ClientTLSConfig()
 	require.NoError(t, err, "ClientTLSConfig")
-	tlsClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: clientTLS},
-	}
+	nc, err := nats.Connect(
+		fmt.Sprintf("tls://127.0.0.1:%d", controlPort),
+		nats.Secure(clientTLS),
+		nats.Timeout(5*time.Second),
+	)
+	require.NoError(t, err, "connect control bus")
+	defer nc.Close()
 
-	resp, err := tlsClient.Get(fmt.Sprintf("https://127.0.0.1:%d/config", controlPort))
-	require.NoError(t, err, "control API request")
-	defer resp.Body.Close()
+	// config returns successfully (no service-error header).
+	cfgMsg, err := nc.Request(proxy.SubjectConfig, []byte("{}"), 5*time.Second)
+	require.NoError(t, err, "config request")
+	assert.Empty(t, cfgMsg.Header.Get("Nats-Service-Error-Code"), "config error header")
 
-	assert.Equal(t, 200, resp.StatusCode, "control API status")
+	// allow-http: valid entry succeeds.
+	okMsg, err := nc.Request(proxy.SubjectAllowHTTP, []byte(`{"entries":["added-http.example:80"]}`), 5*time.Second)
+	require.NoError(t, err, "allow-http request")
+	assert.Empty(t, okMsg.Header.Get("Nats-Service-Error-Code"), "allow-http should succeed")
 
-	allowHTTPResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-http", controlPort), `{"entries":["added-http.example:80"]}`)
-	defer allowHTTPResp.Body.Close()
-	assert.Equal(t, http.StatusOK, allowHTTPResp.StatusCode, "control API allow-http status")
+	// allow-http: malformed entry (missing port) returns a service error.
+	badMsg, err := nc.Request(proxy.SubjectAllowHTTP, []byte(`{"entries":["added-http.example"]}`), 5*time.Second)
+	require.NoError(t, err, "allow-http malformed request")
+	assert.NotEmpty(t, badMsg.Header.Get("Nats-Service-Error-Code"), "allow-http malformed should error")
 
-	allowHTTPBadResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-http", controlPort), `{"entries":["added-http.example"]}`)
-	defer allowHTTPBadResp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, allowHTTPBadResp.StatusCode, "control API allow-http malformed status")
+	// allow-dns: valid entry succeeds.
+	okDNS, err := nc.Request(proxy.SubjectAllowDNS, []byte(`{"entries":["internal.example.com"]}`), 5*time.Second)
+	require.NoError(t, err, "allow-dns request")
+	assert.Empty(t, okDNS.Header.Get("Nats-Service-Error-Code"), "allow-dns should succeed")
 
-	allowDNSResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-dns", controlPort), `{"entries":["internal.example.com"]}`)
-	defer allowDNSResp.Body.Close()
-	assert.Equal(t, http.StatusOK, allowDNSResp.StatusCode, "control API allow-dns status")
-
-	allowDNSBadResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/allow-dns", controlPort), `{"entries":["internal.example.com:443"]}`)
-	defer allowDNSBadResp.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, allowDNSBadResp.StatusCode, "control API allow-dns malformed status")
+	// allow-dns: malformed entry (port not allowed for DNS) returns a service error.
+	badDNS, err := nc.Request(proxy.SubjectAllowDNS, []byte(`{"entries":["internal.example.com:443"]}`), 5*time.Second)
+	require.NoError(t, err, "allow-dns malformed request")
+	assert.NotEmpty(t, badDNS.Header.Get("Nats-Service-Error-Code"), "allow-dns malformed should error")
 
 	// Use the HTTP proxy to verify blocked requests.
 	proxyClient := &http.Client{
