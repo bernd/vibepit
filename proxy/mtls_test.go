@@ -4,6 +4,7 @@ package proxy
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"net"
 	"net/http"
 	"testing"
@@ -157,6 +158,38 @@ func TestServerTLSConfigFromEnv(t *testing.T) {
 	require.NotNil(t, tlsCfg)
 	assert.Equal(t, tls.RequireAndVerifyClientCert, tlsCfg.ClientAuth)
 	assert.Equal(t, uint16(tls.VersionTLS13), tlsCfg.MinVersion)
+}
+
+func TestGenerateMTLSCredentials_ClientCNs(t *testing.T) {
+	creds, err := GenerateMTLSCredentials(time.Hour)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name     string
+		certPEM  []byte
+		wantCN   string // bare common name on the cert
+		wantUser string // NATS username = RFC2253 subject DN it maps to
+	}{
+		{"user", creds.ClientCertPEM(), cnUser, NATSUserCN},
+		{"internal", creds.InternalClientCertPEM(), cnInternal, NATSInternalCN},
+		{"sandbox", creds.SandboxClientCertPEM(), cnSandbox, NATSSandboxCN},
+	}
+	caPool := x509.NewCertPool()
+	caPool.AddCert(creds.CACert)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			block, _ := pem.Decode(tc.certPEM)
+			require.NotNil(t, block)
+			cert, err := x509.ParseCertificate(block.Bytes)
+			require.NoError(t, err)
+			// The cert carries the bare CN...
+			require.Equal(t, tc.wantCN, cert.Subject.CommonName)
+			// ...and NATS maps it to the user named by the full subject DN.
+			require.Equal(t, tc.wantUser, cert.Subject.String())
+			_, err = cert.Verify(x509.VerifyOptions{Roots: caPool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestServerTLSConfigFromEnvMissing(t *testing.T) {
