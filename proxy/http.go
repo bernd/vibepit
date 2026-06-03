@@ -17,7 +17,7 @@ import (
 type HTTPProxy struct {
 	allowlist      *HTTPAllowlist
 	cidr           *CIDRBlocker
-	log            *LogBuffer
+	pub            LogPublisher
 	proxy          *goproxy.ProxyHttpServer
 	resolver       *net.Resolver
 	hostGateway    string
@@ -62,7 +62,7 @@ func (p *HTTPProxy) checkRequest(hostname, port string) filterResult {
 	return filterResult{action: ActionAllow}
 }
 
-func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *HTTPProxy {
+func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, pub LogPublisher, upstream string) *HTTPProxy {
 	// Build a resolver that talks directly to the upstream DNS server
 	// instead of using /etc/resolv.conf, which may point at the internal
 	// network gateway that cannot resolve external names.
@@ -86,7 +86,7 @@ func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, u
 	p := &HTTPProxy{
 		allowlist: allowlist,
 		cidr:      cidr,
-		log:       log,
+		pub:       pub,
 		proxy:     proxy,
 		resolver:  resolver,
 	}
@@ -136,7 +136,7 @@ func (p *HTTPProxy) Handler() http.Handler {
 }
 
 func (p *HTTPProxy) logEntry(hostname, port string, action Action, reason string) {
-	p.log.Add(LogEntry{
+	p.pub.PublishLog(LogEntry{
 		Time:   time.Now(),
 		Domain: hostname,
 		Port:   port,

@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,8 +19,6 @@ const (
 
 	httpProxyReadHeaderTimeout = 10 * time.Second
 	httpProxyIdleTimeout       = 2 * time.Minute
-	controlAPIReadTimeout      = 15 * time.Second
-	controlAPIWriteTimeout     = 30 * time.Second
 )
 
 // ProxyConfig is the JSON config file passed to the proxy container.
@@ -72,11 +69,34 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("allow-dns: %w", err)
 	}
 	cidr := NewCIDRBlocker(s.config.BlockCIDR)
-	log := NewLogBuffer(LogBufferCapacity)
 
-	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.Upstream)
-	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.Upstream)
-	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
+	serverTLS, err := LoadServerTLSConfigFromEnv()
+	if err != nil {
+		return fmt.Errorf("control bus TLS: %w", err)
+	}
+	internalTLS, err := LoadInternalClientTLSConfigFromEnv()
+	if err != nil {
+		return fmt.Errorf("control bus internal TLS: %w", err)
+	}
+	bus, err := NewBus(BusOptions{
+		Port:          s.config.ControlAPIPort,
+		ServerTLS:     serverTLS,
+		InternalTLS:   internalTLS,
+		HTTPAllowlist: allowlist,
+		DNSAllowlist:  dnsAllowlist,
+		Config:        s.config,
+	})
+	if err != nil {
+		return fmt.Errorf("control bus: %w", err)
+	}
+	if err := bus.RegisterHandlers(); err != nil {
+		bus.Shutdown()
+		return fmt.Errorf("register handlers: %w", err)
+	}
+
+	pub := bus.LogPublisher()
+	httpProxy := NewHTTPProxy(allowlist, cidr, pub, s.config.Upstream)
+	dnsServer := NewDNSServer(dnsAllowlist, cidr, pub, s.config.Upstream)
 
 	// Configure host.vibepit support.
 	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {
@@ -87,7 +107,6 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	proxyAddr := fmt.Sprintf(":%d", s.config.ProxyPort)
-	controlAddr := fmt.Sprintf(":%d", s.config.ControlAPIPort)
 	dnsAddr := fmt.Sprintf(":%d", s.dnsPort())
 	proxyServer := &http.Server{
 		Addr:              proxyAddr,
@@ -95,16 +114,8 @@ func (s *Server) Run(ctx context.Context) error {
 		ReadHeaderTimeout: httpProxyReadHeaderTimeout,
 		IdleTimeout:       httpProxyIdleTimeout,
 	}
-	controlServer := &http.Server{
-		Addr:              controlAddr,
-		Handler:           controlAPI,
-		ReadHeaderTimeout: httpProxyReadHeaderTimeout,
-		ReadTimeout:       controlAPIReadTimeout,
-		WriteTimeout:      controlAPIWriteTimeout,
-		IdleTimeout:       httpProxyIdleTimeout,
-	}
 
-	services := 3
+	services := 2
 	if s.config.SSHForwardAddr != "" {
 		services++
 	}
@@ -122,37 +133,23 @@ func (s *Server) Run(ctx context.Context) error {
 		errCh <- dnsServer.ListenAndServe(dnsAddr)
 	}()
 
-	go func() {
-		tlsCfg, err := LoadServerTLSConfigFromEnv()
-		if err != nil {
-			errCh <- fmt.Errorf("control API TLS: %w", err)
-			return
-		}
-		fmt.Printf("proxy: control API listening on %s (mTLS)\n", controlAddr)
-		ln, err := tls.Listen("tcp", controlAddr, tlsCfg)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		if err := controlServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-
 	if s.config.SSHForwardAddr != "" {
 		go func() {
 			errCh <- s.runSSHForwarder(s.config.SSHForwardAddr)
 		}()
 	}
 
+	fmt.Printf("proxy: control bus (NATS) listening on :%d\n", s.config.ControlAPIPort)
+
 	select {
 	case err := <-errCh:
+		bus.Shutdown()
 		return err
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		proxyServer.Shutdown(shutdownCtx)   //nolint:errcheck
-		controlServer.Shutdown(shutdownCtx) //nolint:errcheck
+		proxyServer.Shutdown(shutdownCtx) //nolint:errcheck
+		bus.Shutdown()
 		return ctx.Err()
 	}
 }

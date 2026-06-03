@@ -14,9 +14,9 @@ func TestDNSServer(t *testing.T) {
 	al, err := NewDNSAllowlist([]string{"allowed.example.com", "dnsonly.example.com"})
 	require.NoError(t, err)
 	blocker := NewCIDRBlocker(nil)
-	log := NewLogBuffer(100)
+	pub := &fakePublisher{}
 
-	srv := NewDNSServer(al, blocker, log, "8.8.8.8:53")
+	srv := NewDNSServer(al, blocker, pub, "8.8.8.8:53")
 	addr, cleanup := srv.ListenAndServeTest()
 	defer cleanup()
 
@@ -57,7 +57,7 @@ func TestDNSServer(t *testing.T) {
 	})
 
 	t.Run("logs blocked query", func(t *testing.T) {
-		entries := log.Entries()
+		entries := pub.all()
 		found := false
 		for _, e := range entries {
 			if e.Domain == "evil.com" && e.Action == ActionBlock && e.Source == SourceDNS {
@@ -73,11 +73,11 @@ func TestDNSHostVibepit(t *testing.T) {
 	al, err := NewDNSAllowlist(nil)
 	require.NoError(t, err)
 	blocker := NewCIDRBlocker(nil)
-	log := NewLogBuffer(100)
+	pub := &fakePublisher{}
 
 	proxyIP := net.ParseIP("10.42.0.2")
 
-	srv := NewDNSServer(al, blocker, log, "8.8.8.8:53")
+	srv := NewDNSServer(al, blocker, pub, "8.8.8.8:53")
 	srv.SetProxyIP(proxyIP)
 	addr, cleanup := srv.ListenAndServeTest()
 	defer cleanup()
@@ -114,7 +114,7 @@ func TestDNSHostVibepit(t *testing.T) {
 	})
 
 	t.Run("host.vibepit is logged", func(t *testing.T) {
-		entries := log.Entries()
+		entries := pub.all()
 		found := false
 		for _, e := range entries {
 			if e.Domain == "host.vibepit" && e.Action == ActionAllow && e.Source == SourceDNS {

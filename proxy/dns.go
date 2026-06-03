@@ -14,7 +14,7 @@ import (
 type DNSServer struct {
 	allowlist *DNSAllowlist
 	cidr      *CIDRBlocker
-	log       *LogBuffer
+	pub       LogPublisher
 	upstream  string
 	proxyIP   net.IP
 }
@@ -24,11 +24,11 @@ func (s *DNSServer) SetProxyIP(ip net.IP) {
 	s.proxyIP = ip
 }
 
-func NewDNSServer(allowlist *DNSAllowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *DNSServer {
+func NewDNSServer(allowlist *DNSAllowlist, cidr *CIDRBlocker, pub LogPublisher, upstream string) *DNSServer {
 	return &DNSServer{
 		allowlist: allowlist,
 		cidr:      cidr,
-		log:       log,
+		pub:       pub,
 		upstream:  upstream,
 	}
 }
@@ -49,7 +49,7 @@ func (s *DNSServer) handler() mdns.Handler {
 		// Synthetic response for host.vibepit — resolves to the proxy IP
 		// without upstream forwarding or CIDR validation.
 		if domain == "host.vibepit" && s.proxyIP != nil && r.Question[0].Qtype == mdns.TypeA {
-			s.log.Add(LogEntry{
+			s.pub.PublishLog(LogEntry{
 				Time:   time.Now(),
 				Domain: domain,
 				Action: ActionAllow,
@@ -71,7 +71,7 @@ func (s *DNSServer) handler() mdns.Handler {
 		}
 
 		if !s.allowlist.Allows(domain) {
-			s.log.Add(LogEntry{
+			s.pub.PublishLog(LogEntry{
 				Time:   time.Now(),
 				Domain: domain,
 				Action: ActionBlock,
@@ -94,7 +94,7 @@ func (s *DNSServer) handler() mdns.Handler {
 
 		// Reject responses that resolve to blocked IP ranges (e.g. private networks).
 		if s.hasBlockedIP(resp) {
-			s.log.Add(LogEntry{
+			s.pub.PublishLog(LogEntry{
 				Time:   time.Now(),
 				Domain: domain,
 				Action: ActionBlock,
@@ -107,7 +107,7 @@ func (s *DNSServer) handler() mdns.Handler {
 			return
 		}
 
-		s.log.Add(LogEntry{
+		s.pub.PublishLog(LogEntry{
 			Time:   time.Now(),
 			Domain: domain,
 			Action: ActionAllow,

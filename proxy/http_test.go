@@ -20,8 +20,8 @@ func TestHTTPProxy(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -37,7 +37,7 @@ func TestHTTPProxy(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Contains(t, string(body), "not in the allowlist")
 
-		entries := log.Entries()
+		entries := pub.all()
 		var found bool
 		for _, e := range entries {
 			if e.Domain == "httpbin.org" && e.Action == ActionBlock && e.Reason == "domain not in allowlist" {
@@ -63,8 +63,8 @@ func TestHTTPProxy(t *testing.T) {
 		require.NoError(t, err)
 		// Empty blocker so localhost backend isn't blocked by default private CIDRs.
 		blocker := &CIDRBlocker{}
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -83,8 +83,8 @@ func TestHTTPProxy(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"allowed.example.com:443"})
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -105,8 +105,8 @@ func TestHTTPProxy(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -118,7 +118,7 @@ func TestHTTPProxy(t *testing.T) {
 		require.NoError(t, err)
 		resp.Body.Close()
 
-		entries := log.Entries()
+		entries := pub.all()
 		var found bool
 		for _, e := range entries {
 			if e.Domain == "evil.com" && e.Action == ActionBlock {
@@ -133,8 +133,8 @@ func TestHTTPProxy(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"example.com:443"})
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 		p.resolver = &net.Resolver{
 			PreferGo: true,
 			Dial: func(context.Context, string, string) (net.Conn, error) {
@@ -168,8 +168,8 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		al, err := NewHTTPAllowlist(nil)
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
 
 		srv := httptest.NewServer(p.Handler())
@@ -191,8 +191,8 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		al, err := NewHTTPAllowlist(nil)
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{9999})
 
 		srv := httptest.NewServer(p.Handler())
@@ -212,8 +212,8 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"host.vibepit:" + backendPortStr})
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil)
-		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		pub := &fakePublisher{}
+		p := NewHTTPProxy(al, blocker, pub, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, nil)
 
 		srv := httptest.NewServer(p.Handler())
