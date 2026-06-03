@@ -3,8 +3,10 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -166,4 +168,146 @@ func portOrEphemeral(p int) int {
 		return -1 // nats-server: choose a random free port
 	}
 	return p
+}
+
+// LogPublisher is the dependency producers use to emit log entries onto the bus.
+type LogPublisher interface {
+	PublishLog(LogEntry)
+}
+
+type busPublisher struct{ js jetstream.JetStream }
+
+func (p busPublisher) PublishLog(e LogEntry) {
+	if e.Time.IsZero() {
+		e.Time = time.Now()
+	}
+	data, err := json.Marshal(e)
+	if err != nil {
+		return
+	}
+	// Async with a bounded pending window: back-pressures by blocking, never
+	// drops. A connection-fatal error surfaces via the connection error handler.
+	_, _ = p.js.PublishAsync(SubjectLogs, data)
+}
+
+// LogPublisher returns the producer-facing publisher.
+func (b *Bus) LogPublisher() LogPublisher { return busPublisher{js: b.js} }
+
+// FlushPublishes waits for outstanding async publishes to be acked.
+func (b *Bus) FlushPublishes(timeout time.Duration) error {
+	select {
+	case <-b.js.PublishAsyncComplete():
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("publish flush timeout")
+	}
+}
+
+// StatsAggregator consumes the log stream and folds entries into DomainStats.
+type StatsAggregator struct {
+	mu    sync.Mutex
+	stats map[string]*DomainStats
+}
+
+func newStatsAggregator() *StatsAggregator {
+	return &StatsAggregator{stats: map[string]*DomainStats{}}
+}
+
+func (a *StatsAggregator) fold(e LogEntry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.stats[e.Domain]
+	if !ok {
+		s = &DomainStats{}
+		a.stats[e.Domain] = s
+	}
+	switch e.Action {
+	case ActionAllow:
+		s.Allowed++
+	case ActionBlock:
+		s.Blocked++
+	}
+}
+
+func (a *StatsAggregator) snapshot() map[string]DomainStats {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make(map[string]DomainStats, len(a.stats))
+	for k, v := range a.stats {
+		out[k] = *v
+	}
+	return out
+}
+
+// RegisterHandlers starts the stats consumer and the request/reply handlers on
+// the internal connection. Call once, before producers start publishing.
+func (b *Bus) RegisterHandlers() error {
+	ctx := context.Background()
+	stream, err := b.js.Stream(ctx, StreamLogs)
+	if err != nil {
+		return fmt.Errorf("stream handle: %w", err)
+	}
+	agg := newStatsAggregator()
+	cons, err := stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+	})
+	if err != nil {
+		return fmt.Errorf("stats consumer: %w", err)
+	}
+	if _, err := cons.Consume(func(m jetstream.Msg) {
+		var e LogEntry
+		if json.Unmarshal(m.Data(), &e) == nil {
+			agg.fold(e)
+		}
+	}); err != nil {
+		return fmt.Errorf("stats consume: %w", err)
+	}
+
+	reply := func(subj string, fn func([]byte) (any, error)) error {
+		_, err := b.nc.Subscribe(subj, func(msg *nats.Msg) {
+			out, herr := fn(msg.Data)
+			if herr != nil {
+				resp := nats.NewMsg(msg.Reply)
+				resp.Header.Set("Nats-Service-Error-Code", "400")
+				resp.Header.Set("Nats-Service-Error", herr.Error())
+				_ = msg.RespondMsg(resp)
+				return
+			}
+			data, _ := json.Marshal(out)
+			_ = msg.Respond(data)
+		})
+		return err
+	}
+
+	if err := reply(SubjectStats, func([]byte) (any, error) { return agg.snapshot(), nil }); err != nil {
+		return err
+	}
+	if err := reply(SubjectConfig, func([]byte) (any, error) { return b.opts.Config, nil }); err != nil {
+		return err
+	}
+	if err := reply(SubjectAllowHTTP, b.handleAllow(b.opts.HTTPAllowlist.Add)); err != nil {
+		return err
+	}
+	if err := reply(SubjectAllowDNS, b.handleAllow(b.opts.DNSAllowlist.Add)); err != nil {
+		return err
+	}
+	return b.nc.Flush()
+}
+
+func (b *Bus) handleAllow(add func([]string) error) func([]byte) (any, error) {
+	return func(data []byte) (any, error) {
+		var req struct {
+			Entries []string `json:"entries"`
+		}
+		if err := json.Unmarshal(data, &req); err != nil {
+			return nil, fmt.Errorf("invalid JSON")
+		}
+		if len(req.Entries) == 0 {
+			return nil, fmt.Errorf("entries required")
+		}
+		if err := add(req.Entries); err != nil {
+			return nil, err
+		}
+		return map[string]any{"added": req.Entries}, nil
+	}
 }

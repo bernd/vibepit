@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -76,4 +77,41 @@ func TestBus_UserMappingAndPermissions(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected permission violation publishing allow.http as sandbox")
 	}
+}
+
+func TestBus_StatsAndHandlers(t *testing.T) {
+	bus, creds := newTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+
+	// Publish two log entries via the LogPublisher.
+	pub := bus.LogPublisher()
+	pub.PublishLog(LogEntry{Domain: "a.com", Action: ActionAllow, Source: SourceProxy})
+	pub.PublishLog(LogEntry{Domain: "a.com", Action: ActionBlock, Source: SourceProxy})
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	user := dialAs(t, bus, creds.ClientCertPEM(), creds.ClientKeyPEM(), creds.CACertPEM())
+
+	// stats request/reply reflects the published entries.
+	require.Eventually(t, func() bool {
+		msg, err := user.Request(SubjectStats, []byte("{}"), time.Second)
+		if err != nil {
+			return false
+		}
+		var stats map[string]DomainStats
+		if err := json.Unmarshal(msg.Data, &stats); err != nil {
+			return false
+		}
+		return stats["a.com"].Allowed == 1 && stats["a.com"].Blocked == 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// allow.http adds an entry and returns it.
+	body, _ := json.Marshal(map[string]any{"entries": []string{"example.com:443"}})
+	msg, err := user.Request(SubjectAllowHTTP, body, time.Second)
+	require.NoError(t, err)
+	require.Empty(t, msg.Header.Get("Nats-Service-Error-Code"))
+	var added struct {
+		Added []string `json:"added"`
+	}
+	require.NoError(t, json.Unmarshal(msg.Data, &added))
+	require.Equal(t, []string{"example.com:443"}, added.Added)
 }
