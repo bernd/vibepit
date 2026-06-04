@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -39,13 +40,20 @@ type logItem struct {
 
 // monitorScreen implements tui.Screen for the log monitor.
 type monitorScreen struct {
-	session        *SessionInfo
-	client         *ControlClient
-	onBack         func() tui.Screen
-	cursor         tui.Cursor
-	logCh          chan proxy.LogEntry
-	logsDone       <-chan struct{}
-	stopLogs       func()
+	session  *SessionInfo
+	client   *ControlClient
+	onBack   func() tui.Screen
+	cursor   tui.Cursor
+	logCh    chan proxy.LogEntry
+	logsDone <-chan struct{}
+
+	// stopFn tears down the log subscription. It is produced asynchronously by
+	// the startSubscription cmd goroutine and consumed by transitionBack on the
+	// Update goroutine, so both accesses are guarded by mu. torndown lets a late
+	// subscription clean itself up if the screen was already left.
+	mu             sync.Mutex
+	stopFn         func()
+	torndown       bool
 	items          []logItem
 	newCount       int
 	firstTickSeen  bool
@@ -75,10 +83,10 @@ type logEntryMsg proxy.LogEntry
 type subscribeErrMsg struct{ err error }
 
 // subscriptionStartedMsg confirms the log subscription is live and carries the
-// stop function and done channel used to tear it down. It is delivered to the
-// main Update goroutine so these are never written from a cmd goroutine.
+// done channel used to arm the channel read. The stop func is handed off via
+// s.stopFn under s.mu (see startSubscription) rather than this message, so it is
+// not lost if the screen is torn down before the message is processed.
 type subscriptionStartedMsg struct {
-	stop func()
 	done <-chan struct{}
 }
 
@@ -137,9 +145,17 @@ func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea
 }
 
 func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
-	if s.stopLogs != nil {
-		s.stopLogs()
-		s.stopLogs = nil
+	// Mark torn down and take ownership of the stop func under the lock. If the
+	// subscription goroutine hasn't reported back yet, stopFn is nil here and the
+	// goroutine will stop itself when it sees torndown — so the consumer is never
+	// leaked regardless of ordering.
+	s.mu.Lock()
+	s.torndown = true
+	stop := s.stopFn
+	s.stopFn = nil
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
 	}
 	if s.client != nil {
 		s.client.Close()
@@ -148,11 +164,11 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 	return s.onBack()
 }
 
-// startSubscription opens the log subscription on a cmd goroutine and reports
-// the result via a message. It must not mutate any screen field: the channel is
-// created by Update on the main goroutine and passed in, and the stop function
-// is returned through subscriptionStartedMsg so Update owns all field writes.
-// Reading s.client here is safe because it is set before the screen runs and is
+// startSubscription opens the log subscription on a cmd goroutine. The stop func
+// is stored in s.stopFn under s.mu (not returned via the message) so it survives
+// the screen being torn down before this goroutine reports back: if torndown is
+// already set, this goroutine stops the subscription itself instead of leaking
+// it. Reading s.client is safe because it is set before the screen runs and is
 // never mutated.
 func (s *monitorScreen) startSubscription(ch chan proxy.LogEntry) tea.Cmd {
 	return func() tea.Msg {
@@ -160,7 +176,15 @@ func (s *monitorScreen) startSubscription(ch chan proxy.LogEntry) tea.Cmd {
 		if err != nil {
 			return subscribeErrMsg{err: err}
 		}
-		return subscriptionStartedMsg{stop: stop, done: done}
+		s.mu.Lock()
+		if s.torndown {
+			s.mu.Unlock()
+			stop() // user already navigated back; don't leak the consumer
+			return nil
+		}
+		s.stopFn = stop
+		s.mu.Unlock()
+		return subscriptionStartedMsg{done: done}
 	}
 }
 
@@ -228,7 +252,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 
 	case subscriptionStartedMsg:
-		s.stopLogs = msg.stop
+		// stopFn was already stored by the subscription goroutine under s.mu.
 		s.logsDone = msg.done
 		return s, waitForLog(s.logCh, s.logsDone)
 

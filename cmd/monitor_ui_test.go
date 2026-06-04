@@ -358,21 +358,21 @@ func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
 	assert.Nil(t, secondCmd, "should not re-subscribe after the first tick")
 
 	// The first tick batches [startSubscription, watchConn]. Run the
-	// subscription command (index 0): it establishes the consumer and reports a
-	// stop function via subscriptionStartedMsg, without mutating any field.
+	// subscription command (index 0): it establishes the consumer and stores the
+	// stop func in s.stopFn under the mutex (so it survives an early teardown).
 	// watchConn (index 1) blocks on the conn-event channel, so it is not run here.
 	batch, ok := cmd().(tea.BatchMsg)
 	require.True(t, ok, "first tick should batch the subscription and conn watch")
 	require.Len(t, batch, 2)
 	started, ok := batch[0]().(subscriptionStartedMsg)
 	require.True(t, ok, "subscription command should yield a subscriptionStartedMsg")
-	require.NotNil(t, started.stop)
-	assert.Nil(t, s.stopLogs, "cmd goroutine must not write s.stopLogs")
+	s.mu.Lock()
+	require.NotNil(t, s.stopFn, "subscription goroutine should store the stop func under the lock")
+	s.mu.Unlock()
 
-	// Update stores the stop func and arms the first channel read.
+	// subscriptionStartedMsg arms the first channel read.
 	_, readCmd := s.Update(started, w)
 	require.NotNil(t, readCmd, "subscriptionStartedMsg should arm the channel read")
-	require.NotNil(t, s.stopLogs, "Update should store the stop func")
 
 	// A published entry flows through the channel and yields a logEntryMsg.
 	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "api.openai.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
@@ -382,6 +382,38 @@ func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
 	entry, ok := msg.(logEntryMsg)
 	require.True(t, ok, "channel read should yield a logEntryMsg")
 	assert.Equal(t, "api.openai.com", proxy.LogEntry(entry).Domain)
+}
+
+// TestMonitorScreen_TeardownBeforeSubscriptionStarted covers the race where the
+// user navigates back after the subscription is armed but before its goroutine
+// reports in: the goroutine must stop the consumer itself (not leak it) and not
+// store a stop func into the dead screen.
+func TestMonitorScreen_TeardownBeforeSubscriptionStarted(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+	client := newCmdTestClient(t, bus, creds)
+
+	s := newMonitorScreen(&SessionInfo{SessionID: "test123456"}, client,
+		func() tui.Screen { return &testStubScreen{} })
+
+	// Simulate transitionBack having already run (user left) before the
+	// subscription goroutine completes.
+	s.mu.Lock()
+	s.torndown = true
+	s.mu.Unlock()
+
+	ch := make(chan proxy.LogEntry, logChannelBuffer)
+	s.logCh = ch
+
+	// Run the subscription goroutine body synchronously: SubscribeLogs succeeds
+	// (client is live), then it must see torndown, stop the consumer, and yield
+	// nil instead of a subscriptionStartedMsg.
+	msg := s.startSubscription(ch)()
+	assert.Nil(t, msg, "late subscription should self-clean and yield nil after teardown")
+
+	s.mu.Lock()
+	assert.Nil(t, s.stopFn, "stop func must not be stored on a torn-down screen")
+	s.mu.Unlock()
 }
 
 func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
