@@ -40,11 +40,12 @@ type BusOptions struct {
 
 // Bus is the embedded NATS server plus the proxy's own internal client.
 type Bus struct {
-	ns       *natsserver.Server
-	nc       *nats.Conn
-	js       jetstream.JetStream
-	storeDir string
-	opts     BusOptions
+	ns        *natsserver.Server
+	nc        *nats.Conn
+	js        jetstream.JetStream
+	storeDir  string
+	clientURL string
+	opts      BusOptions
 }
 
 func natsUsers() []*natsserver.User {
@@ -102,28 +103,37 @@ func NewBus(opts BusOptions) (*Bus, error) {
 		os.RemoveAll(storeDir) //nolint:errcheck
 		return nil, fmt.Errorf("nats server: %w", err)
 	}
-	go ns.Start()
-	if !ns.ReadyForConnections(natsReadyTimeout) {
+
+	// Tear down partially-constructed state unless ownership is handed to the
+	// returned Bus (ok=true on success).
+	var nc *nats.Conn
+	ok := false
+	defer func() {
+		if ok {
+			return
+		}
+		if nc != nil {
+			nc.Close()
+		}
 		ns.Shutdown()
 		os.RemoveAll(storeDir) //nolint:errcheck
+	}()
+
+	go ns.Start()
+	if !ns.ReadyForConnections(natsReadyTimeout) {
 		return nil, fmt.Errorf("nats server not ready")
 	}
 
 	// Dial our own server over loopback (the server cert's SAN is 127.0.0.1),
 	// using the bound port even though the listener is on 0.0.0.0.
-	loopbackURL := fmt.Sprintf("tls://127.0.0.1:%d", ns.Addr().(*net.TCPAddr).Port)
-	nc, err := nats.Connect(loopbackURL,
+	clientURL := fmt.Sprintf("tls://127.0.0.1:%d", ns.Addr().(*net.TCPAddr).Port)
+	nc, err = nats.Connect(clientURL,
 		nats.Secure(opts.InternalTLS), nats.Timeout(natsReadyTimeout))
 	if err != nil {
-		ns.Shutdown()
-		os.RemoveAll(storeDir) //nolint:errcheck
 		return nil, fmt.Errorf("internal client connect: %w", err)
 	}
 	js, err := jetstream.New(nc, jetstream.WithPublishAsyncMaxPending(publishAsyncPending))
 	if err != nil {
-		nc.Close()
-		ns.Shutdown()
-		os.RemoveAll(storeDir) //nolint:errcheck
 		return nil, fmt.Errorf("jetstream: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), natsReadyTimeout)
@@ -135,20 +145,16 @@ func NewBus(opts BusOptions) (*Bus, error) {
 		MaxMsgs:  LogBufferCapacity,
 		Discard:  jetstream.DiscardOld,
 	}); err != nil {
-		nc.Close()
-		ns.Shutdown()
-		os.RemoveAll(storeDir) //nolint:errcheck
 		return nil, fmt.Errorf("create log stream: %w", err)
 	}
 
-	return &Bus{ns: ns, nc: nc, js: js, storeDir: storeDir, opts: opts}, nil
+	ok = true
+	return &Bus{ns: ns, nc: nc, js: js, storeDir: storeDir, clientURL: clientURL, opts: opts}, nil
 }
 
 // ClientURL returns the loopback TLS URL clients dial (the server cert's SAN is
 // 127.0.0.1; the listener binds 0.0.0.0 for container DNAT reachability).
-func (b *Bus) ClientURL() string {
-	return fmt.Sprintf("tls://127.0.0.1:%d", b.ns.Addr().(*net.TCPAddr).Port)
-}
+func (b *Bus) ClientURL() string { return b.clientURL }
 
 // Addr returns the listener host:port (used by tests / port discovery).
 func (b *Bus) Addr() string { return b.ns.Addr().String() }
@@ -207,10 +213,12 @@ func (b *Bus) LogPublisher() LogPublisher { return busPublisher{js: b.js} }
 
 // FlushPublishes waits for outstanding async publishes to be acked.
 func (b *Bus) FlushPublishes(timeout time.Duration) error {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
 	select {
 	case <-b.js.PublishAsyncComplete():
 		return nil
-	case <-time.After(timeout):
+	case <-t.C:
 		return fmt.Errorf("publish flush timeout")
 	}
 }
@@ -320,6 +328,11 @@ func (b *Bus) handleAllow(add func([]string) error) func([]byte) (any, error) {
 		if err := add(req.Entries); err != nil {
 			return nil, err
 		}
-		return map[string]any{"added": req.Entries}, nil
+		return allowResult{Added: req.Entries}, nil
 	}
+}
+
+// allowResult is the reply body for the allow.http / allow.dns subjects.
+type allowResult struct {
+	Added []string `json:"added"`
 }

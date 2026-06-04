@@ -333,7 +333,6 @@ func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
 	// once. The channel is created on the Update goroutine, not in the cmd.
 	_, cmd := s.Update(tui.TickMsg{}, w)
 	require.NotNil(t, cmd, "first tick should start the log subscription")
-	assert.True(t, s.subscribed)
 	require.NotNil(t, s.logCh, "Update should create the log channel on the main goroutine")
 
 	// Subsequent ticks must not start another subscription.

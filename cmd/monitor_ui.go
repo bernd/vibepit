@@ -25,6 +25,10 @@ const (
 
 const disconnectGracePeriod = 3 * time.Second
 
+// logChannelBuffer is the receive-side window for log entries delivered from the
+// bus subscription to the Bubble Tea loop.
+const logChannelBuffer = 256
+
 var disconnectGraceTicks = int(disconnectGracePeriod / tui.TickInterval)
 
 // logItem wraps a proxy log entry with its allow-list status.
@@ -41,7 +45,6 @@ type monitorScreen struct {
 	cursor         tui.Cursor
 	logCh          chan proxy.LogEntry
 	stopLogs       func()
-	subscribed     bool
 	items          []logItem
 	newCount       int
 	firstTickSeen  bool
@@ -242,9 +245,8 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 		if !s.firstTickSeen {
 			s.firstTickSeen = true
-			if s.client != nil && !s.subscribed {
-				s.subscribed = true
-				s.logCh = make(chan proxy.LogEntry, 256)
+			if s.client != nil {
+				s.logCh = make(chan proxy.LogEntry, logChannelBuffer)
 				return s, s.startSubscription(s.logCh)
 			}
 		}

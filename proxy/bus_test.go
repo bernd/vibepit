@@ -37,8 +37,7 @@ func newTestBus(t *testing.T) (*Bus, *MTLSCredentials) {
 	return bus, creds
 }
 
-// dialAs connects to the bus as the given client cert. Reserved for Task 4's
-// multi-user handler tests.
+// dialAs connects to the bus as the given client cert.
 func dialAs(t *testing.T, bus *Bus, certPEM, keyPEM, caPEM []byte) *nats.Conn {
 	t.Helper()
 	tlsCfg, err := clientTLSFromPEM(certPEM, keyPEM, caPEM)

@@ -317,18 +317,5 @@ func LoadInternalClientTLSConfigFromEnv() (*tls.Config, error) {
 		return nil, fmt.Errorf("internal client TLS env vars must be set: %s, %s, %s",
 			EnvProxyInternalCert, EnvProxyInternalKey, EnvProxyCACert)
 	}
-	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
-	if err != nil {
-		return nil, fmt.Errorf("load internal client keypair: %w", err)
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM([]byte(caPEM)) {
-		return nil, fmt.Errorf("failed to parse CA certificate from %s", EnvProxyCACert)
-	}
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caPool,
-		ServerName:   "127.0.0.1",
-	}, nil
+	return clientTLSFromPEM([]byte(certPEM), []byte(keyPEM), []byte(caPEM))
 }
