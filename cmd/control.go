@@ -123,17 +123,28 @@ func (c *ControlClient) postAllow(subj string, entries []string) ([]string, erro
 	return result.Added, nil
 }
 
-// SubscribeLogs delivers retained history then live entries in stream order.
-// The returned function stops the consumer.
+// initialLogHistory bounds how many retained entries the monitor replays on
+// connect, matching the old control API's last-25 initial response instead of
+// flooding the TUI with the full retained ring (up to LogBufferCapacity).
+const initialLogHistory uint64 = 25
+
+// SubscribeLogs delivers a bounded tail of retained history then live entries in
+// stream order. The returned function stops the consumer.
 func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), error) {
 	ctx := context.Background()
 	stream, err := c.js.Stream(ctx, proxy.StreamLogs)
 	if err != nil {
 		return nil, fmt.Errorf("stream: %w", err)
 	}
-	cons, err := stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
-		DeliverPolicy: jetstream.DeliverAllPolicy,
-	})
+	// Start near the tail so a long-running session doesn't replay thousands of
+	// historical entries on open. Fall back to all if the stream is short or its
+	// state can't be read.
+	cfg := jetstream.OrderedConsumerConfig{DeliverPolicy: jetstream.DeliverAllPolicy}
+	if info, ierr := stream.Info(ctx); ierr == nil && info.State.LastSeq > initialLogHistory {
+		cfg.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		cfg.OptStartSeq = info.State.LastSeq - initialLogHistory + 1
+	}
+	cons, err := stream.OrderedConsumer(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("ordered consumer: %w", err)
 	}

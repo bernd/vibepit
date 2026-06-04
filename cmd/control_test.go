@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -163,4 +164,43 @@ func TestControlClient_SubscribeLogs(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not receive log entry within 3s")
 	}
+}
+
+// TestControlClient_SubscribeLogs_BoundsInitialHistory verifies the initial
+// replay is capped at the last initialLogHistory entries (not the whole ring).
+func TestControlClient_SubscribeLogs_BoundsInitialHistory(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+
+	const total = 40
+	pub := bus.LogPublisher()
+	for i := range total {
+		pub.PublishLog(proxy.LogEntry{Domain: fmt.Sprintf("d%02d.com", i), Action: proxy.ActionAllow})
+	}
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	client := newCmdTestClient(t, bus, creds)
+	ch := make(chan proxy.LogEntry, 256)
+	stop, err := client.SubscribeLogs(ch)
+	require.NoError(t, err)
+	defer stop()
+
+	// Drain the initial replay until it goes quiet.
+	var got []proxy.LogEntry
+	deadline := time.After(3 * time.Second)
+loop:
+	for {
+		select {
+		case e := <-ch:
+			got = append(got, e)
+		case <-time.After(300 * time.Millisecond):
+			break loop
+		case <-deadline:
+			break loop
+		}
+	}
+
+	require.Len(t, got, int(initialLogHistory), "initial replay should be bounded")
+	assert.Equal(t, "d15.com", got[0].Domain, "oldest delivered is total-25")
+	assert.Equal(t, "d39.com", got[len(got)-1].Domain, "newest delivered is the last entry")
 }
