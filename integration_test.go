@@ -100,30 +100,48 @@ func TestProxyServerIntegration(t *testing.T) {
 	require.NoError(t, err, "connect control bus")
 	defer nc.Close()
 
-	// config returns successfully (no service-error header).
+	type addedResp struct {
+		Added []string `json:"added"`
+	}
+
+	// config returns successfully and reflects the seeded ProxyConfig.
 	cfgMsg, err := nc.Request(proxy.SubjectConfig, []byte("{}"), 5*time.Second)
 	require.NoError(t, err, "config request")
 	assert.Empty(t, cfgMsg.Header.Get("Nats-Service-Error-Code"), "config error header")
+	var gotCfg proxy.ProxyConfig
+	require.NoError(t, json.Unmarshal(cfgMsg.Data, &gotCfg), "decode config reply")
+	assert.Equal(t, controlPort, gotCfg.ControlAPIPort, "config control port")
+	assert.Equal(t, proxyPort, gotCfg.ProxyPort, "config proxy port")
+	assert.Contains(t, gotCfg.AllowHTTP, "httpbin.org:443", "config seeded allow-http")
+	assert.Contains(t, gotCfg.AllowDNS, "dns-only.example.com", "config seeded allow-dns")
 
-	// allow-http: valid entry succeeds.
+	// allow-http: valid entry succeeds and echoes the added entry.
 	okMsg, err := nc.Request(proxy.SubjectAllowHTTP, []byte(`{"entries":["added-http.example:80"]}`), 5*time.Second)
 	require.NoError(t, err, "allow-http request")
 	assert.Empty(t, okMsg.Header.Get("Nats-Service-Error-Code"), "allow-http should succeed")
+	var okHTTP addedResp
+	require.NoError(t, json.Unmarshal(okMsg.Data, &okHTTP), "decode allow-http reply")
+	assert.Equal(t, []string{"added-http.example:80"}, okHTTP.Added, "allow-http added entries")
 
-	// allow-http: malformed entry (missing port) returns a service error.
+	// allow-http: malformed entry (missing port) returns a service error with no body.
 	badMsg, err := nc.Request(proxy.SubjectAllowHTTP, []byte(`{"entries":["added-http.example"]}`), 5*time.Second)
 	require.NoError(t, err, "allow-http malformed request")
 	assert.NotEmpty(t, badMsg.Header.Get("Nats-Service-Error-Code"), "allow-http malformed should error")
+	assert.Empty(t, badMsg.Data, "allow-http malformed reply body")
 
-	// allow-dns: valid entry succeeds.
+	// allow-dns: valid entry succeeds and echoes the added entry.
 	okDNS, err := nc.Request(proxy.SubjectAllowDNS, []byte(`{"entries":["internal.example.com"]}`), 5*time.Second)
 	require.NoError(t, err, "allow-dns request")
 	assert.Empty(t, okDNS.Header.Get("Nats-Service-Error-Code"), "allow-dns should succeed")
+	var okDNSResp addedResp
+	require.NoError(t, json.Unmarshal(okDNS.Data, &okDNSResp), "decode allow-dns reply")
+	assert.Equal(t, []string{"internal.example.com"}, okDNSResp.Added, "allow-dns added entries")
 
-	// allow-dns: malformed entry (port not allowed for DNS) returns a service error.
+	// allow-dns: malformed entry (port not allowed for DNS) returns a service error with no body.
 	badDNS, err := nc.Request(proxy.SubjectAllowDNS, []byte(`{"entries":["internal.example.com:443"]}`), 5*time.Second)
 	require.NoError(t, err, "allow-dns malformed request")
 	assert.NotEmpty(t, badDNS.Header.Get("Nats-Service-Error-Code"), "allow-dns malformed should error")
+	assert.Empty(t, badDNS.Data, "allow-dns malformed reply body")
 
 	// Use the HTTP proxy to verify blocked requests.
 	proxyClient := &http.Client{
