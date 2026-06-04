@@ -194,10 +194,21 @@ type connStatusMsg struct{ connected bool }
 
 // watchConn blocks on the client's connection-event channel and yields the next
 // state change, re-armed after each one. This is how the monitor learns the
-// proxy died mid-session even while the NATS client reconnects silently.
+// proxy died mid-session even while the NATS client reconnects silently. It also
+// selects on the client's closed channel so the goroutine exits at teardown
+// (returning a nil message, which Bubble Tea ignores) instead of blocking until
+// process exit when the final close event is dropped by the lossy buffer.
 func (s *monitorScreen) watchConn() tea.Cmd {
 	ch := s.client.ConnEvents()
-	return func() tea.Msg { return connStatusMsg{connected: <-ch} }
+	done := s.client.Closed()
+	return func() tea.Msg {
+		select {
+		case c := <-ch:
+			return connStatusMsg{connected: c}
+		case <-done:
+			return nil
+		}
+	}
 }
 
 func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
@@ -267,13 +278,18 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 
 	case connStatusMsg:
-		// Mid-session connection loss: arm the disconnect grace timer. On
-		// reconnect, clear it (the ordered consumer resumes on the same channel).
+		// Mid-session connection loss: surface the error and, when there is a
+		// screen to return to, arm the disconnect grace timer that transitions
+		// back. In standalone mode (no onBack) we still show the error but stay
+		// put. On reconnect, clear it (the ordered consumer resumes on the same
+		// channel).
 		if msg.connected {
 			s.disconnectTick = -1
 			w.ClearError()
-		} else if s.onBack != nil && s.disconnectTick < 0 {
-			s.disconnectTick = 0
+		} else {
+			if s.onBack != nil && s.disconnectTick < 0 {
+				s.disconnectTick = 0
+			}
 			w.SetError(fmt.Errorf("session %s disconnected", s.session.SessionID))
 		}
 		if s.client != nil {

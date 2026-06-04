@@ -18,6 +18,8 @@ type ControlClient struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 	connEvents chan bool
+	closed     chan struct{}
+	closeOnce  sync.Once
 }
 
 func NewControlClient(session *SessionInfo) (*ControlClient, error) {
@@ -28,7 +30,7 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load TLS credentials: %w", err)
 	}
-	c := &ControlClient{connEvents: make(chan bool, 8)}
+	c := &ControlClient{connEvents: make(chan bool, 8), closed: make(chan struct{})}
 	nc, err := nats.Connect(
 		fmt.Sprintf("tls://127.0.0.1:%s", session.ControlPort),
 		nats.Secure(tlsCfg),
@@ -55,13 +57,23 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	return c, nil
 }
 
-func (c *ControlClient) Close() { c.nc.Close() }
+// Close tears down the connection and unblocks any ConnEvents watcher. It is
+// idempotent.
+func (c *ControlClient) Close() {
+	c.closeOnce.Do(func() { close(c.closed) })
+	c.nc.Close()
+}
 
 // ConnEvents delivers connection-state changes: false on disconnect/close, true
 // on reconnect. The channel is buffered and lossy (a full buffer drops events)
 // so it never blocks a NATS callback goroutine; consumers only act on the latest
 // state transition.
 func (c *ControlClient) ConnEvents() <-chan bool { return c.connEvents }
+
+// Closed is closed when Close is called, so a watcher blocked on ConnEvents can
+// select on it and exit at teardown rather than relying on a final lifecycle
+// event (which the lossy connEvents buffer may drop).
+func (c *ControlClient) Closed() <-chan struct{} { return c.closed }
 
 func (c *ControlClient) signalConn(connected bool) {
 	select {

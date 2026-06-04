@@ -574,6 +574,22 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 			assert.Equal(t, s, screen, "should stay on monitor after reconnect")
 		}
 	})
+
+	t.Run("standalone disconnect surfaces error without arming timer", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		// onBack is nil — standalone monitor with nowhere to return to.
+
+		s.Update(connStatusMsg{connected: false}, w)
+		require.Error(t, w.Err(), "disconnect should surface an error in standalone mode")
+		assert.Contains(t, w.Err().Error(), "disconnected")
+		assert.Equal(t, -1, s.disconnectTick, "timer must not arm without onBack")
+
+		// Ticks must not transition (there is no screen to go back to).
+		for range disconnectGraceTicks + 2 {
+			screen, _ := s.Update(tui.TickMsg{}, w)
+			assert.Equal(t, s, screen, "standalone monitor should stay put")
+		}
+	})
 }
 
 func TestMonitorScreen_EscResetsHeader(t *testing.T) {

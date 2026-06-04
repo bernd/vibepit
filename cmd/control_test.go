@@ -188,6 +188,45 @@ func TestControlClient_SubscribeLogs_StopClosesDone(t *testing.T) {
 	}
 }
 
+// TestControlClient_CloseUnblocksConnWatcher verifies Close closes the Closed
+// channel — the backstop so a ConnEvents watcher unblocks at teardown even when
+// the lossy buffer dropped the final lifecycle event — and is idempotent.
+func TestControlClient_CloseUnblocksConnWatcher(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+	client := newCmdTestClient(t, bus, creds)
+
+	// Saturate the lossy buffer so the close lifecycle event is dropped — exactly
+	// the edge the Closed backstop exists for.
+	for range cap(client.connEvents) {
+		client.signalConn(false)
+	}
+
+	client.Close()
+	client.Close() // idempotent — must not panic on double close
+
+	// A watcher that drains buffered flap events but also selects on Closed,
+	// mirroring monitorScreen.watchConn. Once the buffer empties, only Closed is
+	// ready, so it must exit via Closed rather than blocking forever.
+	exited := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-client.ConnEvents():
+			case <-client.Closed():
+				close(exited)
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not unblock the conn watcher via Closed")
+	}
+}
+
 // TestControlClient_SubscribeLogs_BoundsInitialHistory verifies the initial
 // replay is capped at the last initialLogHistory entries (not the whole ring).
 func TestControlClient_SubscribeLogs_BoundsInitialHistory(t *testing.T) {
