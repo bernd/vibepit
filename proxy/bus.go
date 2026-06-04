@@ -316,11 +316,17 @@ func (b *Bus) RegisterHandlers() error {
 	if err := b.replyHandler(SubjectConfig, func([]byte) (any, error) { return b.opts.Config, nil }); err != nil {
 		return err
 	}
-	if err := b.replyHandler(SubjectAllowHTTP, b.handleAllow(b.opts.HTTPAllowlist.Add)); err != nil {
-		return err
+	// Allowlist handlers are only registered when configured; a caller may
+	// construct a bus without them (production always wires them via server.go).
+	if b.opts.HTTPAllowlist != nil {
+		if err := b.replyHandler(SubjectAllowHTTP, b.handleAllow(b.opts.HTTPAllowlist.Add)); err != nil {
+			return err
+		}
 	}
-	if err := b.replyHandler(SubjectAllowDNS, b.handleAllow(b.opts.DNSAllowlist.Add)); err != nil {
-		return err
+	if b.opts.DNSAllowlist != nil {
+		if err := b.replyHandler(SubjectAllowDNS, b.handleAllow(b.opts.DNSAllowlist.Add)); err != nil {
+			return err
+		}
 	}
 	return b.nc.Flush()
 }

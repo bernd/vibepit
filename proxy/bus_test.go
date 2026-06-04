@@ -139,6 +139,32 @@ func TestBus_HandlerPanicRecovered(t *testing.T) {
 	assert.Empty(t, stats.Header.Get("Nats-Service-Error-Code"))
 }
 
+// TestBus_RegisterHandlers_NilAllowlists verifies a bus built without allowlists
+// (a misconfigured/partial caller) registers handlers without panicking and the
+// other subjects still work; the allow.* subjects are simply not served.
+func TestBus_RegisterHandlers_NilAllowlists(t *testing.T) {
+	creds, err := GenerateMTLSCredentials(time.Hour)
+	require.NoError(t, err)
+	serverTLS, err := creds.ServerTLSConfig()
+	require.NoError(t, err)
+	internalTLS, err := clientTLSFromPEM(creds.InternalClientCertPEM(), creds.InternalClientKeyPEM(), creds.CACertPEM())
+	require.NoError(t, err)
+
+	bus, err := NewBus(BusOptions{ServerTLS: serverTLS, InternalTLS: internalTLS})
+	require.NoError(t, err)
+	t.Cleanup(bus.Shutdown)
+
+	require.NotPanics(t, func() {
+		require.NoError(t, bus.RegisterHandlers())
+	})
+
+	// stats still works without allowlists configured.
+	user := dialAs(t, bus, creds.ClientCertPEM(), creds.ClientKeyPEM(), creds.CACertPEM())
+	msg, err := user.Request(SubjectStats, []byte("{}"), 2*time.Second)
+	require.NoError(t, err)
+	require.Empty(t, msg.Header.Get("Nats-Service-Error-Code"))
+}
+
 // TestNatsUsers_Permissions pins the exact per-role permission sets so an
 // accidental change to natsUsers() (a widened scope, a typo'd subject, a dropped
 // restriction) fails loudly and forces a deliberate, reviewed test update.
