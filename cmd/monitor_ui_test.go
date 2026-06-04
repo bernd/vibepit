@@ -339,10 +339,14 @@ func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
 	_, secondCmd := s.Update(tui.TickMsg{}, w)
 	assert.Nil(t, secondCmd, "should not re-subscribe after the first tick")
 
-	// Executing the subscription command establishes the consumer and reports a
-	// stop function via subscriptionStartedMsg — it must not mutate any field.
-	startMsg := cmd()
-	started, ok := startMsg.(subscriptionStartedMsg)
+	// The first tick batches [startSubscription, watchConn]. Run the
+	// subscription command (index 0): it establishes the consumer and reports a
+	// stop function via subscriptionStartedMsg, without mutating any field.
+	// watchConn (index 1) blocks on the conn-event channel, so it is not run here.
+	batch, ok := cmd().(tea.BatchMsg)
+	require.True(t, ok, "first tick should batch the subscription and conn watch")
+	require.Len(t, batch, 2)
+	started, ok := batch[0]().(subscriptionStartedMsg)
 	require.True(t, ok, "subscription command should yield a subscriptionStartedMsg")
 	require.NotNil(t, started.stop)
 	assert.Nil(t, s.stopLogs, "cmd goroutine must not write s.stopLogs")
@@ -473,6 +477,51 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		for range 20 {
 			screen, _ := s.Update(tui.TickMsg{}, w)
 			assert.Equal(t, s, screen, "should not transition without onBack")
+		}
+	})
+
+	t.Run("mid-session disconnect starts the timer", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		s.onBack = func() tui.Screen { return &testStubScreen{} }
+
+		// Simulate the connection being established and delivering a log...
+		s.Update(logEntryMsg(proxy.LogEntry{Domain: "a.com"}), w)
+		require.Equal(t, -1, s.disconnectTick, "connected state")
+
+		// ...then the proxy dies mid-session.
+		s.Update(connStatusMsg{connected: false}, w)
+		assert.Equal(t, 0, s.disconnectTick, "disconnect should arm the timer")
+	})
+
+	t.Run("mid-session disconnect transitions after grace", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		stub := &testStubScreen{}
+		s.onBack = func() tui.Screen { return stub }
+
+		s.Update(connStatusMsg{connected: false}, w)
+		for range disconnectGraceTicks - 1 {
+			screen, _ := s.Update(tui.TickMsg{}, w)
+			assert.Equal(t, s, screen, "should not transition before grace elapses")
+		}
+		screen, _ := s.Update(tui.TickMsg{}, w)
+		assert.Equal(t, stub, screen, "should transition after grace")
+	})
+
+	t.Run("reconnect cancels the timer", func(t *testing.T) {
+		s, w := makeTestSetup(5)
+		stub := &testStubScreen{}
+		s.onBack = func() tui.Screen { return stub }
+
+		s.Update(connStatusMsg{connected: false}, w)
+		require.Equal(t, 0, s.disconnectTick, "armed on disconnect")
+
+		s.Update(connStatusMsg{connected: true}, w)
+		assert.Equal(t, -1, s.disconnectTick, "reconnect should disarm the timer")
+
+		// Subsequent ticks must not transition.
+		for range disconnectGraceTicks + 2 {
+			screen, _ := s.Update(tui.TickMsg{}, w)
+			assert.Equal(t, s, screen, "should stay on monitor after reconnect")
 		}
 	})
 }

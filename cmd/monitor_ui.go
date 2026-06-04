@@ -151,6 +151,18 @@ func (s *monitorScreen) startSubscription(ch chan proxy.LogEntry) tea.Cmd {
 	}
 }
 
+// connStatusMsg carries a connection-state change from the control client:
+// connected=false on disconnect/close, connected=true on reconnect.
+type connStatusMsg struct{ connected bool }
+
+// watchConn blocks on the client's connection-event channel and yields the next
+// state change, re-armed after each one. This is how the monitor learns the
+// proxy died mid-session even while the NATS client reconnects silently.
+func (s *monitorScreen) watchConn() tea.Cmd {
+	ch := s.client.ConnEvents()
+	return func() tea.Msg { return connStatusMsg{connected: <-ch} }
+}
+
 func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -216,6 +228,20 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			w.SetError(msg.err)
 		}
 
+	case connStatusMsg:
+		// Mid-session connection loss: arm the disconnect grace timer. On
+		// reconnect, clear it (the ordered consumer resumes on the same channel).
+		if msg.connected {
+			s.disconnectTick = -1
+			w.ClearError()
+		} else if s.onBack != nil && s.disconnectTick < 0 {
+			s.disconnectTick = 0
+			w.SetError(fmt.Errorf("session %s disconnected", s.session.SessionID))
+		}
+		if s.client != nil {
+			return s, s.watchConn()
+		}
+
 	case logEntryMsg:
 		s.disconnectTick = -1
 		w.ClearError()
@@ -247,7 +273,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			s.firstTickSeen = true
 			if s.client != nil {
 				s.logCh = make(chan proxy.LogEntry, logChannelBuffer)
-				return s, s.startSubscription(s.logCh)
+				return s, tea.Batch(s.startSubscription(s.logCh), s.watchConn())
 			}
 		}
 	}

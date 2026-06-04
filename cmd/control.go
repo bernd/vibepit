@@ -14,8 +14,9 @@ import (
 
 // ControlClient talks to a running proxy's embedded NATS control bus over mTLS.
 type ControlClient struct {
-	nc *nats.Conn
-	js jetstream.JetStream
+	nc         *nats.Conn
+	js         jetstream.JetStream
+	connEvents chan bool
 }
 
 func NewControlClient(session *SessionInfo) (*ControlClient, error) {
@@ -26,12 +27,19 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load TLS credentials: %w", err)
 	}
+	c := &ControlClient{connEvents: make(chan bool, 8)}
 	nc, err := nats.Connect(
 		fmt.Sprintf("tls://127.0.0.1:%s", session.ControlPort),
 		nats.Secure(tlsCfg),
 		nats.Timeout(5*time.Second),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(500*time.Millisecond),
+		// Surface connection lifecycle so a long-lived consumer (the monitor)
+		// notices a mid-session proxy death instead of waiting forever on a
+		// silently-reconnecting connection.
+		nats.DisconnectErrHandler(func(*nats.Conn, error) { c.signalConn(false) }),
+		nats.ReconnectHandler(func(*nats.Conn) { c.signalConn(true) }),
+		nats.ClosedHandler(func(*nats.Conn) { c.signalConn(false) }),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connect control bus: %w", err)
@@ -41,10 +49,25 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 		nc.Close()
 		return nil, fmt.Errorf("jetstream: %w", err)
 	}
-	return &ControlClient{nc: nc, js: js}, nil
+	c.nc = nc
+	c.js = js
+	return c, nil
 }
 
 func (c *ControlClient) Close() { c.nc.Close() }
+
+// ConnEvents delivers connection-state changes: false on disconnect/close, true
+// on reconnect. The channel is buffered and lossy (a full buffer drops events)
+// so it never blocks a NATS callback goroutine; consumers only act on the latest
+// state transition.
+func (c *ControlClient) ConnEvents() <-chan bool { return c.connEvents }
+
+func (c *ControlClient) signalConn(connected bool) {
+	select {
+	case c.connEvents <- connected:
+	default:
+	}
+}
 
 func decodeReply(msg *nats.Msg, into any) error {
 	if code := msg.Header.Get("Nats-Service-Error-Code"); code != "" {
