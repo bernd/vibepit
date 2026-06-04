@@ -117,6 +117,28 @@ func TestBus_StatsAndHandlers(t *testing.T) {
 	require.Equal(t, []string{"example.com:443"}, added.Added)
 }
 
+// TestBus_HandlerPanicRecovered proves a panicking handler does not crash the
+// proxy: the caller gets a 500 service error and the bus keeps serving.
+func TestBus_HandlerPanicRecovered(t *testing.T) {
+	bus, creds := newTestBus(t)
+	require.NoError(t, bus.replyHandler("test.panic", func([]byte) (any, error) {
+		panic("boom")
+	}))
+	require.NoError(t, bus.RegisterHandlers())
+
+	// Publish to the panicking subject as the broad internal role.
+	internal := dialAs(t, bus, creds.InternalClientCertPEM(), creds.InternalClientKeyPEM(), creds.CACertPEM())
+	msg, err := internal.Request("test.panic", []byte("{}"), 2*time.Second)
+	require.NoError(t, err, "panic must be recovered and a reply still sent (no crash)")
+	assert.Equal(t, "500", msg.Header.Get("Nats-Service-Error-Code"))
+
+	// The bus is still alive: a normal request from the user role still works.
+	user := dialAs(t, bus, creds.ClientCertPEM(), creds.ClientKeyPEM(), creds.CACertPEM())
+	stats, err := user.Request(SubjectStats, []byte("{}"), 2*time.Second)
+	require.NoError(t, err)
+	assert.Empty(t, stats.Header.Get("Nats-Service-Error-Code"))
+}
+
 // TestNatsUsers_Permissions pins the exact per-role permission sets so an
 // accidental change to natsUsers() (a widened scope, a typo'd subject, a dropped
 // restriction) fails loudly and forces a deliberate, reviewed test update.

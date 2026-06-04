@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -275,6 +276,13 @@ func (b *Bus) RegisterHandlers() error {
 		return fmt.Errorf("stats consumer: %w", err)
 	}
 	if _, err := cons.Consume(func(m jetstream.Msg) {
+		// A panic here would otherwise kill the nats dispatch goroutine (and the
+		// whole proxy). Drop the bad entry and keep consuming.
+		defer func() {
+			if p := recover(); p != nil {
+				fmt.Fprintf(os.Stderr, "proxy: log stats consumer panicked: %v\n%s\n", p, debug.Stack())
+			}
+		}()
 		var e LogEntry
 		if json.Unmarshal(m.Data(), &e) == nil {
 			agg.fold(e)
@@ -283,35 +291,51 @@ func (b *Bus) RegisterHandlers() error {
 		return fmt.Errorf("stats consume: %w", err)
 	}
 
-	reply := func(subj string, fn func([]byte) (any, error)) error {
-		_, err := b.nc.Subscribe(subj, func(msg *nats.Msg) {
-			out, herr := fn(msg.Data)
-			if herr != nil {
-				resp := nats.NewMsg(msg.Reply)
-				resp.Header.Set("Nats-Service-Error-Code", "400")
-				resp.Header.Set("Nats-Service-Error", herr.Error())
-				_ = msg.RespondMsg(resp)
-				return
-			}
-			data, _ := json.Marshal(out)
-			_ = msg.Respond(data)
-		})
+	if err := b.replyHandler(SubjectStats, func([]byte) (any, error) { return agg.snapshot(), nil }); err != nil {
 		return err
 	}
-
-	if err := reply(SubjectStats, func([]byte) (any, error) { return agg.snapshot(), nil }); err != nil {
+	if err := b.replyHandler(SubjectConfig, func([]byte) (any, error) { return b.opts.Config, nil }); err != nil {
 		return err
 	}
-	if err := reply(SubjectConfig, func([]byte) (any, error) { return b.opts.Config, nil }); err != nil {
+	if err := b.replyHandler(SubjectAllowHTTP, b.handleAllow(b.opts.HTTPAllowlist.Add)); err != nil {
 		return err
 	}
-	if err := reply(SubjectAllowHTTP, b.handleAllow(b.opts.HTTPAllowlist.Add)); err != nil {
-		return err
-	}
-	if err := reply(SubjectAllowDNS, b.handleAllow(b.opts.DNSAllowlist.Add)); err != nil {
+	if err := b.replyHandler(SubjectAllowDNS, b.handleAllow(b.opts.DNSAllowlist.Add)); err != nil {
 		return err
 	}
 	return b.nc.Flush()
+}
+
+// replyHandler registers a panic-safe request/reply handler on the internal
+// connection. A handler panic (or a marshaling failure) is logged and answered
+// with a 500 service error instead of propagating out of the nats dispatch
+// goroutine and terminating the proxy — the same guard the old HTTP control API
+// had in ServeHTTP.
+func (b *Bus) replyHandler(subj string, fn func([]byte) (any, error)) error {
+	_, err := b.nc.Subscribe(subj, func(msg *nats.Msg) {
+		defer func() {
+			if p := recover(); p != nil {
+				fmt.Fprintf(os.Stderr, "proxy: control bus handler %q panicked: %v\n%s\n", subj, p, debug.Stack())
+				replyServiceError(msg, "500", "internal handler error")
+			}
+		}()
+		out, herr := fn(msg.Data)
+		if herr != nil {
+			replyServiceError(msg, "400", herr.Error())
+			return
+		}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	return err
+}
+
+// replyServiceError answers a request with a NATS service-error header and no body.
+func replyServiceError(msg *nats.Msg, code, text string) {
+	resp := nats.NewMsg(msg.Reply)
+	resp.Header.Set("Nats-Service-Error-Code", code)
+	resp.Header.Set("Nats-Service-Error", text)
+	_ = msg.RespondMsg(resp)
 }
 
 func (b *Bus) handleAllow(add func([]string) error) func([]byte) (any, error) {
