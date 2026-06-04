@@ -40,6 +40,7 @@ func AllowHTTPCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
+			defer client.Close()
 
 			added, err := client.AllowHTTP(entries)
 			if err != nil {
@@ -95,6 +96,7 @@ func AllowDNSCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
+			defer client.Close()
 
 			added, err := client.AllowDNS(entries)
 			if err != nil {
