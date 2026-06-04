@@ -200,12 +200,20 @@ func (p busPublisher) PublishLog(e LogEntry) {
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}
+	// This runs synchronously on the proxy/DNS request path, so it must never
+	// block. PublishAsync stalls (up to ~200ms) and then drops with
+	// ErrTooManyStalledMsgs once the pending-ack window is full — e.g. if the
+	// internal ack path stalls or under a heavy burst. Pre-check the window and
+	// drop immediately instead of adding that latency to live proxied traffic.
+	// Logs/stats are best-effort observability, not control: a dropped entry
+	// under sustained overload is preferable to slowing the filter decision.
+	if p.js.PublishAsyncPending() >= publishAsyncPending {
+		return
+	}
 	data, err := json.Marshal(e)
 	if err != nil {
 		return
 	}
-	// Async with a bounded pending window: back-pressures by blocking, never
-	// drops. A connection-fatal error surfaces via the connection error handler.
 	_, _ = p.js.PublishAsync(SubjectLogs, data)
 }
 

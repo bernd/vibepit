@@ -251,20 +251,26 @@ Subject-specific payloads:
 
 ### Producer publish semantics
 
-Producers (`HTTPProxy`, `DNSServer`) use `js.PublishAsync` to avoid blocking the
-proxy/DNS hot path on a publish round trip. A bounded pending-ack window
-(`jetstream.WithPublishAsyncMaxPending(N)`) applies back-pressure: when the
-window is full the publish **blocks** rather than drops, preserving the stream's
-authoritative/lossless guarantee. (This is the one place hot-path latency trades
-off against losslessness; the window size is the tunable. Synchronous
-`js.Publish` remains an option since the stream is local (memory storage in the
-same process), but async keeps the hot path clear under burst.)
+Producers (`HTTPProxy`, `DNSServer`) call `PublishLog` synchronously on the
+proxy/DNS request path, so it **must never block**. `js.PublishAsync` does not
+guarantee that: once the pending-ack window
+(`jetstream.WithPublishAsyncMaxPending(N)`) is full it *stalls* the caller (up to
+a ~200ms stall-wait) and then **drops** the entry with `ErrTooManyStalledMsgs`
+(`nats.go/jetstream/publish.go`). That would add latency to live proxied traffic
+and silently lose entries exactly under load.
 
-> **Verified.** A 20,000-message burst through a window of 64 produced 0
-> per-call errors and 20,000/20,000 messages in the stream — `PublishAsync`
-> back-pressures by blocking the caller (longest call ~0.6ms), never dropping.
-> Note the flip side: a sustained-overload publisher goroutine (an HTTP/DNS
-> handler) will block here, which is the intended back-pressure.
+Therefore `PublishLog` pre-checks `PublishAsyncPending()` and, when the window is
+full, **drops immediately** rather than entering the stall — best-effort
+observability that never slows the filter decision. Logs and stats are not
+control data; an undercount under sustained overload is the accepted trade-off
+for keeping the request path fast. (If accurate stats under heavy bursts later
+matter, decouple via a buffered channel drained by a dedicated publisher
+goroutine — moves both the stall and the drop fully off the request path.)
+
+> **Earlier prototype caveat:** a 20,000-message burst through a window of 64
+> showed 0 drops only because the in-process memory stream acked fast enough that
+> the window never stayed full past the stall-wait. It does **not** prove
+> losslessness when acks genuinely stall — hence the pre-check-and-drop above.
 
 ### Log Entry ID
 
