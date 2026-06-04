@@ -154,7 +154,7 @@ func TestControlClient_SubscribeLogs(t *testing.T) {
 	client := newCmdTestClient(t, bus, creds)
 
 	ch := make(chan proxy.LogEntry, 8)
-	stop, err := client.SubscribeLogs(ch)
+	stop, _, err := client.SubscribeLogs(ch)
 	require.NoError(t, err)
 	defer stop()
 
@@ -163,6 +163,28 @@ func TestControlClient_SubscribeLogs(t *testing.T) {
 		assert.Equal(t, "sub.com", e.Domain)
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not receive log entry within 3s")
+	}
+}
+
+// TestControlClient_SubscribeLogs_StopClosesDone verifies stop closes the done
+// channel (so waiters unblock at teardown) and is idempotent (no double-close
+// panic).
+func TestControlClient_SubscribeLogs_StopClosesDone(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+	client := newCmdTestClient(t, bus, creds)
+
+	ch := make(chan proxy.LogEntry, 4)
+	stop, done, err := client.SubscribeLogs(ch)
+	require.NoError(t, err)
+
+	stop()
+	stop() // idempotent — must not panic
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stop should close the done channel")
 	}
 }
 
@@ -181,7 +203,7 @@ func TestControlClient_SubscribeLogs_BoundsInitialHistory(t *testing.T) {
 
 	client := newCmdTestClient(t, bus, creds)
 	ch := make(chan proxy.LogEntry, 256)
-	stop, err := client.SubscribeLogs(ch)
+	stop, _, err := client.SubscribeLogs(ch)
 	require.NoError(t, err)
 	defer stop()
 

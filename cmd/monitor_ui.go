@@ -44,6 +44,7 @@ type monitorScreen struct {
 	onBack         func() tui.Screen
 	cursor         tui.Cursor
 	logCh          chan proxy.LogEntry
+	logsDone       <-chan struct{}
 	stopLogs       func()
 	items          []logItem
 	newCount       int
@@ -74,13 +75,25 @@ type logEntryMsg proxy.LogEntry
 type subscribeErrMsg struct{ err error }
 
 // subscriptionStartedMsg confirms the log subscription is live and carries the
-// stop function used to tear it down. It is delivered to the main Update
-// goroutine so the stop func is never written from a cmd goroutine.
-type subscriptionStartedMsg struct{ stop func() }
+// stop function and done channel used to tear it down. It is delivered to the
+// main Update goroutine so these are never written from a cmd goroutine.
+type subscriptionStartedMsg struct {
+	stop func()
+	done <-chan struct{}
+}
 
-// waitForLog blocks on the subscription channel and yields the next entry.
-func waitForLog(ch <-chan proxy.LogEntry) tea.Cmd {
-	return func() tea.Msg { return logEntryMsg(<-ch) }
+// waitForLog blocks on the subscription channel and yields the next entry. It
+// also selects on done so the goroutine exits at teardown (returning a nil
+// message, which Bubble Tea ignores) instead of leaking blocked on the channel.
+func waitForLog(ch <-chan proxy.LogEntry, done <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case e := <-ch:
+			return logEntryMsg(e)
+		case <-done:
+			return nil
+		}
+	}
 }
 
 func allowValueForEntry(entry proxy.LogEntry) string {
@@ -143,11 +156,11 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 // never mutated.
 func (s *monitorScreen) startSubscription(ch chan proxy.LogEntry) tea.Cmd {
 	return func() tea.Msg {
-		stop, err := s.client.SubscribeLogs(ch)
+		stop, done, err := s.client.SubscribeLogs(ch)
 		if err != nil {
 			return subscribeErrMsg{err: err}
 		}
-		return subscriptionStartedMsg{stop: stop}
+		return subscriptionStartedMsg{stop: stop, done: done}
 	}
 }
 
@@ -216,7 +229,8 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 	case subscriptionStartedMsg:
 		s.stopLogs = msg.stop
-		return s, waitForLog(s.logCh)
+		s.logsDone = msg.done
+		return s, waitForLog(s.logCh, s.logsDone)
 
 	case subscribeErrMsg:
 		if s.onBack != nil {
@@ -257,7 +271,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			s.newCount = 0
 			s.cursor.EnsureVisible()
 		}
-		return s, waitForLog(s.logCh)
+		return s, waitForLog(s.logCh, s.logsDone)
 
 	case tui.TickMsg:
 		if s.onBack != nil && s.disconnectTick >= 0 {

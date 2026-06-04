@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bernd/vibepit/config"
@@ -129,12 +130,15 @@ func (c *ControlClient) postAllow(subj string, entries []string) ([]string, erro
 const initialLogHistory uint64 = 25
 
 // SubscribeLogs delivers a bounded tail of retained history then live entries in
-// stream order. The returned function stops the consumer.
-func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), error) {
+// stream order. It returns a stop function and a done channel that is closed
+// when stop is called: callers blocked on ch should also select on done so they
+// unblock at teardown (the channel is never closed, so it is always safe to
+// send to / receive from). stop is idempotent.
+func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), <-chan struct{}, error) {
 	ctx := context.Background()
 	stream, err := c.js.Stream(ctx, proxy.StreamLogs)
 	if err != nil {
-		return nil, fmt.Errorf("stream: %w", err)
+		return nil, nil, fmt.Errorf("stream: %w", err)
 	}
 	// Start near the tail so a long-running session doesn't replay thousands of
 	// historical entries on open. Fall back to all if the stream is short or its
@@ -146,16 +150,28 @@ func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), error) 
 	}
 	cons, err := stream.OrderedConsumer(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("ordered consumer: %w", err)
+		return nil, nil, fmt.Errorf("ordered consumer: %w", err)
 	}
+	done := make(chan struct{})
 	cc, err := cons.Consume(func(m jetstream.Msg) {
 		var e proxy.LogEntry
-		if json.Unmarshal(m.Data(), &e) == nil {
-			ch <- e
+		if json.Unmarshal(m.Data(), &e) != nil {
+			return
+		}
+		// Never block the consumer callback past teardown: selecting on done
+		// means a full buffer can't wedge the callback (and so cc.Stop() can't
+		// hang waiting on it).
+		select {
+		case ch <- e:
+		case <-done:
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("consume: %w", err)
+		return nil, nil, fmt.Errorf("consume: %w", err)
 	}
-	return cc.Stop, nil
+	stop := sync.OnceFunc(func() {
+		close(done) // unblock the callback and any waiter selecting on done
+		cc.Stop()
+	})
+	return stop, done, nil
 }

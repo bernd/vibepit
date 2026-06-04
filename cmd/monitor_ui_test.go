@@ -48,6 +48,24 @@ func footerKeyDescs(keys []tui.FooterKey) []string {
 	return descs
 }
 
+func TestWaitForLog_UnblocksOnDone(t *testing.T) {
+	ch := make(chan proxy.LogEntry) // unbuffered, never written
+	done := make(chan struct{})
+	cmd := waitForLog(ch, done)
+
+	got := make(chan tea.Msg, 1)
+	go func() { got <- cmd() }()
+
+	// No entry will ever arrive; closing done must release the goroutine.
+	close(done)
+	select {
+	case m := <-got:
+		assert.Nil(t, m, "waitForLog should yield nil and exit when done is closed")
+	case <-time.After(time.Second):
+		t.Fatal("waitForLog leaked: it did not unblock when done was closed")
+	}
+}
+
 func TestMonitorScreen_WindowSizeMsg(t *testing.T) {
 	s, w := makeTestSetup(0)
 
@@ -559,7 +577,7 @@ func TestMonitor_LiveDelivery(t *testing.T) {
 	client := newCmdTestClient(t, bus, creds)
 
 	ch := make(chan proxy.LogEntry, 8)
-	stop, err := client.SubscribeLogs(ch)
+	stop, _, err := client.SubscribeLogs(ch)
 	require.NoError(t, err)
 	defer stop()
 
