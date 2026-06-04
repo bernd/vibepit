@@ -27,6 +27,9 @@ const (
 
 	natsReadyTimeout    = 5 * time.Second
 	publishAsyncPending = 256
+	// shutdownFlushTimeout bounds how long Shutdown waits for outstanding async
+	// publish acks before tearing the bus down.
+	shutdownFlushTimeout = 2 * time.Second
 )
 
 // BusOptions configures an embedded control-plane bus.
@@ -160,9 +163,17 @@ func (b *Bus) ClientURL() string { return b.clientURL }
 // Addr returns the listener host:port (used by tests / port discovery).
 func (b *Bus) Addr() string { return b.ns.Addr().String() }
 
-// Shutdown drains the internal client, stops the embedded server, and removes
-// the JetStream store directory.
+// Shutdown flushes pending publishes, drains the internal client, stops the
+// embedded server, and removes the JetStream store directory.
 func (b *Bus) Shutdown() {
+	if b.js != nil {
+		// Best-effort: wait for outstanding async publish acks so tail log
+		// entries land in the stream (and reach live consumers) before teardown.
+		// nc.Drain() flushes protocol bytes but does not wait for JetStream acks,
+		// and the memory stream is destroyed on ns.Shutdown(). Bounded so a
+		// broken server can't wedge shutdown.
+		_ = b.FlushPublishes(shutdownFlushTimeout)
+	}
 	if b.nc != nil {
 		_ = b.nc.Drain()
 	}
