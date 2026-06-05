@@ -204,7 +204,7 @@ func portOrEphemeral(p int) int {
 
 // LogPublisher is the dependency producers use to emit log entries onto the bus.
 type LogPublisher interface {
-	PublishLog(LogEntry)
+	PublishLog(entry LogEntry)
 }
 
 type busPublisher struct{ js jetstream.JetStream }

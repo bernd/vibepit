@@ -90,7 +90,10 @@ func decodeReply(msg *nats.Msg, into any) error {
 	if into == nil {
 		return nil
 	}
-	return json.Unmarshal(msg.Data, into)
+	if err := json.Unmarshal(msg.Data, into); err != nil {
+		return fmt.Errorf("decoding reply: %w", err)
+	}
+	return nil
 }
 
 func (c *ControlClient) request(subj string, body any, into any) error {

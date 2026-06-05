@@ -151,7 +151,7 @@ func GenerateMTLSCredentials(lifetime time.Duration) (*MTLSCredentials, error) {
 }
 
 // signClientCert mints an ed25519 client cert (EKU clientAuth) signed by the CA.
-func signClientCert(cn string, ca *x509.Certificate, caPriv ed25519.PrivateKey, now, notAfter time.Time) (der []byte, key ed25519.PrivateKey, err error) {
+func signClientCert(cn string, ca *x509.Certificate, caPriv ed25519.PrivateKey, now, notAfter time.Time) ([]byte, ed25519.PrivateKey, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate %s key: %w", cn, err)
@@ -168,7 +168,7 @@ func signClientCert(cn string, ca *x509.Certificate, caPriv ed25519.PrivateKey, 
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	der, err = x509.CreateCertificate(rand.Reader, tmpl, ca, pub, caPriv)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, pub, caPriv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create %s cert: %w", cn, err)
 	}
