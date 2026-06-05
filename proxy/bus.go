@@ -93,15 +93,17 @@ func NewBus(opts BusOptions) (*Bus, error) {
 		// the bridge IP, not loopback. The auth boundary (TLSMap +
 		// RequireAndVerifyClientCert) gates every connection regardless of bind,
 		// and the host port is published only to 127.0.0.1 on the host side.
-		Host:      "0.0.0.0",
-		Port:      portOrEphemeral(opts.Port),
-		JetStream: true,
-		StoreDir:  storeDir,
-		NoSigs:    true,
-		NoLog:     true,
-		TLSConfig: opts.ServerTLS,
-		TLSMap:    true,
-		Users:     natsUsers(),
+		Host:              "0.0.0.0",
+		Port:              portOrEphemeral(opts.Port),
+		JetStream:         true,
+		StoreDir:          storeDir,
+		NoSigs:            true,
+		NoLog:             true,
+		TLSConfig:         opts.ServerTLS,
+		TLSMap:            true,
+		TLSHandshakeFirst: true,
+		AllowNonTLS:       false,
+		Users:             natsUsers(),
 	})
 	if err != nil {
 		os.RemoveAll(storeDir) //nolint:errcheck
@@ -132,7 +134,7 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	// using the bound port even though the listener is on 0.0.0.0.
 	clientURL := fmt.Sprintf("tls://127.0.0.1:%d", ns.Addr().(*net.TCPAddr).Port)
 	nc, err = nats.Connect(clientURL,
-		nats.Secure(opts.InternalTLS), nats.Timeout(natsReadyTimeout))
+		nats.Secure(opts.InternalTLS), nats.TLSHandshakeFirst(), nats.Timeout(natsReadyTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("internal client connect: %w", err)
 	}

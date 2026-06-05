@@ -95,6 +95,7 @@ func TestProxyServerIntegration(t *testing.T) {
 	nc, err := nats.Connect(
 		fmt.Sprintf("tls://127.0.0.1:%d", controlPort),
 		nats.Secure(clientTLS),
+		nats.TLSHandshakeFirst(),
 		nats.Timeout(5*time.Second),
 	)
 	require.NoError(t, err, "connect control bus")

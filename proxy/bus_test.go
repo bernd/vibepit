@@ -44,7 +44,7 @@ func dialAs(t *testing.T, bus *Bus, certPEM, keyPEM, caPEM []byte) *nats.Conn {
 	t.Helper()
 	tlsCfg, err := clientTLSFromPEM(certPEM, keyPEM, caPEM)
 	require.NoError(t, err)
-	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.Timeout(5*time.Second))
+	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(), nats.Timeout(5*time.Second))
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
 	return nc
@@ -56,7 +56,7 @@ func TestBus_UserMappingAndPermissions(t *testing.T) {
 	permCh := make(chan struct{}, 1)
 	tlsCfg, err := clientTLSFromPEM(creds.SandboxClientCertPEM(), creds.SandboxClientKeyPEM(), creds.CACertPEM())
 	require.NoError(t, err)
-	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg),
+	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, e error) {
 			if e != nil {
 				select {
@@ -229,7 +229,7 @@ func TestBus_UserRoleDeniedForeignSubject(t *testing.T) {
 	permCh := make(chan struct{}, 1)
 	tlsCfg, err := clientTLSFromPEM(creds.ClientCertPEM(), creds.ClientKeyPEM(), creds.CACertPEM())
 	require.NoError(t, err)
-	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg),
+	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, e error) {
 			if e != nil {
 				select {

@@ -34,6 +34,7 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	nc, err := nats.Connect(
 		fmt.Sprintf("tls://127.0.0.1:%s", session.ControlPort),
 		nats.Secure(tlsCfg),
+		nats.TLSHandshakeFirst(),
 		nats.Timeout(5*time.Second),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(500*time.Millisecond),
