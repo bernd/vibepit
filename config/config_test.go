@@ -1,11 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/bernd/vibepit/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -435,4 +437,49 @@ allow-dns:
 		require.NoError(t, err)
 		assert.Equal(t, "9.9.9.9:53", merged.UpstreamDNS)
 	})
+}
+
+// TestMergedConfigRoundTripsToProxyConfig guards the full path every proxy
+// setting actually travels: bootstrap marshals a MergedConfig to JSON and the
+// proxy unmarshals it into a ProxyConfig. The two structs are maintained by
+// hand, so any JSON-key drift silently drops a setting (as upstream-dns did).
+// This test sets every field that is meant to cross the boundary to a sentinel
+// and asserts it survives.
+//
+// Two fields intentionally do NOT cross and are excluded by design:
+//   - MergedConfig.ExtraHosts: applied via the container config, not proxy JSON.
+//   - ProxyConfig.DNSPort: proxy-only, defaulted internally.
+func TestMergedConfigRoundTripsToProxyConfig(t *testing.T) {
+	merged := MergedConfig{
+		AllowHTTP:      []string{"github.com:443"},
+		AllowDNS:       []string{"example.com"},
+		BlockCIDR:      []string{"10.0.0.0/8"},
+		AllowCIDR:      []string{"192.168.0.0/16"},
+		UpstreamDNS:    "10.0.0.53:53",
+		AllowHostPorts: []int{8080},
+		ProxyIP:        "172.20.0.2",
+		HostGateway:    "host-gateway",
+		ProxyPort:      54321,
+		ControlAPIPort: 54322,
+		SSHForwardAddr: "172.20.0.3:2222",
+	}
+
+	data, err := json.Marshal(merged)
+	require.NoError(t, err)
+
+	var pc proxy.ProxyConfig
+	require.NoError(t, json.Unmarshal(data, &pc))
+
+	assert.Equal(t, merged.AllowHTTP, pc.AllowHTTP, "allow-http")
+	assert.Equal(t, merged.AllowDNS, pc.AllowDNS, "allow-dns")
+	assert.Equal(t, merged.BlockCIDR, pc.BlockCIDR, "block-cidr")
+	assert.Equal(t, merged.AllowCIDR, pc.AllowCIDR, "allow-cidr")
+	assert.Equal(t, merged.UpstreamDNS, pc.UpstreamDNS,
+		"upstream-dns must survive the round-trip, or the proxy falls back to its default")
+	assert.Equal(t, merged.AllowHostPorts, pc.AllowHostPorts, "allow-host-ports")
+	assert.Equal(t, merged.ProxyIP, pc.ProxyIP, "proxy-ip")
+	assert.Equal(t, merged.HostGateway, pc.HostGateway, "host-gateway")
+	assert.Equal(t, merged.ProxyPort, pc.ProxyPort, "proxy-port")
+	assert.Equal(t, merged.ControlAPIPort, pc.ControlAPIPort, "control-api-port")
+	assert.Equal(t, merged.SSHForwardAddr, pc.SSHForwardAddr, "ssh-forward-addr")
 }
