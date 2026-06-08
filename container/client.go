@@ -775,7 +775,6 @@ type SandboxContainerConfig struct {
 	DaemonHostPubPath   string   // host path to SSH host pub key
 	DaemonAuthorizedKey string   // SSH public key for client auth (set as VIBEPIT_SSH_PUBKEY env)
 	DaemonEntrypoint    []string // entrypoint override for daemon mode
-	ExtraHosts          []string
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -862,9 +861,6 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		CapDrop:        []string{"ALL"},
 		SecurityOpt:    []string{"no-new-privileges"},
 		Tmpfs:          map[string]string{"/tmp": "exec"},
-	}
-	if len(cfg.ExtraHosts) > 0 {
-		hostConfig.ExtraHosts = cfg.ExtraHosts
 	}
 
 	var networkingConfig *network.NetworkingConfig
