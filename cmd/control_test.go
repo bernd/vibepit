@@ -14,6 +14,12 @@ import (
 
 // newCmdTestBus starts an embedded bus over mTLS and registers its handlers.
 func newCmdTestBus(t *testing.T) (*proxy.Bus, *proxy.MTLSCredentials) {
+	return newCmdTestBusWithConfig(t, proxy.ProxyConfig{})
+}
+
+// newCmdTestBusWithConfig is like newCmdTestBus but serves the given config on
+// the config subject so tests can assert it round-trips to the client.
+func newCmdTestBusWithConfig(t *testing.T, cfg proxy.ProxyConfig) (*proxy.Bus, *proxy.MTLSCredentials) {
 	t.Helper()
 	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
 	require.NoError(t, err)
@@ -30,7 +36,7 @@ func newCmdTestBus(t *testing.T) (*proxy.Bus, *proxy.MTLSCredentials) {
 	require.NoError(t, err)
 	bus, err := proxy.NewBus(proxy.BusOptions{
 		ServerTLS: serverTLS, InternalTLS: internalTLS,
-		HTTPAllowlist: al, DNSAllowlist: dal, Config: proxy.ProxyConfig{},
+		HTTPAllowlist: al, DNSAllowlist: dal, Config: cfg,
 	})
 	require.NoError(t, err)
 	t.Cleanup(bus.Shutdown)
@@ -135,13 +141,22 @@ func TestControlClient_Stats(t *testing.T) {
 }
 
 func TestControlClient_Config(t *testing.T) {
-	bus, creds := newCmdTestBus(t)
+	bus, creds := newCmdTestBusWithConfig(t, proxy.ProxyConfig{
+		AllowHTTP: []string{"a.com:443", "b.com:443"},
+		AllowDNS:  []string{"c.com"},
+		BlockCIDR: []string{"10.0.0.0/8"},
+		AllowCIDR: []string{"100.64.0.0/10"},
+	})
 	require.NoError(t, bus.RegisterHandlers())
 	client := newCmdTestClient(t, bus, creds)
 
 	cfg, err := client.Config()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+	assert.Equal(t, []string{"a.com:443", "b.com:443"}, cfg.AllowHTTP)
+	assert.Equal(t, []string{"c.com"}, cfg.AllowDNS)
+	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.BlockCIDR)
+	assert.Equal(t, []string{"100.64.0.0/10"}, cfg.AllowCIDR)
 }
 
 func TestControlClient_SubscribeLogs(t *testing.T) {

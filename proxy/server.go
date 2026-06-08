@@ -26,6 +26,7 @@ type ProxyConfig struct {
 	AllowHTTP      []string `json:"allow-http"`
 	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
+	AllowCIDR      []string `json:"allow-cidr"`
 	Upstream       string   `json:"upstream"`
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip"`
@@ -68,7 +69,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("allow-dns: %w", err)
 	}
-	cidr := NewCIDRBlocker(s.config.BlockCIDR)
+	cidr := NewCIDRBlocker(s.config.BlockCIDR, s.config.AllowCIDR)
 
 	serverTLS, err := LoadServerTLSConfigFromEnv()
 	if err != nil {
