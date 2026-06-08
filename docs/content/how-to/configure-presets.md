@@ -130,6 +130,9 @@ allow-dns:
 
 block-cidr:
   - 10.0.0.0/8
+
+allow-cidr:
+  - 100.64.0.0/10
 ```
 
 ## Where each setting comes from
@@ -142,7 +145,8 @@ uniformly — each key follows its own rules:
 | `presets` | Project config. Expanded into HTTP allow entries after loading. |
 | `allow-http` | Global config + project config + CLI flags, then preset entries appended after explicit entries. |
 | `allow-dns` | Global config + project config. No CLI or preset layer. |
-| `block-cidr` | Global config only. |
+| `block-cidr` | Global config only. Adds custom ranges to the default IP blocklist. |
+| `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges — see the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
 | `allow-host-ports` | Project config only. |
 
 ## Further reading

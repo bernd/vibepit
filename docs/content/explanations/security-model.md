@@ -45,7 +45,9 @@ Even if a domain resolves and passes the allowlist, the proxy blocks connections
 | `fe80::/10` | IPv6 link-local addresses |
 | `::1/128` | IPv6 loopback |
 
-These blocks apply unconditionally, regardless of allowlist rules. They prevent an allowlisted domain from being used to reach internal services via DNS rebinding or other IP-level attacks. The `CIDRBlocker` also accepts additional custom ranges if your environment requires broader restrictions.
+These blocks apply by default regardless of allowlist rules, preventing an allowlisted domain from being used to reach internal services via DNS rebinding or other IP-level attacks. The `CIDRBlocker` accepts additional custom ranges via `block-cidr` if your environment requires broader restrictions.
+
+If you deliberately need to reach an otherwise-blocked range, `allow-cidr` punches an explicit exception: any IP within an `allow-cidr` range is permitted even if it falls inside a blocked range.
 
 ## DNS filtering
 
