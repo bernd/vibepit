@@ -613,6 +613,7 @@ type ProxyContainerConfig struct {
 	ProjectDir     string
 	NoRestart      bool // when true, omits the restart policy so the proxy stops with the session
 	SSHPort        int  // when > 0, publish this port for SSH forwarding to sandbox
+	ExtraHosts     []string
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
@@ -666,8 +667,12 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
 			cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
 		},
-		ExtraHosts:   []string{"host-gateway:host-gateway"},
 		PortBindings: portBindings,
+	}
+	if len(cfg.ExtraHosts) > 0 {
+		hostConfig.ExtraHosts = append([]string{"host-gateway:host-gateway"}, cfg.ExtraHosts...)
+	} else {
+		hostConfig.ExtraHosts = []string{"host-gateway:host-gateway"}
 	}
 	if !cfg.NoRestart {
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
@@ -770,6 +775,7 @@ type SandboxContainerConfig struct {
 	DaemonHostPubPath   string   // host path to SSH host pub key
 	DaemonAuthorizedKey string   // SSH public key for client auth (set as VIBEPIT_SSH_PUBKEY env)
 	DaemonEntrypoint    []string // entrypoint override for daemon mode
+	ExtraHosts          []string
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -856,6 +862,9 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		CapDrop:        []string{"ALL"},
 		SecurityOpt:    []string{"no-new-privileges"},
 		Tmpfs:          map[string]string{"/tmp": "exec"},
+	}
+	if len(cfg.ExtraHosts) > 0 {
+		hostConfig.ExtraHosts = cfg.ExtraHosts
 	}
 
 	var networkingConfig *network.NetworkingConfig

@@ -337,6 +337,7 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		TLSCertPEM:     string(creds.ServerCertPEM()),
 		CACertPEM:      string(creds.CACertPEM()),
 		ProjectDir:     projectRoot,
+		ExtraHosts:     merged.ExtraHosts,
 	}
 	if opts.Daemon {
 		proxyCfg.NoRestart = true
@@ -384,6 +385,7 @@ func (infra *sessionInfra) baseSandboxConfig(projectRoot string, u *userInfo) ct
 		UID:                 infra.UID,
 		User:                u.Username,
 		SessionID:           infra.SessionID,
+		ExtraHosts:          infra.Merged.ExtraHosts,
 	}
 }
 
