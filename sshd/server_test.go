@@ -439,3 +439,95 @@ func TestSessionCountViaSSH(t *testing.T) {
 	assert.Equal(t, uint32(0), reply.ExecCount)
 	assert.Equal(t, uint32(0), reply.PTYConns)
 }
+
+// A genuine shell exit must report a clean status (so the connecting client
+// may offer to shut down the sandbox), while any forced detach must report a
+// non-zero status so a client that merely lost its connection — e.g. across a
+// laptop suspend/resume that tripped the keepalive — treats the result as a
+// dropped connection and does not prompt to shut down.
+func TestDetachExitCode(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason session.DetachReason
+		want   int
+	}{
+		{"genuine shell exit", session.DetachNone, 0},
+		{"keepalive timeout", session.DetachKeepalive, DisconnectExitCode},
+		{"lost connection", session.DetachDisconnect, DisconnectExitCode},
+		{"slow consumer", session.DetachSlowConsumer, DisconnectExitCode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, detachExitCode(tt.reason))
+		})
+	}
+}
+
+// TestCleanExitViaSSH drives a real PTY session through the handler: the shell
+// exits on its own, so the client's Wait must return a clean (nil) status and
+// the session must not record the teardown as a disconnect.
+func TestCleanExitViaSSH(t *testing.T) {
+	hostPriv, _, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
+	require.NoError(t, err)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close() //nolint:errcheck
+
+	mgr := session.NewManager(50)
+	srv, err := NewServer(Config{
+		HostKeyPEM:    hostPriv,
+		AuthorizedKey: clientPub,
+		Sessions:      mgr,
+	})
+	require.NoError(t, err)
+	go srv.Serve(listener) //nolint:errcheck
+	defer srv.Close()      //nolint:errcheck
+
+	signer, err := gossh.ParsePrivateKey(clientPriv)
+	require.NoError(t, err)
+
+	client, err := gossh.Dial("tcp", listener.Addr().String(), &gossh.ClientConfig{
+		User:            "code",
+		Auth:            []gossh.AuthMethod{gossh.PublicKeys(signer)},
+		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
+	})
+	require.NoError(t, err)
+	defer client.Close() //nolint:errcheck
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+
+	stdin, err := sess.StdinPipe()
+	require.NoError(t, err)
+	sess.Stdout = io.Discard
+	sess.Stderr = io.Discard
+
+	require.NoError(t, sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{}))
+	require.NoError(t, sess.Shell())
+
+	// Tell the login shell to exit. A genuine exit drives the DetachNone path.
+	_, err = stdin.Write([]byte("exit\n"))
+	require.NoError(t, err)
+
+	// A clean shell exit reports status 0, so Wait returns nil — this is the
+	// only path on which the client offers to shut down the sandbox.
+	assert.NoError(t, sess.Wait())
+
+	// The teardown must not be mislabeled as a disconnect.
+	require.Eventually(t, func() bool {
+		for _, info := range mgr.List() {
+			if info.Status == session.Exited {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+
+	for _, info := range mgr.List() {
+		assert.Equalf(t, session.DetachNone, info.LastDetachReason,
+			"clean shell exit must not record a detach reason (session %s)", info.ID)
+	}
+}

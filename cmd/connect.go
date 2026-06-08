@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -186,6 +187,14 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 	restoreTerminal()
 
 	if waitErr != nil {
+		// A forced detach (keepalive timeout across a suspend/resume, lost
+		// connection) surfaces as the dedicated disconnect exit code. The
+		// shell itself is still running, so explain how to get back instead
+		// of leaking a bare "Process exited with status 255".
+		if isSandboxDisconnect(waitErr) {
+			fmt.Fprintln(os.Stderr, "\nDisconnected from the sandbox. Your session is still running — reconnect with 'vibepit connect'.")
+			return nil
+		}
 		return waitErr
 	}
 
@@ -256,6 +265,20 @@ func handleLastExit(p handleLastExitParams) error {
 		return p.shutdownFn()
 	}
 	return nil
+}
+
+// isSandboxDisconnect reports whether a session.Wait error is the server's
+// signal that the client was force-detached (keepalive/lost connection) rather
+// than the shell exiting. The server reports DisconnectExitCode in that case;
+// a genuine shell exit always reports 0, so the code is unambiguous. Matching
+// on the ExitStatus interface (rather than *ssh.ExitError directly) keeps the
+// check testable without constructing an unexported ssh error.
+func isSandboxDisconnect(err error) bool {
+	var exitErr interface{ ExitStatus() int }
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitStatus() == sshd.DisconnectExitCode
+	}
+	return false
 }
 
 // channelStdinReader adapts a byte channel as an io.Reader. Used to

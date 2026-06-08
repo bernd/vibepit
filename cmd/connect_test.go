@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,36 @@ import (
 	"github.com/stretchr/testify/require"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+// exitStatusErr mimics *ssh.ExitError, whose fields are unexported and so
+// cannot be constructed directly. isSandboxDisconnect matches on the
+// ExitStatus() method, which the real ssh error also satisfies.
+type exitStatusErr struct{ code int }
+
+func (e exitStatusErr) Error() string   { return fmt.Sprintf("exited with %d", e.code) }
+func (e exitStatusErr) ExitStatus() int { return e.code }
+
+func TestIsSandboxDisconnect(t *testing.T) {
+	t.Run("disconnect exit code matches", func(t *testing.T) {
+		assert.True(t, isSandboxDisconnect(exitStatusErr{sshd.DisconnectExitCode}))
+	})
+	t.Run("wrapped disconnect exit code matches", func(t *testing.T) {
+		err := fmt.Errorf("ssh: %w", exitStatusErr{sshd.DisconnectExitCode})
+		assert.True(t, isSandboxDisconnect(err))
+	})
+	t.Run("clean exit does not match", func(t *testing.T) {
+		assert.False(t, isSandboxDisconnect(exitStatusErr{0}))
+	})
+	t.Run("other non-zero exit does not match", func(t *testing.T) {
+		assert.False(t, isSandboxDisconnect(exitStatusErr{1}))
+	})
+	t.Run("non-exit error does not match", func(t *testing.T) {
+		assert.False(t, isSandboxDisconnect(errors.New("connection reset")))
+	})
+	t.Run("nil does not match", func(t *testing.T) {
+		assert.False(t, isSandboxDisconnect(nil))
+	})
+}
 
 func TestBuildRemoteCommand(t *testing.T) {
 	tests := []struct {

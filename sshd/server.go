@@ -47,6 +47,26 @@ type Server struct {
 // and exec keepalive paths. It matches the OpenSSH client/server convention.
 const keepaliveRequestType = "keepalive@openssh.com"
 
+// DisconnectExitCode is the exit status reported to the connecting client when
+// a PTY client is force-detached (keepalive timeout, lost connection, or slow
+// consumer) rather than the shell exiting. A non-zero status makes the client's
+// session.Wait return an error so it treats the result as a dropped connection
+// — not a clean shell exit — and therefore does not prompt to shut down the
+// sandbox. It is unambiguous: a genuine shell exit always reports 0, so the
+// client can match this code to recognize a disconnect. 255 follows the SSH
+// convention for connection-level errors.
+const DisconnectExitCode = 255
+
+// detachExitCode maps a PTY client's detach reason to the SSH exit status sent
+// to the connecting client. Only a genuine shell exit (DetachNone) reports a
+// clean 0; any forced detach reports a non-zero status.
+func detachExitCode(reason session.DetachReason) int {
+	if reason == session.DetachNone {
+		return 0
+	}
+	return DisconnectExitCode
+}
+
 const sessionCountRequestType = "session-count@vibepit"
 
 // SessionCountReply is the wire format for the session-count@vibepit reply.
@@ -204,7 +224,11 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		s.ptyConns--
 		s.mu.Unlock()
 		if client != nil {
-			client.Close() //nolint:errcheck
+			// Detach without recording a reason: by the time finishPTY runs,
+			// a forced detach has already recorded its own reason (Close is
+			// once), and a genuine shell exit must not be mislabeled as a
+			// disconnect in the session's last-detach-reason.
+			client.CloseWithReason(session.DetachNone) //nolint:errcheck
 		}
 		sess.Exit(code) //nolint:errcheck
 	}
@@ -337,11 +361,11 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 				select {
 				case err := <-reply:
 					if err != nil {
-						client.Close() //nolint:errcheck
+						client.CloseWithReason(session.DetachKeepalive) //nolint:errcheck
 						return
 					}
 				case <-time.After(3 * time.Second):
-					client.Close() //nolint:errcheck
+					client.CloseWithReason(session.DetachKeepalive) //nolint:errcheck
 					return
 				case <-sess.Context().Done():
 					client.Close() //nolint:errcheck
@@ -379,7 +403,12 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	}()
 
 	<-done
-	finishPTY(client, 0)
+	// The output copy ends either because the shell exited (output channel
+	// closed, reason DetachNone) or because the client was force-detached
+	// (keepalive/disconnect/slow consumer). Report a clean status only for a
+	// real exit; otherwise the client would mistake a dropped connection for a
+	// clean shell exit and offer to shut down the sandbox.
+	finishPTY(client, detachExitCode(client.DetachReason()))
 }
 
 func (s *Server) handleExecSession(sess charmssh.Session) {
