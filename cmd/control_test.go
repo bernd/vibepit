@@ -114,6 +114,7 @@ func TestControlClient_Config(t *testing.T) {
 		AllowHTTP: []string{"a.com:443", "b.com:443"},
 		AllowDNS:  []string{"c.com"},
 		BlockCIDR: []string{"10.0.0.0/8"},
+		AllowCIDR: []string{"100.64.0.0/10"},
 	}
 
 	httpAL, err := proxy.NewHTTPAllowlist(nil)
@@ -128,6 +129,7 @@ func TestControlClient_Config(t *testing.T) {
 	assert.Equal(t, []string{"a.com:443", "b.com:443"}, cfg.AllowHTTP)
 	assert.Equal(t, []string{"c.com"}, cfg.AllowDNS)
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.BlockCIDR)
+	assert.Equal(t, []string{"100.64.0.0/10"}, cfg.AllowCIDR)
 }
 
 func TestControlClient_AllowHTTP(t *testing.T) {
