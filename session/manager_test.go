@@ -37,13 +37,11 @@ func terminateTestManager(tb testing.TB, m *Manager) {
 	}
 	m.mu.Unlock()
 
-	for _, s := range sessions {
-		terminateTestSession(s, syscall.SIGTERM)
-	}
-	if waitForTestSessionsExited(sessions, 2*time.Second) {
-		return
-	}
-
+	// SIGKILL directly: tests don't need graceful shutdown, and an interactive
+	// /bin/sh ignores SIGTERM under a PTY, so a SIGTERM-then-wait phase would
+	// burn the full grace period on every session test. waitForExit (and its
+	// trailing state-file write) still runs on SIGKILL, so waiting on exitDone
+	// below keeps the teardown-vs-TempDir-RemoveAll race closed.
 	for _, s := range sessions {
 		terminateTestSession(s, syscall.SIGKILL)
 	}
