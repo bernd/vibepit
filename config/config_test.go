@@ -26,6 +26,8 @@ allow-dns:
   - internal.example.com
 block-cidr:
   - 203.0.113.0/24
+allow-cidr:
+  - 100.64.0.0/10
 `), 0o644)
 
 		projectFile := filepath.Join(projectDir, "network.yaml")
@@ -47,6 +49,7 @@ allow-http:
 		}
 		assert.Contains(t, merged.AllowDNS, "internal.example.com")
 		assert.Contains(t, merged.BlockCIDR, "203.0.113.0/24")
+		assert.Contains(t, merged.AllowCIDR, "100.64.0.0/10")
 	})
 
 	t.Run("CLI overrides add to merged config", func(t *testing.T) {

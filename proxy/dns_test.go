@@ -13,7 +13,7 @@ import (
 func TestDNSServer(t *testing.T) {
 	al, err := NewDNSAllowlist([]string{"allowed.example.com", "dnsonly.example.com"})
 	require.NoError(t, err)
-	blocker := NewCIDRBlocker(nil)
+	blocker := NewCIDRBlocker(nil, nil)
 	log := NewLogBuffer(100)
 
 	srv := NewDNSServer(al, blocker, log, "8.8.8.8:53")
@@ -72,7 +72,7 @@ func TestDNSServer(t *testing.T) {
 func TestDNSHostVibepit(t *testing.T) {
 	al, err := NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	blocker := NewCIDRBlocker(nil)
+	blocker := NewCIDRBlocker(nil, nil)
 	log := NewLogBuffer(100)
 
 	proxyIP := net.ParseIP("10.42.0.2")

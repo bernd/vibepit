@@ -19,7 +19,7 @@ func TestHTTPProxy(t *testing.T) {
 	t.Run("blocks plain HTTP by default", func(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
@@ -82,7 +82,7 @@ func TestHTTPProxy(t *testing.T) {
 	t.Run("blocks disallowed domain for plain HTTP", func(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"allowed.example.com:443"})
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
@@ -104,7 +104,7 @@ func TestHTTPProxy(t *testing.T) {
 	t.Run("logs blocked request", func(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"httpbin.org:443"})
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 
@@ -132,7 +132,7 @@ func TestHTTPProxy(t *testing.T) {
 	t.Run("blocks when resolver errors with no addresses", func(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"example.com:443"})
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.resolver = &net.Resolver{
@@ -167,7 +167,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 	t.Run("auto-allows host.vibepit for configured port", func(t *testing.T) {
 		al, err := NewHTTPAllowlist(nil)
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
@@ -190,7 +190,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 	t.Run("blocks host.vibepit for unconfigured port", func(t *testing.T) {
 		al, err := NewHTTPAllowlist(nil)
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{9999})
@@ -211,7 +211,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 	t.Run("host.vibepit allowed via allowlist bypasses CIDR", func(t *testing.T) {
 		al, err := NewHTTPAllowlist([]string{"host.vibepit:" + backendPortStr})
 		require.NoError(t, err)
-		blocker := NewCIDRBlocker(nil)
+		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
 		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, nil)
