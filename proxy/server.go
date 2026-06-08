@@ -29,7 +29,8 @@ type ProxyConfig struct {
 	AllowHTTP      []string `json:"allow-http"`
 	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
-	Upstream       string   `json:"upstream"`
+	AllowCIDR      []string `json:"allow-cidr"`
+	UpstreamDNS    string   `json:"upstream-dns"`
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip"`
 	HostGateway    string   `json:"host-gateway"`
@@ -55,8 +56,8 @@ func NewServer(configPath string) (*Server, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if cfg.Upstream == "" {
-		cfg.Upstream = DefaultUpstreamDNS
+	if cfg.UpstreamDNS == "" {
+		cfg.UpstreamDNS = DefaultUpstreamDNS
 	}
 
 	return &Server{config: cfg}, nil
@@ -71,11 +72,11 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("allow-dns: %w", err)
 	}
-	cidr := NewCIDRBlocker(s.config.BlockCIDR)
+	cidr := NewCIDRBlocker(s.config.BlockCIDR, s.config.AllowCIDR)
 	log := NewLogBuffer(LogBufferCapacity)
 
-	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.Upstream)
-	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.Upstream)
+	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.UpstreamDNS)
+	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.UpstreamDNS)
 	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
 
 	// Configure host.vibepit support.

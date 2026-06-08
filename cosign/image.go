@@ -12,8 +12,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	cosignlib "github.com/sigstore/cosign/v2/pkg/cosign"
-	ociremote "github.com/sigstore/cosign/v2/pkg/oci/remote"
+	cosignlib "github.com/sigstore/cosign/v3/pkg/cosign"
+	ociremote "github.com/sigstore/cosign/v3/pkg/oci/remote"
 )
 
 // anonymousRegistryOpts forces cosign to use anonymous registry access for

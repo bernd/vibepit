@@ -24,6 +24,9 @@ type SessionInfo struct {
 	CreatedAt   time.Time
 	ExitedAt    time.Time
 	DetachedAt  time.Time
+	// LastDetachReason records why the most recent client detached. It is
+	// DetachNone until a client closes with a reason.
+	LastDetachReason DetachReason
 }
 
 // Manager owns all sessions and enforces the concurrency limit.

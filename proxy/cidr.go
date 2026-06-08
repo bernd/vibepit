@@ -14,27 +14,50 @@ var defaultBlockedCIDRs = []string{
 }
 
 type CIDRBlocker struct {
-	nets []*net.IPNet
+	blockNets []*net.IPNet
+	allowNets []*net.IPNet
 }
 
-func NewCIDRBlocker(extra []string) *CIDRBlocker {
-	all := make([]string, 0, len(defaultBlockedCIDRs)+len(extra))
-	all = append(all, defaultBlockedCIDRs...)
-	all = append(all, extra...)
+func NewCIDRBlocker(block, allow []string) *CIDRBlocker {
+	blocked := make([]string, 0, len(defaultBlockedCIDRs)+len(block))
+	blocked = append(blocked, defaultBlockedCIDRs...)
+	blocked = append(blocked, block...)
 
-	nets := make([]*net.IPNet, 0, len(all))
-	for _, cidr := range all {
+	blockNets := parseCIDRs(blocked)
+	allowNets := parseCIDRs(allow)
+
+	return &CIDRBlocker{
+		blockNets: blockNets,
+		allowNets: allowNets,
+	}
+}
+
+func parseCIDRs(cidrs []string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			continue
 		}
 		nets = append(nets, ipNet)
 	}
-	return &CIDRBlocker{nets: nets}
+	return nets
+}
+
+func (b *CIDRBlocker) IsAllowed(ip net.IP) bool {
+	for _, n := range b.allowNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *CIDRBlocker) IsBlocked(ip net.IP) bool {
-	for _, n := range b.nets {
+	if b.IsAllowed(ip) {
+		return false
+	}
+	for _, n := range b.blockNets {
 		if n.Contains(ip) {
 			return true
 		}
