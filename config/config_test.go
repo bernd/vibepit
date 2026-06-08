@@ -376,3 +376,57 @@ func TestMergeValidation(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestUnmarshalUpstreamDNS(t *testing.T) {
+	t.Run("unmarshal upstream-dns string", func(t *testing.T) {
+		dir := t.TempDir()
+		globalFile := filepath.Join(dir, "config.yaml")
+		os.WriteFile(globalFile, []byte(`
+allow-http:
+  - github.com:443
+upstream-dns: 8.8.8.8:53
+`), 0o644)
+
+		cfg, err := Load(globalFile, "/nonexistent/project.yaml")
+		require.NoError(t, err)
+		assert.Equal(t, "8.8.8.8:53", cfg.Global.Upstream)
+	})
+
+	t.Run("unmarshal upstream-dns with port only", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		os.WriteFile(path, []byte(`upstream-dns: "1.1.1.1:5353"`), 0o644)
+
+		cfg := &GlobalConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Equal(t, "1.1.1.1:5353", cfg.Upstream)
+	})
+
+	t.Run("missing upstream-dns is empty string", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		os.WriteFile(path, []byte(`allow-dns:
+  - example.com`), 0o644)
+
+		cfg := &GlobalConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Empty(t, cfg.Upstream)
+	})
+
+	t.Run("merged config carries upstream", func(t *testing.T) {
+		dir := t.TempDir()
+		globalFile := filepath.Join(dir, "config.yaml")
+		os.WriteFile(globalFile, []byte(`
+upstream-dns: 9.9.9.9:53
+allow-dns:
+  - internal.example.com
+`), 0o644)
+
+		cfg, err := Load(globalFile, "/nonexistent/project.yaml")
+		require.NoError(t, err)
+
+		merged, err := cfg.Merge(nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "9.9.9.9:53", merged.Upstream)
+	})
+}
