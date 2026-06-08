@@ -132,7 +132,6 @@ func TestControlClient_Config(t *testing.T) {
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.BlockCIDR)
 	assert.Equal(t, []string{"100.64.0.0/10"}, cfg.AllowCIDR)
 	assert.Equal(t, []string{"myhost.local:192.168.1.100"}, cfg.ExtraHosts)
-	assert.Equal(t, []string{"100.64.0.0/10"}, cfg.AllowCIDR)
 }
 
 func TestControlClient_AllowHTTP(t *testing.T) {
