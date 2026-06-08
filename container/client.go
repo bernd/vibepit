@@ -667,12 +667,11 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			cfg.BinaryPath + ":" + ProxyBinaryPath + ":ro",
 			cfg.ConfigPath + ":" + ProxyConfigPath + ":ro",
 		},
+		ExtraHosts:   []string{"host-gateway:host-gateway"},
 		PortBindings: portBindings,
 	}
 	if len(cfg.ExtraHosts) > 0 {
-		hostConfig.ExtraHosts = append([]string{"host-gateway:host-gateway"}, cfg.ExtraHosts...)
-	} else {
-		hostConfig.ExtraHosts = []string{"host-gateway:host-gateway"}
+		hostConfig.ExtraHosts = append(hostConfig.ExtraHosts, cfg.ExtraHosts...)
 	}
 	if !cfg.NoRestart {
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
