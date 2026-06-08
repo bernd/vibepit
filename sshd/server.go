@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -408,7 +409,14 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	// (keepalive/disconnect/slow consumer). Report a clean status only for a
 	// real exit; otherwise the client would mistake a dropped connection for a
 	// clean shell exit and offer to shut down the sandbox.
-	finishPTY(client, detachExitCode(client.DetachReason()))
+	reason := client.DetachReason()
+	// Log abnormal detaches (keepalive timeout, slow consumer) — Label is empty
+	// for a normal disconnect — so the sandbox container log records why a live
+	// session dropped, which is otherwise invisible server-side.
+	if label := reason.Label(); label != "" {
+		log.Printf("sshd: session %s disconnected uncleanly: %s", target.ID(), label)
+	}
+	finishPTY(client, detachExitCode(reason))
 }
 
 func (s *Server) handleExecSession(sess charmssh.Session) {
