@@ -385,7 +385,6 @@ func (infra *sessionInfra) baseSandboxConfig(projectRoot string, u *userInfo) ct
 		UID:                 infra.UID,
 		User:                u.Username,
 		SessionID:           infra.SessionID,
-		ExtraHosts:          infra.Merged.ExtraHosts,
 	}
 }
 
