@@ -25,10 +25,11 @@ const (
 )
 
 type GlobalConfig struct {
-	AllowHTTP []string `koanf:"allow-http"`
-	AllowDNS  []string `koanf:"allow-dns"`
-	BlockCIDR []string `koanf:"block-cidr"`
+	AllowHTTP  []string `koanf:"allow-http"`
+	AllowDNS   []string `koanf:"allow-dns"`
+	BlockCIDR  []string `koanf:"block-cidr"`
 	AllowCIDR  []string `koanf:"allow-cidr"`
+	ExtraHosts []string `koanf:"extra-hosts"`
 	Upstream   string   `koanf:"upstream-dns"`
 }
 
@@ -49,6 +50,7 @@ type MergedConfig struct {
 	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
 	AllowCIDR      []string `json:"allow-cidr"`
+	ExtraHosts     []string `json:"extra-hosts,omitempty"`
 	Upstream       string   `json:"upstream,omitempty"`
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip,omitempty"`
@@ -127,6 +129,7 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 		AllowDNS:       allowDNS,
 		BlockCIDR:      c.Global.BlockCIDR,
 		AllowCIDR:      c.Global.AllowCIDR,
+		ExtraHosts:     c.Global.ExtraHosts,
 		Upstream:       c.Global.Upstream,
 		AllowHostPorts: c.Project.AllowHostPorts,
 	}, nil

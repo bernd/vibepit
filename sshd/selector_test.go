@@ -111,6 +111,39 @@ func TestSelectorViewContainsSessionInfo(t *testing.T) {
 	assert.Contains(t, view, "detached")
 }
 
+func TestSelectorLineShowsAbnormalDetachReason(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name   string
+		reason session.DetachReason
+		label  string
+		shown  bool
+	}{
+		{"keepalive", session.DetachKeepalive, "connection lost", true},
+		{"slow consumer", session.DetachSlowConsumer, "dropped - slow", true},
+		{"normal disconnect", session.DetachDisconnect, "", false},
+		{"none", session.DetachNone, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			info := session.SessionInfo{
+				ID:               "session-1",
+				Status:           session.Detached,
+				CreatedAt:        now.Add(-10 * time.Minute),
+				DetachedAt:       now.Add(-30 * time.Second),
+				LastDetachReason: tc.reason,
+			}
+			line := renderSelectorLine(info, false, now)
+			assert.Contains(t, line, "detached")
+			if tc.shown {
+				assert.Contains(t, line, tc.label)
+			} else {
+				assert.NotContains(t, line, "·")
+			}
+		})
+	}
+}
+
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		d    time.Duration

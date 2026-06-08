@@ -33,16 +33,17 @@ type Session struct {
 	createdAt time.Time
 	manager   *Manager
 
-	mu         sync.Mutex
-	clients    []*Client
-	writer     *Client
-	exited     bool
-	exitCode   int
-	exitedAt   time.Time
-	detachedAt time.Time
-	vte        *vt.SafeEmulator
-	cols       uint16
-	rows       uint16
+	mu               sync.Mutex
+	clients          []*Client
+	writer           *Client
+	exited           bool
+	exitCode         int
+	exitedAt         time.Time
+	detachedAt       time.Time
+	lastDetachReason DetachReason
+	vte              *vt.SafeEmulator
+	cols             uint16
+	rows             uint16
 
 	pumpDone    chan struct{} // closed when pump goroutine exits; barrier for vte.Close
 	drainDone   chan struct{} // closed by drainVTE on exit; awaited before vte.Close so no reader races with close
@@ -105,13 +106,14 @@ func (s *Session) Info() SessionInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	info := SessionInfo{
-		ID:          s.id,
-		Command:     s.cmd.Path,
-		ClientCount: len(s.clients),
-		CreatedAt:   s.createdAt,
-		ExitCode:    s.exitCode,
-		ExitedAt:    s.exitedAt,
-		DetachedAt:  s.detachedAt,
+		ID:               s.id,
+		Command:          s.cmd.Path,
+		ClientCount:      len(s.clients),
+		CreatedAt:        s.createdAt,
+		ExitCode:         s.exitCode,
+		ExitedAt:         s.exitedAt,
+		DetachedAt:       s.detachedAt,
+		LastDetachReason: s.lastDetachReason,
 	}
 	if s.exited {
 		info.Status = Exited
@@ -257,6 +259,13 @@ func (s *Session) Detach(c *Client) {
 	}
 	if len(s.clients) == 0 {
 		s.detachedAt = time.Now()
+	}
+	// Record why the client left so status/monitoring can distinguish an
+	// ordinary disconnect from a keepalive-driven drop. A genuine shell exit
+	// closes the output channel rather than calling Close, so it never reaches
+	// here with a reason.
+	if r := c.DetachReason(); r != DetachNone {
+		s.lastDetachReason = r
 	}
 	// If this was the last client and the session has exited, start the
 	// tombstone expiry timer. This handles the normal case where the user
