@@ -90,7 +90,17 @@ func renderSelectorLine(info session.SessionInfo, highlighted bool, now time.Tim
 	detached := base.Foreground(tui.ColorCyan).Render(fmt.Sprintf("detached %s ago", formatDuration(now.Sub(info.DetachedAt))))
 	sp := base.Render(" ")
 
-	return marker + id + sp + age + sp + detached
+	line := marker + id + sp + age + sp + detached
+
+	// Surface an abnormal detach reason (keepalive timeout, slow consumer) so
+	// it's clear the session didn't simply disconnect. Normal disconnects have
+	// an empty label and render unchanged.
+	if label := info.LastDetachReason.Label(); label != "" {
+		reason := base.Foreground(tui.ColorOrange).Render("(" + label + ")")
+		line += sp + reason
+	}
+
+	return line
 }
 
 func renderNewSessionLine(highlighted bool) string {
