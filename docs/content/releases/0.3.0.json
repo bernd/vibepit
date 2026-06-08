@@ -1,0 +1,35 @@
+{
+  "version": "0.3.0",
+  "timestamp": "2026-06-09T00:04:34+02:00",
+  "changelog": "\nAdded:\n- JetBrains AI service network preset\n- Packaging tools in the sandbox image\n- Session disconnect logging in `vibed`\n- `allow-cidr` config option to explicitly allow local IP ranges ([#10](https://github.com/bernd/vibepit/pull/10))\n- `extra-hosts` config option ([#11](https://github.com/bernd/vibepit/pull/11))\n- Global `upstream-dns` config option to set the upstream DNS server ([#12](https://github.com/bernd/vibepit/pull/12))\n- How-to for running with a local LLM provider ([#13](https://github.com/bernd/vibepit/pull/13))\n\nFixed:\n- Preserve formatting in `allow-http`/`allow-dns` appends ([#8](https://github.com/bernd/vibepit/pull/8))\n- State-file cleanup race in session test teardown ([#9](https://github.com/bernd/vibepit/pull/9))\n- `install -m` parameter in the Dockerfile\n- Force anonymous auth for cosign image signature verification\n- Distinguish forced detaches from clean shell exits",
+  "assets": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-linux-x86_64.tar.gz",
+      "sha256": "7a9578e8aa316c166fe3cb33d049196428da8ca0aa15d03ed41982d3815bad55",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-linux-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-linux-aarch64.tar.gz",
+      "sha256": "19397484b151b98a6bcd88172137314860aba26e8f1eb4fe7458ed9cd4dabce2",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-linux-aarch64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-darwin-x86_64.tar.gz",
+      "sha256": "4d18a48d056031f735fae05a98d23f7088da791da2eff9634624d7f0034764ce",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-darwin-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-darwin-aarch64.tar.gz",
+      "sha256": "1f0fd2bd7128803a673e655464b120fee4c45f865a9a2a2bb6eebdaad4b11514",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.3.0/vibepit-0.3.0-darwin-aarch64.tar.gz.bundle"
+    }
+  ]
+}
