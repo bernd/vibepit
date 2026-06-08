@@ -4,27 +4,32 @@ description: Run LLM providers on your local LAN when you're using private IP ad
 
 # Run with a Local LLM Provider
 
-Use Vibepit with a LLM provider like Ollama, LM Studio, or llama.cpp
+Use Vibepit with an LLM provider like Ollama, LM Studio, or llama.cpp
 on your LAN accessible from inside the sandbox while blocking all other access to your
 local network.
 
-## What is the issue?     
+## Allow access to the LLM provider in you local network
 
-If you have your LLM provider (e.g. Ollama) running on a machine named 'llm-server' on your LAN,
-you might need to configure vibepit using the following options to make it work.
+If you have your LLM provider (e.g. Ollama) running on a machine named `llm-server` on your LAN,
+you have to configure Vibepit using the following options to make it work.
 
 By default, Vibepit blocks access to RFC 1918 private IP ranges and other
 reserved ranges to prevent the sandbox from reaching services on your local
-network. You may want to relax this only for the specific range where your LLM
+network. You should relax this only for the specific range where your LLM
 provider runs, while keeping everything else blocked.
 
 Add your IP subnet or only single IPs to the `allow-cidr` list in your global config
 (`~/.config/vibepit/config.yaml`):
 
 ```yaml
+# Prevent default CIDR blocker from preventing access to the local network.
 allow-cidr:
-  - 192.168.1.0/24 # e.g. for the full subnet
-  - 192.168.1.2/32 # e.g. for a single IP
+  - 192.168.1.0/24 # for the full subnet
+  - 192.168.1.2/32 # for a single IP
+
+# Allow proxy server to forward requests to the local LLM provider API
+allow-http:
+  - llm-server:8000
 ```
 
 This allows the sandbox to reach any IP in `192.168.1.0/24` or only a single host while the default
@@ -55,19 +60,23 @@ In this case, you can add the hosts you want to resolve using `extra-hosts`
 
 ```yaml
 extra-hosts:
-  - "llm-server:192.168.1.2"
+  - llm-server:192.168.1.2
 ```
 
-## Example config snippet for OpenCode (~/.config/opencode/opencode.json)
+## Example: Configure OpenCode
 
-```
+Extend your `~/.config/opencode/opencode.json` config file with the following `provider` section.
+
+```json
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
     "llm-server:11434": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://aibox:8000/v1"
-      },
+        "baseURL": "http://llm-server:8000/v1"
+      }
+    }
+  }
+}
 ```
-
