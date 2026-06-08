@@ -395,7 +395,7 @@ upstream-dns: 8.8.8.8:53
 
 		cfg, err := Load(globalFile, "/nonexistent/project.yaml")
 		require.NoError(t, err)
-		assert.Equal(t, "8.8.8.8:53", cfg.Global.Upstream)
+		assert.Equal(t, "8.8.8.8:53", cfg.Global.UpstreamDNS)
 	})
 
 	t.Run("unmarshal upstream-dns with port only", func(t *testing.T) {
@@ -405,7 +405,7 @@ upstream-dns: 8.8.8.8:53
 
 		cfg := &GlobalConfig{}
 		require.NoError(t, loadFile(path, cfg))
-		assert.Equal(t, "1.1.1.1:5353", cfg.Upstream)
+		assert.Equal(t, "1.1.1.1:5353", cfg.UpstreamDNS)
 	})
 
 	t.Run("missing upstream-dns is empty string", func(t *testing.T) {
@@ -416,7 +416,7 @@ upstream-dns: 8.8.8.8:53
 
 		cfg := &GlobalConfig{}
 		require.NoError(t, loadFile(path, cfg))
-		assert.Empty(t, cfg.Upstream)
+		assert.Empty(t, cfg.UpstreamDNS)
 	})
 
 	t.Run("merged config carries upstream", func(t *testing.T) {
@@ -433,6 +433,6 @@ allow-dns:
 
 		merged, err := cfg.Merge(nil, nil)
 		require.NoError(t, err)
-		assert.Equal(t, "9.9.9.9:53", merged.Upstream)
+		assert.Equal(t, "9.9.9.9:53", merged.UpstreamDNS)
 	})
 }
