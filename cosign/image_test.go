@@ -174,7 +174,7 @@ func TestVerifyImageFunctionsDoNotForwardDockerCredentials(t *testing.T) {
 	t.Cleanup(func() { fetchTrustedRoot = originalFetch })
 
 	tests := []struct {
-		name string
+		name   string
 		verify func(ctx context.Context, ref string) error
 	}{
 		{"VerifyImage", VerifyImage},
