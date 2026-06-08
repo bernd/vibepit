@@ -37,13 +37,11 @@ func terminateTestManager(tb testing.TB, m *Manager) {
 	}
 	m.mu.Unlock()
 
-	for _, s := range sessions {
-		terminateTestSession(s, syscall.SIGTERM)
-	}
-	if waitForTestSessionsExited(sessions, 2*time.Second) {
-		return
-	}
-
+	// SIGKILL directly: tests don't need graceful shutdown, and an interactive
+	// /bin/sh ignores SIGTERM under a PTY, so a SIGTERM-then-wait phase would
+	// burn the full grace period on every session test. waitForExit (and its
+	// trailing state-file write) still runs on SIGKILL, so waiting on exitDone
+	// below keeps the teardown-vs-TempDir-RemoveAll race closed.
 	for _, s := range sessions {
 		terminateTestSession(s, syscall.SIGKILL)
 	}
@@ -832,4 +830,63 @@ func stripSGR(s string) string {
 		i++
 	}
 	return out.String()
+}
+
+func TestClient_DetachReason(t *testing.T) {
+	m := testManager(t, 50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	t.Run("fresh client has no reason", func(t *testing.T) {
+		c := s.Attach(80, 24)
+		defer c.Close()
+		assert.Equal(t, DetachNone, c.DetachReason())
+	})
+
+	t.Run("plain Close records a disconnect", func(t *testing.T) {
+		c := s.Attach(80, 24)
+		c.Close()
+		assert.Equal(t, DetachDisconnect, c.DetachReason())
+	})
+
+	t.Run("CloseWithReason records the reason", func(t *testing.T) {
+		c := s.Attach(80, 24)
+		c.CloseWithReason(DetachKeepalive)
+		assert.Equal(t, DetachKeepalive, c.DetachReason())
+	})
+
+	t.Run("first reason wins when closed twice", func(t *testing.T) {
+		c := s.Attach(80, 24)
+		c.CloseWithReason(DetachKeepalive)
+		c.Close() // Close is once — must not overwrite the keepalive reason.
+		assert.Equal(t, DetachKeepalive, c.DetachReason())
+	})
+}
+
+func TestDetachReason_Label(t *testing.T) {
+	tests := []struct {
+		reason DetachReason
+		want   string
+	}{
+		{DetachNone, ""},
+		{DetachDisconnect, ""},
+		{DetachKeepalive, "connection lost"},
+		{DetachSlowConsumer, "dropped - slow"},
+	}
+	for _, tt := range tests {
+		assert.Equalf(t, tt.want, tt.reason.Label(), "reason %d", tt.reason)
+	}
+}
+
+func TestSession_RecordsLastDetachReason(t *testing.T) {
+	m := testManager(t, 50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	require.Equal(t, DetachNone, s.Info().LastDetachReason)
+
+	c := s.Attach(80, 24)
+	c.CloseWithReason(DetachKeepalive)
+
+	assert.Equal(t, DetachKeepalive, s.Info().LastDetachReason)
 }
