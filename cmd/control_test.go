@@ -89,6 +89,49 @@ func newCmdTestClientWithAllowlists(t *testing.T) (*proxy.HTTPAllowlist, *proxy.
 	return al, dal, client
 }
 
+// TestControlClient_SurfacesPermissionViolation covers finding 8: a request the
+// user role isn't allowed to publish must report the NATS permissions violation
+// (delivered async) instead of degrading to a bare "nats: timeout".
+func TestControlClient_SurfacesPermissionViolation(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+	client := newCmdTestClient(t, bus, creds)
+	client.requestTimeout = 2 * time.Second
+
+	// "forbidden" is not in the user role's publish allowlist.
+	err := client.request("forbidden", nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Permissions Violation")
+}
+
+// TestControlClient_SignalConnKeepsLatest verifies the conn-event buffer evicts
+// the oldest event when full, so the most recent connection state is never the
+// one dropped (a dropped final transition would wedge the monitor on stale state).
+func TestControlClient_SignalConnKeepsLatest(t *testing.T) {
+	c := &ControlClient{connEvents: make(chan bool, 2), closed: make(chan struct{})}
+
+	// Overfill a cap-2 buffer; the final signaled state is true.
+	c.signalConn(true)
+	c.signalConn(false)
+	c.signalConn(true)
+	c.signalConn(false)
+	c.signalConn(true)
+
+	var last bool
+	got := false
+	for {
+		select {
+		case last = <-c.connEvents:
+			got = true
+			continue
+		default:
+		}
+		break
+	}
+	require.True(t, got, "buffer should retain events")
+	assert.True(t, last, "the latest connection state must be retained, not evicted")
+}
+
 func TestControlClient_AllowHTTP(t *testing.T) {
 	bus, creds := newCmdTestBus(t)
 	require.NoError(t, bus.RegisterHandlers())
@@ -135,7 +178,7 @@ func TestControlClient_Stats(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		s := stats["a.com"]
+		s := stats.Domains["a.com"]
 		return s.Allowed == 1 && s.Blocked == 1
 	}, 3*time.Second, 50*time.Millisecond)
 }

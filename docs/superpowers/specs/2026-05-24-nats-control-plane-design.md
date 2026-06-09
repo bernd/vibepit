@@ -114,9 +114,25 @@ ephemeral CA from `proxy/mtls.go`:
 
 | Cert CN | Purpose | Distribution |
 |---|---|---|
-| `vibepit-internal` | The proxy's own connection — producers (`HTTPProxy`, `DNSServer`) and in-process handlers (`StatsAggregator`, `AllowlistHandler`, `ConfigHandler`). | Stays in the proxy process; never written to a session dir. Lives only in proxy memory. |
+| `vibepit-internal` | The proxy's own connection — producers (`HTTPProxy`, `DNSServer`) and in-process handlers (`StatsAggregator`, `AllowlistHandler`, `ConfigHandler`). | Minted on the host; passed into the proxy container as env vars (`VIBEPIT_PROXY_INTERNAL_CERT/KEY`) alongside the server key. Never written to a session dir. See the credential-exposure note below. |
 | `vibepit-user` | All host-side tools: `allow-http`, `allow-dns`, `monitor`, `ward` | Written to the same location today's single client cert is written. |
 | `vibepit-sandbox` | Future in-sandbox `vibed` observability publisher. | Minted but **not written to disk** in this spec. Sits unused until a follow-up wires sandbox-side delivery. |
+
+> **Credential exposure.** The `vibepit-internal` cert/key is the broadest
+> identity on the bus (publish/subscribe `>`), and it is passed into the proxy
+> container through environment variables, so it is readable by anything that can
+> inspect the container's environment (`docker inspect`, the runtime's on-disk
+> container config, `/proc/1/environ` inside the container, image/commit export).
+> This is accepted rather than mitigated: the server private key must reach the
+> proxy by the same channel regardless, and reading a container's environment
+> already requires container-runtime access (≈ host root) or in-container root —
+> a position from which the control bus is compromised anyway (the live process
+> memory holds the same key). The credential is ephemeral (per session, scoped to
+> `tls://127.0.0.1:ControlAPIPort`), and the host port is published only to
+> `127.0.0.1`. Keeping the internal key out of the host/env entirely would
+> require the proxy to mint its own internal CA in-process and merge it into the
+> server's `ClientCAs`; that is a deliberate non-goal here given the threat model
+> above.
 
 NATS is configured with `TLSMap: true` (`verify_and_map`) and `TLSRequired:
 true` / `ClientAuth: RequireAndVerifyClientCert`. **Every** connection — the
@@ -157,7 +173,11 @@ The user/permission config:
 
 "CN=vibepit-sandbox":    # future obs publisher
   publish:   ["obs.>"]
-  subscribe: ["_INBOX.>"]
+  # Scoped reply inbox, NOT the shared _INBOX.> — the sandbox role must not be
+  # able to read other clients' request replies or ordered-consumer log
+  # deliveries. A future sandbox client dials with
+  # nats.CustomInboxPrefix("_INBOX.sandbox").
+  subscribe: ["_INBOX.sandbox.>"]
 ```
 
 > **Why no InProcessServer.** The original plan had the proxy connect in-process
@@ -188,8 +208,10 @@ arrives as an async permission violation — see the wire-format caveat).
 
 The cert generation in `proxy/mtls.go` extends to mint the three client certs
 with distinct CNs. `WriteSessionCredentials` writes only the `vibepit-user` pair
-(`user-cert.pem` / `user-key.pem`); the `vibepit-internal` pair stays in proxy
-memory and the `vibepit-sandbox` pair is minted but not written this spec.
+(`user-cert.pem` / `user-key.pem`) to the session dir; the `vibepit-internal`
+pair is handed to the proxy container via env vars (`VIBEPIT_PROXY_INTERNAL_CERT`
+/ `VIBEPIT_PROXY_INTERNAL_KEY`), and the `vibepit-sandbox` pair is minted but not
+distributed this spec.
 `LoadSessionTLSConfig` (in `cmd/session.go`) extends to take a role string
 (`"user"` today, `"sandbox"` later) and load the corresponding pair. The shared
 `ca.pem` is unchanged.
@@ -259,13 +281,18 @@ a ~200ms stall-wait) and then **drops** the entry with `ErrTooManyStalledMsgs`
 (`nats.go/jetstream/publish.go`). That would add latency to live proxied traffic
 and silently lose entries exactly under load.
 
-Therefore `PublishLog` pre-checks `PublishAsyncPending()` and, when the window is
-full, **drops immediately** rather than entering the stall — best-effort
-observability that never slows the filter decision. Logs and stats are not
-control data; an undercount under sustained overload is the accepted trade-off
-for keeping the request path fast. (If accurate stats under heavy bursts later
-matter, decouple via a buffered channel drained by a dedicated publisher
-goroutine — moves both the stall and the drop fully off the request path.)
+Therefore `PublishLog` does only a non-blocking hand-off: it sends the entry to a
+buffered channel and a single dedicated publisher goroutine drains it, doing the
+`json.Marshal` and `PublishAsync` (and absorbing any stall) entirely off the
+request path. Because that goroutine is the sole publisher, its
+`PublishAsyncPending()` check and `PublishAsync` are serial — no
+check-then-publish race — and it never adds latency to the filter decision. When
+the hand-off queue is full, the pending-ack window is full, or an entry fails to
+marshal, the entry is **dropped** and a counter is incremented. Logs and stats
+are not control data; an undercount under sustained overload is the accepted
+trade-off for keeping the request path fast, and the drop counter is surfaced in
+the `stats` reply (`StatsReply.Dropped`) so the undercount is visible rather than
+silent.
 
 > **Earlier prototype caveat:** a 20,000-message burst through a window of 64
 > showed 0 drops only because the in-process memory stream acked fast enough that
@@ -450,7 +477,8 @@ Modified:
 - `proxy/http.go`, `proxy/dns.go` — take a JetStream publisher dependency,
   `PublishAsync` to `logs.events`; drop `*LogBuffer` field.
 - `proxy/mtls.go` — mint three client certs per session (`vibepit-internal`
-  stays in proxy memory; `vibepit-user` written; `vibepit-sandbox` minted only).
+  passed to the proxy container via env; `vibepit-user` written; `vibepit-sandbox`
+  minted only). See the credential-exposure note above.
 - `cmd/control.go` — swap `http.Client` for `*nats.Conn` + `jetstream.JetStream`;
   new ordered-consumer `SubscribeLogs`/`Logs`; remove `LogsAfter`; add async
   error handler.

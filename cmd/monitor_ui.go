@@ -26,6 +26,10 @@ const (
 
 const disconnectGracePeriod = 3 * time.Second
 
+// subscribeRetryDelay is how long to wait before retrying a failed log
+// subscription.
+const subscribeRetryDelay = time.Second
+
 // logChannelBuffer is the receive-side window for log entries delivered from the
 // bus subscription to the Bubble Tea loop.
 const logChannelBuffer = 256
@@ -40,20 +44,22 @@ type logItem struct {
 
 // monitorScreen implements tui.Screen for the log monitor.
 type monitorScreen struct {
-	session  *SessionInfo
-	client   *ControlClient
-	onBack   func() tui.Screen
-	cursor   tui.Cursor
-	logCh    chan proxy.LogEntry
-	logsDone <-chan struct{}
+	session *SessionInfo
+	client  *ControlClient
+	onBack  func() tui.Screen
+	cursor  tui.Cursor
 
-	// stopFn tears down the log subscription. It is produced asynchronously by
-	// the startSubscription cmd goroutine and consumed by transitionBack on the
-	// Update goroutine, so both accesses are guarded by mu. torndown lets a late
-	// subscription clean itself up if the screen was already left.
+	// stopFn tears down the active log subscription. It is produced
+	// asynchronously by the startSubscription cmd goroutine and consumed by
+	// transitionBack and resubscribe on the Update goroutine, so all accesses are
+	// guarded by mu. torndown lets a late subscription clean itself up if the
+	// screen was already left. subGen increments on every (re)subscribe; messages
+	// tagged with an older generation are ignored so a superseded subscription
+	// can't deliver entries or mutate state after it has been replaced.
 	mu             sync.Mutex
 	stopFn         func()
 	torndown       bool
+	subGen         int
 	items          []logItem
 	newCount       int
 	firstTickSeen  bool
@@ -76,28 +82,47 @@ type allowResultMsg struct {
 	err    error
 }
 
-// logEntryMsg carries a single log entry delivered by the subscription.
-type logEntryMsg proxy.LogEntry
+// logEntryMsg carries a single log entry delivered by the subscription, tagged
+// with the subscription generation and the channel/done it was read from so the
+// reader can be re-armed on the same subscription (and dropped if superseded).
+type logEntryMsg struct {
+	gen   int
+	ch    chan proxy.LogEntry
+	done  <-chan struct{}
+	entry proxy.LogEntry
+}
 
-// subscribeErrMsg is returned when starting the log subscription fails.
-type subscribeErrMsg struct{ err error }
+// subscribeErrMsg is returned when starting the log subscription fails. gen is
+// the subscription generation that failed.
+type subscribeErrMsg struct {
+	gen int
+	err error
+}
 
 // subscriptionStartedMsg confirms the log subscription is live and carries the
-// done channel used to arm the channel read. The stop func is handed off via
-// s.stopFn under s.mu (see startSubscription) rather than this message, so it is
-// not lost if the screen is torn down before the message is processed.
+// generation plus the channel/done used to arm the reader. The stop func is
+// handed off via s.stopFn under s.mu (see startSubscription) rather than this
+// message, so it is not lost if the screen is torn down before the message is
+// processed.
 type subscriptionStartedMsg struct {
+	gen  int
+	ch   chan proxy.LogEntry
 	done <-chan struct{}
 }
+
+// retrySubscribeMsg fires after a delay to retry a failed subscription. gen is
+// the generation in effect when the retry was scheduled; if a newer subscription
+// has since superseded it, the retry is ignored.
+type retrySubscribeMsg struct{ gen int }
 
 // waitForLog blocks on the subscription channel and yields the next entry. It
 // also selects on done so the goroutine exits at teardown (returning a nil
 // message, which Bubble Tea ignores) instead of leaking blocked on the channel.
-func waitForLog(ch <-chan proxy.LogEntry, done <-chan struct{}) tea.Cmd {
+func waitForLog(gen int, ch chan proxy.LogEntry, done <-chan struct{}) tea.Cmd {
 	return func() tea.Msg {
 		select {
 		case e := <-ch:
-			return logEntryMsg(e)
+			return logEntryMsg{gen: gen, ch: ch, done: done, entry: e}
 		case <-done:
 			return nil
 		}
@@ -164,28 +189,58 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 	return s.onBack()
 }
 
-// startSubscription opens the log subscription on a cmd goroutine. The stop func
-// is stored in s.stopFn under s.mu (not returned via the message) so it survives
-// the screen being torn down before this goroutine reports back: if torndown is
-// already set, this goroutine stops the subscription itself instead of leaking
-// it. Reading s.client is safe because it is set before the screen runs and is
-// never mutated.
-func (s *monitorScreen) startSubscription(ch chan proxy.LogEntry) tea.Cmd {
+// startSubscription opens a log subscription for generation gen on a cmd
+// goroutine. The stop func is stored in s.stopFn under s.mu (not returned via the
+// message) so it survives the screen being torn down before this goroutine
+// reports back. If torndown is set, or a newer subscription has already
+// superseded this one (gen != subGen), this goroutine stops the subscription
+// itself instead of leaking it. Reading s.client is safe because it is set
+// before the screen runs and is never mutated.
+func (s *monitorScreen) startSubscription(gen int, ch chan proxy.LogEntry) tea.Cmd {
 	return func() tea.Msg {
 		stop, done, err := s.client.SubscribeLogs(ch)
 		if err != nil {
-			return subscribeErrMsg{err: err}
+			return subscribeErrMsg{gen: gen, err: err}
 		}
 		s.mu.Lock()
-		if s.torndown {
+		if s.torndown || gen != s.subGen {
 			s.mu.Unlock()
-			stop() // user already navigated back; don't leak the consumer
+			stop() // screen left, or a newer subscription supersedes this one
 			return nil
 		}
 		s.stopFn = stop
 		s.mu.Unlock()
-		return subscriptionStartedMsg{done: done}
+		return subscriptionStartedMsg{gen: gen, ch: ch, done: done}
 	}
+}
+
+// resubscribe tears down any active subscription and starts a fresh one against
+// the current stream. It is used on first connect and on every reconnect: the
+// proxy may have restarted with a brand-new in-memory stream whose sequence
+// numbers reset to 1, so the existing ordered consumer's cursor would be stale
+// and silently deliver nothing. A fresh subscription recreates the consumer with
+// a cursor valid for the current stream.
+func (s *monitorScreen) resubscribe() tea.Cmd {
+	s.mu.Lock()
+	old := s.stopFn
+	s.stopFn = nil
+	s.subGen++
+	gen := s.subGen
+	s.mu.Unlock()
+	if old != nil {
+		old()
+	}
+	ch := make(chan proxy.LogEntry, logChannelBuffer)
+	return s.startSubscription(gen, ch)
+}
+
+// retrySubscribeCmd schedules a delayed resubscribe after a failed attempt so a
+// transient JetStream API error recovers on its own instead of leaving the
+// monitor permanently log-less.
+func retrySubscribeCmd(gen int) tea.Cmd {
+	return tea.Tick(subscribeRetryDelay, func(time.Time) tea.Msg {
+		return retrySubscribeMsg{gen: gen}
+	})
 }
 
 // connStatusMsg carries a connection-state change from the control client:
@@ -263,11 +318,22 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 
 	case subscriptionStartedMsg:
-		// stopFn was already stored by the subscription goroutine under s.mu.
-		s.logsDone = msg.done
-		return s, waitForLog(s.logCh, s.logsDone)
+		if msg.gen != s.subGen {
+			return s, nil // superseded by a newer subscription
+		}
+		// The subscription is live, so the connection and log flow are healthy:
+		// clear any disconnect state armed by an earlier failure or retry.
+		s.disconnectTick = -1
+		w.ClearError()
+		return s, waitForLog(msg.gen, msg.ch, msg.done)
 
 	case subscribeErrMsg:
+		if msg.gen != s.subGen {
+			return s, nil // stale failure from a superseded subscription
+		}
+		// Arm the disconnect grace timer (session mode) so a persistently broken
+		// session still returns to the selector, but also retry so a transient
+		// JetStream API failure recovers without user intervention.
 		if s.onBack != nil {
 			if s.disconnectTick < 0 {
 				s.disconnectTick = 0
@@ -276,16 +342,28 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		} else {
 			w.SetError(msg.err)
 		}
+		return s, retrySubscribeCmd(msg.gen)
+
+	case retrySubscribeMsg:
+		if msg.gen != s.subGen || s.client == nil {
+			return s, nil // superseded, or nothing to subscribe to
+		}
+		return s, s.resubscribe()
 
 	case connStatusMsg:
 		// Mid-session connection loss: surface the error and, when there is a
 		// screen to return to, arm the disconnect grace timer that transitions
 		// back. In standalone mode (no onBack) we still show the error but stay
-		// put. On reconnect, clear it (the ordered consumer resumes on the same
-		// channel).
+		// put. On reconnect, clear the error and resubscribe: the stream may have
+		// been recreated (e.g. a proxy restart resets sequence numbers), so the
+		// old ordered consumer's cursor is stale and must be replaced rather than
+		// assumed to resume on the same channel.
 		if msg.connected {
 			s.disconnectTick = -1
 			w.ClearError()
+			if s.client != nil {
+				return s, tea.Batch(s.resubscribe(), s.watchConn())
+			}
 		} else {
 			if s.onBack != nil && s.disconnectTick < 0 {
 				s.disconnectTick = 0
@@ -297,11 +375,15 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 
 	case logEntryMsg:
-		s.disconnectTick = -1
-		w.ClearError()
-
+		if msg.gen != s.subGen {
+			return s, nil // entry from a superseded subscription; drop it
+		}
+		// Connection state is driven solely by connStatusMsg and the subscription
+		// lifecycle, never by log delivery: an entry may be buffered or replayed
+		// from history and arrive after the proxy died, so it must not be treated
+		// as proof the session is healthy.
 		wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
-		s.items = append(s.items, logItem{entry: proxy.LogEntry(msg)})
+		s.items = append(s.items, logItem{entry: msg.entry})
 		s.cursor.ItemCount = len(s.items)
 		if !wasAtEnd && len(s.items) > s.cursor.Offset+s.cursor.VpHeight {
 			s.newCount++
@@ -311,7 +393,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			s.newCount = 0
 			s.cursor.EnsureVisible()
 		}
-		return s, waitForLog(s.logCh, s.logsDone)
+		return s, waitForLog(msg.gen, msg.ch, msg.done)
 
 	case tui.TickMsg:
 		if s.onBack != nil && s.disconnectTick >= 0 {
@@ -326,8 +408,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		if !s.firstTickSeen {
 			s.firstTickSeen = true
 			if s.client != nil {
-				s.logCh = make(chan proxy.LogEntry, logChannelBuffer)
-				return s, tea.Batch(s.startSubscription(s.logCh), s.watchConn())
+				return s, tea.Batch(s.resubscribe(), s.watchConn())
 			}
 		}
 	}

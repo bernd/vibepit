@@ -231,20 +231,10 @@ func (c *MTLSCredentials) ServerTLSConfig() (*tls.Config, error) {
 
 // ClientTLSConfig returns a tls.Config for CLI commands calling the control API.
 // It pins the ephemeral CA as the only trusted root and presents the client cert.
+// The server cert's only SAN is 127.0.0.1 and every caller dials that address, so
+// pinning ServerName here (via the shared builder) is correct.
 func (c *MTLSCredentials) ClientTLSConfig() (*tls.Config, error) {
-	clientCert, err := tls.X509KeyPair(c.ClientCertPEM(), c.ClientKeyPEM())
-	if err != nil {
-		return nil, fmt.Errorf("load client keypair: %w", err)
-	}
-
-	caPool := x509.NewCertPool()
-	caPool.AddCert(c.CACert)
-
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{clientCert},
-		RootCAs:      caPool,
-	}, nil
+	return clientTLSFromPEM(c.ClientCertPEM(), c.ClientKeyPEM(), c.CACertPEM())
 }
 
 // clientTLSFromPEM builds a client TLS config from PEM material, pinning the CA.

@@ -147,6 +147,9 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		bus.Shutdown()
 		return err
+	case err := <-bus.Fatal():
+		bus.Shutdown()
+		return fmt.Errorf("control bus: %w", err)
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
