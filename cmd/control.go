@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bernd/vibepit/config"
@@ -20,6 +21,11 @@ type ControlClient struct {
 	connEvents chan bool
 	closed     chan struct{}
 	closeOnce  sync.Once
+
+	// reconnects counts observed reconnections (bumped by signalConn on a
+	// reconnect). WatchLogs uses it as the resubscribe generation so a retry and a
+	// reconnect event firing together don't both rebuild the consumer.
+	reconnects atomic.Uint64
 
 	// requestTimeout bounds each request/reply call.
 	requestTimeout time.Duration
@@ -97,6 +103,11 @@ func (c *ControlClient) ConnEvents() <-chan bool { return c.connEvents }
 func (c *ControlClient) Closed() <-chan struct{} { return c.closed }
 
 func (c *ControlClient) signalConn(connected bool) {
+	// A reconnect (connected=true is only signaled by the reconnect handler, never
+	// the initial connect) advances the resubscribe generation WatchLogs keys off.
+	if connected {
+		c.reconnects.Add(1)
+	}
 	for {
 		select {
 		case c.connEvents <- connected:
@@ -209,8 +220,11 @@ const initialLogHistory uint64 = 25
 // when stop is called: callers blocked on ch should also select on done so they
 // unblock at teardown (the channel is never closed, so it is always safe to
 // send to / receive from). stop is idempotent.
-func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), <-chan struct{}, error) {
-	ctx := context.Background()
+//
+// ctx bounds only the JetStream setup calls (stream lookup, info, consumer
+// creation) so a caller canceling it can interrupt a stalled subscribe; the
+// consumer itself runs until stop is called, independent of ctx.
+func (c *ControlClient) SubscribeLogs(ctx context.Context, ch chan<- proxy.LogEntry) (func(), <-chan struct{}, error) {
 	stream, err := c.js.Stream(ctx, proxy.StreamLogs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stream: %w", err)
@@ -256,4 +270,155 @@ func (c *ControlClient) SubscribeLogs(ch chan<- proxy.LogEntry) (func(), <-chan 
 		cc.Stop()
 	})
 	return stop, done, nil
+}
+
+// logChannelBuffer is the buffer on the event channel WatchLogs returns and on
+// the internal consumer-delivery channel that feeds it.
+const logChannelBuffer = 256
+
+// subscribeRetryDelay is how long WatchLogs waits before retrying a failed log
+// subscription, so a transient JetStream API error recovers on its own instead
+// of leaving the stream permanently silent.
+const subscribeRetryDelay = time.Second
+
+// LogEventKind distinguishes the two kinds of item on the WatchLogs stream.
+type LogEventKind int
+
+const (
+	// LogEntryEvent carries a log line in Entry.
+	LogEntryEvent LogEventKind = iota
+	// LogConnEvent carries a connection-state change in Connected.
+	LogConnEvent
+)
+
+// LogEvent is one item on the WatchLogs stream: either a delivered log entry or
+// a connection-state transition.
+type LogEvent struct {
+	Kind      LogEventKind
+	Entry     proxy.LogEntry
+	Connected bool
+}
+
+// WatchLogs returns a single ordered stream of log entries and connection-state
+// changes, and owns the whole subscription lifecycle behind it: it opens the
+// ordered consumer, retries a failed subscription, and on reconnect tears the
+// old consumer down and creates a fresh one. The last part matters because a
+// restarted proxy comes up with a brand-new in-memory stream whose sequence
+// numbers reset to 1, so the previous consumer's cursor would be stale and
+// silently deliver nothing. Callers just render what arrives.
+//
+// The returned channel is closed when ctx is canceled or the client is closed;
+// cancel ctx to stop watching.
+func (c *ControlClient) WatchLogs(ctx context.Context) <-chan LogEvent {
+	out := make(chan LogEvent, logChannelBuffer)
+	go c.runWatch(ctx, out)
+	return out
+}
+
+func (c *ControlClient) runWatch(ctx context.Context, out chan<- LogEvent) {
+	defer close(out)
+
+	// emit delivers an event without blocking past teardown: a caller that has
+	// stopped reading (canceled ctx / closed the client) must not wedge this
+	// goroutine. Returns false when the watcher should exit.
+	emit := func(ev LogEvent) bool {
+		select {
+		case out <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		case <-c.Closed():
+			return false
+		}
+	}
+
+	// entriesCh receives from the currently active consumer. Each subscribe points
+	// it at a fresh channel, and stopActive nils it the moment a consumer is torn
+	// down, so entries the replaced (or a failed-resubscribe's stopped) consumer
+	// had buffered can't leak into the new consumer's replay. A nil channel simply
+	// never fires in the select.
+	var entriesCh chan proxy.LogEntry
+	var stop func()
+	stopActive := func() {
+		if stop != nil {
+			stop()
+			stop = nil
+		}
+		entriesCh = nil
+	}
+	defer stopActive()
+
+	var retryC <-chan time.Time
+	// subscribe opens a fresh consumer on a fresh channel, replacing any active
+	// one. On failure it arms a retry timer instead of latching dead (and leaves
+	// entriesCh nil, so nothing stale is read during the retry interval).
+	subscribe := func() bool {
+		stopActive()
+		ch := make(chan proxy.LogEntry, logChannelBuffer)
+		s, _, err := c.SubscribeLogs(ctx, ch)
+		if err != nil {
+			retryC = time.After(subscribeRetryDelay)
+			return false
+		}
+		entriesCh = ch
+		stop = s
+		retryC = nil
+		return true
+	}
+
+	// subEpoch records the reconnect generation our live consumer was opened for.
+	// ensureSubscribed (re)subscribes only when there is no live consumer for the
+	// current generation, so a retry and a reconnect event that fire together
+	// don't each rebuild the consumer and replay history twice. A new in-memory
+	// stream (sequence reset) only appears across a reconnect, so the reconnect
+	// counter is the right generation key.
+	var subEpoch uint64
+	ensureSubscribed := func() bool {
+		cur := c.reconnects.Load()
+		if stop != nil && subEpoch == cur {
+			return true
+		}
+		if !subscribe() {
+			return false
+		}
+		subEpoch = cur
+		return true
+	}
+
+	if !ensureSubscribed() {
+		if !emit(LogEvent{Kind: LogConnEvent, Connected: false}) {
+			return
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.Closed():
+			return
+		case e := <-entriesCh:
+			if !emit(LogEvent{Kind: LogEntryEvent, Entry: e}) {
+				return
+			}
+		case connected := <-c.ConnEvents():
+			// On reconnect, rebuild the consumer before reporting recovery so it is
+			// live by the time the caller clears its disconnect state; ensureSubscribed
+			// coalesces with a coincident retry. A disconnect is reported as-is; the
+			// dead consumer is replaced on the next reconnect.
+			ev := LogEvent{Kind: LogConnEvent, Connected: connected}
+			if connected && !ensureSubscribed() {
+				ev.Connected = false // resubscribe failed; still down, retry armed
+			}
+			if !emit(ev) {
+				return
+			}
+		case <-retryC:
+			if ensureSubscribed() {
+				if !emit(LogEvent{Kind: LogConnEvent, Connected: true}) {
+					return
+				}
+			}
+		}
+	}
 }

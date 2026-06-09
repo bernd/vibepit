@@ -33,14 +33,13 @@ const (
 	// nats.CustomInboxPrefix(NATSSandboxInboxPrefix) for request/reply to work.
 	NATSSandboxInboxPrefix = "_INBOX.sandbox"
 
-	natsReadyTimeout    = 5 * time.Second
-	publishAsyncPending = 256
+	natsReadyTimeout = 5 * time.Second
 	// logPublishBuffer is the hand-off queue between the request path and the
 	// background publisher goroutine. The request path drops entries when it is
 	// full rather than blocking on the publish; sized to absorb bursts.
 	logPublishBuffer = 1024
-	// shutdownFlushTimeout bounds how long Shutdown waits for outstanding async
-	// publish acks before tearing the bus down.
+	// shutdownFlushTimeout bounds how long Shutdown waits to flush buffered
+	// publishes to the server before tearing the bus down.
 	shutdownFlushTimeout = 2 * time.Second
 )
 
@@ -73,18 +72,17 @@ type Bus struct {
 	shutdownOnce      sync.Once
 
 	// logCh hands log entries from the request path to the background publisher
-	// goroutine. Marshaling and PublishAsync happen only on that goroutine, so the
-	// request path never blocks and the pending-window check is race-free.
-	// pubDone signals the goroutine to drain and exit; pubStopped is closed when
-	// it has.
+	// goroutine. Marshaling and the core NATS publish happen only on that
+	// goroutine, so the request path never blocks. pubDone signals the goroutine
+	// to drain and exit; pubStopped is closed when it has.
 	logCh      chan logMsg
 	pubDone    chan struct{}
 	pubStopped chan struct{}
 
 	// droppedLogs counts log entries dropped before they reached the stream —
-	// when the request-path hand-off queue is full, when the pending-ack window is
-	// full, or on a marshal error. Surfaced in the stats reply so an undercount
-	// (best-effort observability under overload) is visible rather than silent.
+	// when the request-path hand-off queue is full, or on a marshal or publish
+	// error. Surfaced in the stats reply so an undercount (best-effort
+	// observability under overload) is visible rather than silent.
 	droppedLogs atomic.Uint64
 }
 
@@ -182,9 +180,8 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	// using the bound port even though the listener is on 0.0.0.0.
 	clientURL := fmt.Sprintf("tls://127.0.0.1:%d", ns.Addr().(*net.TCPAddr).Port)
 
-	// Construct the Bus now so the async publish-error handler installed below can
-	// count failed publishes into droppedLogs. The publisher/watcher goroutines
-	// are not started until ok=true at the end, so an early failure leaks nothing.
+	// Construct the Bus now; the publisher/watcher goroutines are not started until
+	// ok=true at the end, so an early failure leaks nothing.
 	b := &Bus{
 		ns: ns, storeDir: storeDir, clientURL: clientURL, opts: opts,
 		fatal:             make(chan error, 1),
@@ -206,15 +203,10 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	}
 	b.nc = nc
 
-	js, err := jetstream.New(nc,
-		jetstream.WithPublishAsyncMaxPending(publishAsyncPending),
-		// Async publish failures (connection closed, reconnect buffer discarded,
-		// no stream response, invalid ack, ...) are delivered here rather than at
-		// the PublishAsync call site. Count them so StatsReply.Dropped reflects the
-		// real loss, not just the synchronous pre-check/marshal drops.
-		jetstream.WithPublishAsyncErrHandler(func(jetstream.JetStream, *nats.Msg, error) {
-			b.droppedLogs.Add(1)
-		}))
+	// JetStream context is used for stream management and the stats/monitor
+	// consumers; log entries are published with core NATS (see handlePublish), so
+	// no async-publish options are configured here.
+	js, err := jetstream.New(nc)
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: %w", err)
 	}
@@ -266,7 +258,7 @@ func (b *Bus) ClientURL() string { return b.clientURL }
 // Addr returns the listener host:port (used by tests / port discovery).
 func (b *Bus) Addr() string { return b.ns.Addr().String() }
 
-// Shutdown stops the publisher, waits for tail publishes to be acked, drains the
+// Shutdown stops the publisher, flushes tail publishes to the server, drains the
 // internal client, stops the embedded server, and removes the store directory.
 func (b *Bus) Shutdown() {
 	// Mark this teardown intentional before stopping the server so watchServer
@@ -280,7 +272,7 @@ func (b *Bus) Shutdown() {
 			close(b.pubDone)
 		}
 	})
-	// Wait for the publisher to drain buffered entries (issuing their PublishAsync)
+	// Wait for the publisher to drain buffered entries (issuing their publishes)
 	// and exit, bounded so a broken server can't wedge shutdown.
 	if b.pubStopped != nil {
 		select {
@@ -288,14 +280,10 @@ func (b *Bus) Shutdown() {
 		case <-time.After(shutdownFlushTimeout):
 		}
 	}
-	if b.js != nil {
-		// Best-effort: wait for outstanding async publish acks so tail log entries
-		// land in the stream before teardown. nc.Drain() flushes protocol bytes but
-		// does not wait for JetStream acks, and the memory stream is destroyed on
-		// ns.Shutdown().
-		_ = b.waitAcks(shutdownFlushTimeout)
-	}
 	if b.nc != nil {
+		// Best-effort: flush buffered publishes to the server so tail log entries
+		// land in the memory stream before ns.Shutdown() destroys it.
+		_ = b.nc.FlushTimeout(shutdownFlushTimeout)
 		_ = b.nc.Drain()
 	}
 	if b.ns != nil {
@@ -336,8 +324,7 @@ func (p busPublisher) PublishLog(e LogEntry) {
 		e.Time = time.Now()
 	}
 	// Runs synchronously on the proxy/DNS request path, so it must never block or
-	// allocate beyond this hand-off: marshaling and the JetStream publish (which
-	// can stall up to ~200ms when the pending-ack window fills) happen on the
+	// allocate beyond this hand-off: marshaling and the publish happen on the
 	// background goroutine instead. Drop when the queue is full — logs/stats are
 	// best-effort observability, not control, so a dropped entry under sustained
 	// overload is preferable to slowing the filter decision. The drop is counted
@@ -352,10 +339,9 @@ func (p busPublisher) PublishLog(e LogEntry) {
 // LogPublisher returns the producer-facing publisher.
 func (b *Bus) LogPublisher() LogPublisher { return busPublisher{ch: b.logCh, dropped: &b.droppedLogs} }
 
-// runPublisher owns all marshaling and PublishAsync calls. Because it is the
-// sole publisher, the pending-window check and PublishAsync are serial (no
-// TOCTOU race), and any publish stall stays off the request path. On pubDone it
-// drains the queue so tail entries land before teardown, then exits.
+// runPublisher owns all marshaling and publishing. Because it is the sole
+// publisher, the work stays off the request path. On pubDone it drains the queue
+// so tail entries land before teardown, then exits.
 func (b *Bus) runPublisher() {
 	defer close(b.pubStopped)
 	for {
@@ -380,27 +366,29 @@ func (b *Bus) handlePublish(m logMsg) {
 		close(m.flush) // barrier reached: every entry queued before it is published
 		return
 	}
-	if b.js.PublishAsyncPending() >= publishAsyncPending {
-		b.droppedLogs.Add(1)
-		return
-	}
 	data, err := json.Marshal(m.entry)
 	if err != nil {
 		b.droppedLogs.Add(1)
 		return
 	}
-	// A synchronous error means the message never entered the async pipeline (so
-	// the async error handler won't see it) — count it here. Async ack failures
-	// are counted by WithPublishAsyncErrHandler instead, so there is no double
-	// count.
-	if _, err := b.js.PublishAsync(SubjectLogs, data); err != nil {
+	// Core publish: the message lands on SubjectLogs and the stream captures it.
+	// There is no per-message ack — for best-effort, memory-backed observability
+	// logs this trades delivery confirmation for removing the async ack pipeline.
+	// The producer is gated by network I/O and can't outrun an in-process memory
+	// consumer, so ack-based flow control bought nothing here. A synchronous error
+	// (connection closed, reconnect buffer exceeded) is the only remaining failure
+	// mode, so count it.
+	if err := b.nc.Publish(SubjectLogs, data); err != nil {
 		b.droppedLogs.Add(1)
 	}
 }
 
 // FlushPublishes waits until every entry queued before this call has been
-// published and acked. The barrier ensures the background publisher has drained
-// the queue up to this point before we wait on PublishAsyncComplete.
+// published to the server. The barrier ensures the background publisher has
+// drained the queue up to this point, then a connection flush confirms the
+// server received those publishes — and, since it processes a connection's
+// messages in order, captured them into the stream. Used by tests to make
+// published entries observable before asserting.
 func (b *Bus) FlushPublishes(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	barrier := make(chan struct{})
@@ -414,19 +402,7 @@ func (b *Bus) FlushPublishes(timeout time.Duration) error {
 	case <-time.After(time.Until(deadline)):
 		return fmt.Errorf("publish flush timeout")
 	}
-	return b.waitAcks(time.Until(deadline))
-}
-
-// waitAcks waits for outstanding async publishes to be acked.
-func (b *Bus) waitAcks(timeout time.Duration) error {
-	t := time.NewTimer(timeout)
-	defer t.Stop()
-	select {
-	case <-b.js.PublishAsyncComplete():
-		return nil
-	case <-t.C:
-		return fmt.Errorf("publish flush timeout")
-	}
+	return b.nc.FlushTimeout(time.Until(deadline))
 }
 
 // StatsReply is the response to the stats subject: per-domain counters plus the

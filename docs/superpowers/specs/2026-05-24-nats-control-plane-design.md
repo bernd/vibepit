@@ -71,7 +71,7 @@ left disabled** so nothing unauthenticated is exposed.
 ### Components
 
 ```
-HTTPProxy ─┐   PublishAsync                ┌─► monitor   (ordered consumer: history + live)
+HTTPProxy ─┐   Publish (core)              ┌─► monitor   (ordered consumer: history + live)
            ├─► "logs.events" ─► [JetStream ├─► ward      (ordered consumer — future use)
 DNSServer ─┘                    log stream]└─► StatsAggregator (in-process consumer ─► DomainStats)
                                   ▲ authoritative ring (MaxMsgs, DiscardOld, memory)
@@ -83,9 +83,9 @@ CLI ──► request "allow.dns"  ──► AllowlistHandler ──► DNSAllow
 ```
 
 `HTTPProxy` and `DNSServer` lose their `*LogBuffer` field. They take a thin
-publisher dependency (a JetStream `Publisher` interface over the proxy's internal
-NATS client) and `PublishAsync` each entry to `logs.events`. They never import the
-stream or the aggregator.
+publisher dependency (a `LogPublisher` over the proxy's internal NATS client) and
+publish each entry to `logs.events` with core `nc.Publish`; the JetStream stream
+captures that subject. They never import the stream or the aggregator.
 
 The **JetStream stream** is the authoritative, ordered log ring. It is configured
 with `Storage: Memory`, `MaxMsgs: 10000` (today's `LogBufferCapacity`),
@@ -274,30 +274,28 @@ Subject-specific payloads:
 ### Producer publish semantics
 
 Producers (`HTTPProxy`, `DNSServer`) call `PublishLog` synchronously on the
-proxy/DNS request path, so it **must never block**. `js.PublishAsync` does not
-guarantee that: once the pending-ack window
-(`jetstream.WithPublishAsyncMaxPending(N)`) is full it *stalls* the caller (up to
-a ~200ms stall-wait) and then **drops** the entry with `ErrTooManyStalledMsgs`
-(`nats.go/jetstream/publish.go`). That would add latency to live proxied traffic
-and silently lose entries exactly under load.
+proxy/DNS request path, so it **must never block**. `PublishLog` does only a
+non-blocking hand-off: it sends the entry to a buffered channel and a single
+dedicated publisher goroutine drains it, doing the `json.Marshal` and the publish
+entirely off the request path. When the hand-off queue is full or an entry fails
+to marshal or publish, the entry is **dropped** and a counter is incremented.
+Logs and stats are not control data; an undercount under sustained overload is
+the accepted trade-off for keeping the request path fast, and the drop counter is
+surfaced in the `stats` reply (`StatsReply.Dropped`) so the undercount is visible
+rather than silent.
 
-Therefore `PublishLog` does only a non-blocking hand-off: it sends the entry to a
-buffered channel and a single dedicated publisher goroutine drains it, doing the
-`json.Marshal` and `PublishAsync` (and absorbing any stall) entirely off the
-request path. Because that goroutine is the sole publisher, its
-`PublishAsyncPending()` check and `PublishAsync` are serial — no
-check-then-publish race — and it never adds latency to the filter decision. When
-the hand-off queue is full, the pending-ack window is full, or an entry fails to
-marshal, the entry is **dropped** and a counter is incremented. Logs and stats
-are not control data; an undercount under sustained overload is the accepted
-trade-off for keeping the request path fast, and the drop counter is surfaced in
-the `stats` reply (`StatsReply.Dropped`) so the undercount is visible rather than
-silent.
-
-> **Earlier prototype caveat:** a 20,000-message burst through a window of 64
-> showed 0 drops only because the in-process memory stream acked fast enough that
-> the window never stayed full past the stall-wait. It does **not** prove
-> losslessness when acks genuinely stall — hence the pre-check-and-drop above.
+> **As-built (revised after review):** the publisher goroutine uses **core
+> `nc.Publish`**, not `js.PublishAsync`. The JetStream stream still captures the
+> `logs.events` subject, so history and ordering are unchanged, but there is no
+> per-message ack pipeline. The original design used `PublishAsync` with a
+> `WithPublishAsyncMaxPending` window plus a `PublishAsyncPending()` pre-check to
+> avoid the ~200ms stall-and-drop that a full ack window causes
+> (`ErrTooManyStalledMsgs`). That machinery was removed: the producer is gated by
+> real network I/O and cannot outrun an in-process, memory-backed consumer, so
+> ack-based flow control never engaged and bought nothing here. The trade-off is
+> weaker delivery confirmation (core publish confirms only that the client queued
+> the bytes), which is acceptable for best-effort, memory-backed observability
+> logs. Drops now come only from a full hand-off queue or a marshal/publish error.
 
 ### Log Entry ID
 
@@ -343,8 +341,8 @@ dependency that an earlier revision proposed.
 
 1. Stop HTTP proxy, DNS server, SSH forwarder with the existing 5-second
    deadline.
-2. Flush outstanding `PublishAsync` acks, then `nc.Drain()` on the internal
-   client — blocks until handler/consumer queues empty.
+2. Flush buffered publishes to the server (`nc.FlushTimeout`), then `nc.Drain()`
+   on the internal client — blocks until handler/consumer queues empty.
 3. `ns.Shutdown()` on the embedded NATS server.
 
 Bus errors flow to the existing `errCh` in `Server.Run` like HTTP/DNS errors.
@@ -404,23 +402,34 @@ Method changes:
 | `Logs()` | **Removed.** It had no production caller (test-only), and the ordered consumer subsumes one-shot history. Tests read history via `SubscribeLogs` (read-N-then-unsub) or a test ordered consumer. |
 | `LogsAfter(id uint64)` | **Removed.** Its only production caller was the monitor poll loop; backfill is now part of the ordered consumer. |
 | `LogsSince(t time.Time)` | **Not introduced.** No `since` cursor — the ordered consumer replays from the start of the retained stream. |
-| `SubscribeLogs(ch chan<- LogEntry) (unsub func(), error)` | **New.** `js.Stream(ctx, "VIBEPIT_LOGS")` → `stream.OrderedConsumer(ctx, {DeliverPolicy: DeliverAllPolicy})` → `cons.Consume(...)`, decoding each `jetstream.Msg` into the channel — history first, then live, in stream order. `unsub` calls `ConsumeContext.Stop()`. Reconnect/gap recovery is internal to the ordered consumer (**verified**: across a real connection drop, messages published during the outage were backfilled in order on reconnect, no gaps, 0 duplicates). |
-| `OnReconnect(fn func())` | **Optional.** Thin wrapper over `nats.ReconnectHandler` for connection-status UI only; log gap-fill is automatic, so it is no longer needed for correctness. |
+| `SubscribeLogs(ctx, ch chan<- LogEntry) (stop func(), done <-chan struct{}, error)` | **New (primitive).** `js.Stream(ctx, "VIBEPIT_LOGS")` → `stream.OrderedConsumer(ctx, ...)` → `cons.Consume(...)`, decoding each `jetstream.Msg` into the channel — a bounded tail of retained history then live entries, in stream order. `stop` calls `ConsumeContext.Stop()`; `ctx` bounds only the setup calls so a stalled subscribe is cancelable. |
+| `WatchLogs(ctx) <-chan LogEvent` | **New (as-built; replaces direct `SubscribeLogs` use in the UI).** Built on `SubscribeLogs`, it owns the whole subscription lifecycle — open, retry on failure, and **resubscribe on reconnect** — and emits one ordered stream of `LogEvent`s, each either a log entry or a connection-state change. Canceling `ctx` closes the stream. See the as-built correction below. |
 | `Stats()` / `Config()` / `AllowHTTP()` / `AllowDNS()` | Same signatures; internals use `Request` + `decodeReply`. |
 | `Close()` | `nc.Close()`. |
 
 ### Monitor TUI Changes
 
 `cmd/monitor_ui.go`:
-- Call `SubscribeLogs(ch)` once. The ordered consumer delivers retained history
-  first, then live entries, in order. The Bubble Tea loop receives a "new log
-  entry" message per channel item and appends.
-- Dedup by stream sequence as a cheap safety net (ordered consumers can redeliver
-  from the last acked sequence after a reconnect).
+- Call `WatchLogs(ctx)` once and render what arrives: a `LogEntryEvent` appends a
+  line; a `LogConnEvent` drives the connection-status UI (error banner and the
+  disconnect grace timer that returns to the session selector). Cancel `ctx` on
+  teardown.
 - `pollLogsCmd`, `pollCursor`, and the 1s poll cadence are **removed** — delivery
   is event-driven and ordered.
-- No separate startup backfill call and no `since`/`safetyMargin` reconnect
-  logic; the ordered consumer owns both.
+- The screen holds **no** subscription state — no consumer handle, no
+  generation/epoch, no reconnect or retry logic. All of that lives behind
+  `WatchLogs` in `ControlClient`.
+
+> **As-built correction (revised after review):** the original design assumed the
+> ordered consumer transparently survives reconnects ("gap recovery is internal
+> to the ordered consumer"). That holds for a transient network blip to the *same*
+> proxy, but **not** across a proxy restart: the memory-backed stream is recreated
+> with sequence numbers reset to 1, so the old consumer's cursor points past the
+> new head and silently delivers nothing. `WatchLogs` therefore tears the consumer
+> down and opens a fresh one on every reconnect. To avoid replaying history twice
+> when a retry and a reconnect coincide, `ControlClient` keys resubscription on a
+> reconnect-generation counter and skips a redundant rebuild for a generation it
+> already holds a live consumer for.
 
 ### CLI Tools
 
@@ -435,9 +444,9 @@ user-visible error (the async error handler covers permission violations).
 - New `proxy/bus_test.go` — starts an embedded NATS server with JetStream
   (memory) in-process, dials a test client, asserts each request/reply subject's
   handler and the log stream end-to-end. Replaces `api_test.go`.
-- Log stream tests: `PublishAsync` to `logs.events`, assert an ordered consumer
-  reads them in stream order; assert `MaxMsgs`/`DiscardOld` retention; assert the
-  stream sequence is monotonic.
+- Log stream tests: publish to `logs.events` (core `nc.Publish`), assert an
+  ordered consumer reads them in stream order; assert `MaxMsgs`/`DiscardOld`
+  retention; assert the stream sequence is monotonic.
 - `StatsAggregator` tests: publish entries, assert the `DomainStats` map folds
   correctly and that stats remain cumulative beyond the retained window.
 - `HTTPProxy` and `DNSServer` tests stop reaching into a ring. They assert via a
@@ -474,8 +483,8 @@ Modified:
   lifecycle, drop control HTTP server.
 - `proxy/log.go` — `LogBuffer` ring/history responder removed; `StatsAggregator`
   added (in-process stream consumer + `stats` responder). `LogEntry.ID` removed.
-- `proxy/http.go`, `proxy/dns.go` — take a JetStream publisher dependency,
-  `PublishAsync` to `logs.events`; drop `*LogBuffer` field.
+- `proxy/http.go`, `proxy/dns.go` — take a `LogPublisher` dependency, publish to
+  `logs.events` with core `nc.Publish`; drop `*LogBuffer` field.
 - `proxy/mtls.go` — mint three client certs per session (`vibepit-internal`
   passed to the proxy container via env; `vibepit-user` written; `vibepit-sandbox`
   minted only). See the credential-exposure note above.

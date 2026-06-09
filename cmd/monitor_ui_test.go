@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,22 +49,24 @@ func footerKeyDescs(keys []tui.FooterKey) []string {
 	return descs
 }
 
-func TestWaitForLog_UnblocksOnDone(t *testing.T) {
-	ch := make(chan proxy.LogEntry) // unbuffered, never written
-	done := make(chan struct{})
-	cmd := waitForLog(1, ch, done)
+// connEvent and entryEvent build the WatchLogs messages the monitor consumes, so
+// tests can drive the connection-state and log-delivery paths through Update.
+func connEvent(connected bool) logEventMsg {
+	return logEventMsg{ev: LogEvent{Kind: LogConnEvent, Connected: connected}, ok: true}
+}
 
-	got := make(chan tea.Msg, 1)
-	go func() { got <- cmd() }()
+func entryEvent(e proxy.LogEntry) logEventMsg {
+	return logEventMsg{ev: LogEvent{Kind: LogEntryEvent, Entry: e}, ok: true}
+}
 
-	// No entry will ever arrive; closing done must release the goroutine.
-	close(done)
-	select {
-	case m := <-got:
-		assert.Nil(t, m, "waitForLog should yield nil and exit when done is closed")
-	case <-time.After(time.Second):
-		t.Fatal("waitForLog leaked: it did not unblock when done was closed")
-	}
+func TestWaitForEvent_ClosedChannelYieldsNotOk(t *testing.T) {
+	ch := make(chan LogEvent)
+	close(ch)
+
+	msg := waitForEvent(ch)()
+	ev, ok := msg.(logEventMsg)
+	require.True(t, ok, "waitForEvent should yield a logEventMsg")
+	assert.False(t, ev.ok, "a closed stream must yield ok=false so the reader stops")
 }
 
 func TestMonitorScreen_WindowSizeMsg(t *testing.T) {
@@ -316,9 +319,9 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 100, Height: 6})
 		s.cursor.Pos = 2 // not at end (4)
 
-		s.Update(logEntryMsg{entry: proxy.LogEntry{
+		s.Update(entryEvent(proxy.LogEntry{
 			Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy,
-		}}, w)
+		}), w)
 
 		assert.Equal(t, 1, s.newCount)
 		assert.Equal(t, 2, s.cursor.Pos)
@@ -334,7 +337,7 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 	})
 }
 
-func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
+func TestMonitorScreen_StartsWatchOnFirstTick(t *testing.T) {
 	bus, creds := newCmdTestBus(t)
 	require.NoError(t, bus.RegisterHandlers())
 	client := newCmdTestClient(t, bus, creds)
@@ -347,82 +350,33 @@ func TestMonitorScreen_StartsSubscriptionOnFirstTick(t *testing.T) {
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
-	// First tick should start the subscription exactly once and bump the
-	// generation counter. The channel is created inside resubscribe on the Update
-	// goroutine, not in the cmd.
+	// First tick opens the WatchLogs stream exactly once and arms a reader.
 	_, cmd := s.Update(tui.TickMsg{}, w)
-	require.NotNil(t, cmd, "first tick should start the log subscription")
-	require.Equal(t, 1, s.subGen, "first tick should open subscription generation 1")
+	require.NotNil(t, cmd, "first tick should open the log watch")
+	require.NotNil(t, s.events, "first tick should store the event stream")
 
-	// Subsequent ticks must not start another subscription.
+	// Subsequent ticks must not open another watch.
+	prev := s.events
 	_, secondCmd := s.Update(tui.TickMsg{}, w)
-	assert.Nil(t, secondCmd, "should not re-subscribe after the first tick")
+	assert.Nil(t, secondCmd, "should not re-open the watch after the first tick")
+	assert.Equal(t, prev, s.events, "the event stream must not be replaced on later ticks")
 
-	// The first tick batches [startSubscription, watchConn]. Run the
-	// subscription command (index 0): it establishes the consumer and stores the
-	// stop func in s.stopFn under the mutex (so it survives an early teardown).
-	// watchConn (index 1) blocks on the conn-event channel, so it is not run here.
-	batch, ok := cmd().(tea.BatchMsg)
-	require.True(t, ok, "first tick should batch the subscription and conn watch")
-	require.Len(t, batch, 2)
-	started, ok := batch[0]().(subscriptionStartedMsg)
-	require.True(t, ok, "subscription command should yield a subscriptionStartedMsg")
-	require.Equal(t, 1, started.gen, "subscription should be tagged with generation 1")
-	s.mu.Lock()
-	require.NotNil(t, s.stopFn, "subscription goroutine should store the stop func under the lock")
-	s.mu.Unlock()
-
-	// subscriptionStartedMsg arms the first channel read.
-	_, readCmd := s.Update(started, w)
-	require.NotNil(t, readCmd, "subscriptionStartedMsg should arm the channel read")
-
-	// A published entry flows through the channel and yields a logEntryMsg.
+	// A published entry flows through the stream and yields a log-entry event.
 	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "api.openai.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
 	require.NoError(t, bus.FlushPublishes(2*time.Second))
 
-	msg := readCmd()
-	entry, ok := msg.(logEntryMsg)
-	require.True(t, ok, "channel read should yield a logEntryMsg")
-	assert.Equal(t, "api.openai.com", entry.entry.Domain)
+	msg := cmd()
+	ev, ok := msg.(logEventMsg)
+	require.True(t, ok, "watch read should yield a logEventMsg")
+	require.True(t, ev.ok)
+	require.Equal(t, LogEntryEvent, ev.ev.Kind)
+	assert.Equal(t, "api.openai.com", ev.ev.Entry.Domain)
 }
 
-// TestMonitorScreen_TeardownBeforeSubscriptionStarted covers the race where the
-// user navigates back after the subscription is armed but before its goroutine
-// reports in: the goroutine must stop the consumer itself (not leak it) and not
-// store a stop func into the dead screen.
-func TestMonitorScreen_TeardownBeforeSubscriptionStarted(t *testing.T) {
-	bus, creds := newCmdTestBus(t)
-	require.NoError(t, bus.RegisterHandlers())
-	client := newCmdTestClient(t, bus, creds)
-
-	s := newMonitorScreen(&SessionInfo{SessionID: "test123456"}, client,
-		func() tui.Screen { return &testStubScreen{} })
-
-	// Simulate transitionBack having already run (user left) before the
-	// subscription goroutine completes.
-	s.mu.Lock()
-	s.torndown = true
-	s.subGen = 1
-	s.mu.Unlock()
-
-	ch := make(chan proxy.LogEntry, logChannelBuffer)
-
-	// Run the subscription goroutine body synchronously: SubscribeLogs succeeds
-	// (client is live), then it must see torndown, stop the consumer, and yield
-	// nil instead of a subscriptionStartedMsg.
-	msg := s.startSubscription(1, ch)()
-	assert.Nil(t, msg, "late subscription should self-clean and yield nil after teardown")
-
-	s.mu.Lock()
-	assert.Nil(t, s.stopFn, "stop func must not be stored on a torn-down screen")
-	s.mu.Unlock()
-}
-
-// TestMonitorScreen_ReconnectResubscribes covers finding 1: on reconnect the
-// monitor must tear down and re-create the subscription (new generation) rather
-// than assume the old ordered consumer resumes — a restarted proxy resets the
-// stream's sequence numbers, leaving the old cursor pointing past the new head.
-func TestMonitorScreen_ReconnectResubscribes(t *testing.T) {
+// TestMonitorScreen_TransitionBackCancelsWatch verifies leaving the screen
+// cancels the watch context, which closes the event stream so the reader exits
+// rather than leaking.
+func TestMonitorScreen_TransitionBackCancelsWatch(t *testing.T) {
 	bus, creds := newCmdTestBus(t)
 	require.NoError(t, bus.RegisterHandlers())
 	client := newCmdTestClient(t, bus, creds)
@@ -434,85 +388,26 @@ func TestMonitorScreen_ReconnectResubscribes(t *testing.T) {
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
 	_, cmd := s.Update(tui.TickMsg{}, w)
-	require.NotNil(t, cmd, "first tick opens the subscription")
-	require.Equal(t, 1, s.subGen, "first tick is generation 1")
+	require.NotNil(t, cmd, "first tick opens the watch")
+	events := s.events
+	require.NotNil(t, events)
 
-	// Mid-session disconnect arms the grace timer...
-	s.Update(connStatusMsg{connected: false}, w)
-	require.Equal(t, 0, s.disconnectTick, "disconnect arms the grace timer")
+	screen := s.transitionBack(w)
+	_, isStub := screen.(*testStubScreen)
+	assert.True(t, isStub, "transitionBack should return the onBack screen")
 
-	// ...and reconnect resubscribes with a fresh generation and clears the timer.
-	_, reCmd := s.Update(connStatusMsg{connected: true}, w)
-	require.NotNil(t, reCmd, "reconnect should start a fresh subscription")
-	assert.Equal(t, 2, s.subGen, "reconnect opens a new subscription generation")
-	assert.Equal(t, -1, s.disconnectTick, "reconnect clears the disconnect timer")
-}
-
-// TestMonitorScreen_SubscriptionStartedRespectsConnState covers the follow-up to
-// finding 2: a delayed subscriptionStartedMsg must not clear the disconnect timer
-// while the connection is known down (SubscribeLogs succeeded, then the proxy
-// died), but must clear it on a retry recovery while still connected.
-func TestMonitorScreen_SubscriptionStartedRespectsConnState(t *testing.T) {
-	t.Run("delayed start after disconnect keeps the timer armed", func(t *testing.T) {
-		s, w := makeTestSetup(0)
-		s.onBack = func() tui.Screen { return &testStubScreen{} }
-		s.subGen = 1
-
-		s.Update(connStatusMsg{connected: false}, w)
-		require.Equal(t, 0, s.disconnectTick, "disconnect arms the timer")
-		require.True(t, s.connDown)
-
-		s.Update(subscriptionStartedMsg{gen: 1}, w)
-		assert.Equal(t, 0, s.disconnectTick, "delayed start must not clear the timer while disconnected")
-	})
-
-	t.Run("start clears the timer on retry recovery while connected", func(t *testing.T) {
-		s, w := makeTestSetup(0)
-		s.onBack = func() tui.Screen { return &testStubScreen{} }
-		s.subGen = 1
-
-		// Subscribe failed transiently with the connection still up.
-		s.Update(subscribeErrMsg{gen: 1, err: fmt.Errorf("transient")}, w)
-		require.Equal(t, 0, s.disconnectTick)
-		require.False(t, s.connDown)
-
-		s.Update(subscriptionStartedMsg{gen: 1}, w)
-		assert.Equal(t, -1, s.disconnectTick, "successful retry clears the timer")
-	})
-}
-
-// TestMonitorScreen_SubscribeErrorRetries covers finding 3: a failed subscription
-// schedules a retry instead of latching dead, and a stale failure (from a
-// superseded generation) is ignored.
-func TestMonitorScreen_SubscribeErrorRetries(t *testing.T) {
-	s, w := makeTestSetup(0) // nil client, standalone (no onBack)
-	s.subGen = 1
-
-	_, cmd := s.Update(subscribeErrMsg{gen: 1, err: fmt.Errorf("boom")}, w)
-	require.NotNil(t, cmd, "subscribe error should schedule a retry")
-	require.Error(t, w.Err())
-
-	_, staleCmd := s.Update(subscribeErrMsg{gen: 0, err: fmt.Errorf("old")}, w)
-	assert.Nil(t, staleCmd, "a stale subscribe error must be ignored")
-}
-
-// TestMonitorScreen_StaleEntriesDropped covers finding 2: entries and started
-// messages from a superseded subscription generation are dropped, so a buffered
-// or replayed entry can't append stale lines or revive a dead session.
-func TestMonitorScreen_StaleEntriesDropped(t *testing.T) {
-	s, w := makeTestSetup(0)
-	s.subGen = 2
-
-	_, cmd := s.Update(logEntryMsg{gen: 1, entry: proxy.LogEntry{Domain: "stale.com"}}, w)
-	assert.Nil(t, cmd, "stale entry must not re-arm the reader")
-	assert.Empty(t, s.items, "stale entry must not be appended")
-
-	_, startedCmd := s.Update(subscriptionStartedMsg{gen: 1}, w)
-	assert.Nil(t, startedCmd, "stale subscriptionStartedMsg must be ignored")
-
-	s.Update(logEntryMsg{gen: 2, entry: proxy.LogEntry{Domain: "fresh.com"}}, w)
-	require.Len(t, s.items, 1, "current-generation entry is appended")
-	assert.Equal(t, "fresh.com", s.items[0].entry.Domain)
+	// Canceling the watch closes the stream; a pending read yields ok=false.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("watch channel did not close after transitionBack canceled the context")
+		}
+	}
 }
 
 func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
@@ -591,13 +486,13 @@ func TestMonitorScreen_EscWithoutOnBack(t *testing.T) {
 }
 
 func TestMonitorScreen_DisconnectTransition(t *testing.T) {
-	t.Run("subscribe error starts disconnect timer", func(t *testing.T) {
+	t.Run("disconnect event starts disconnect timer", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
-		assert.Equal(t, 0, s.disconnectTick, "disconnectTick should be 0 on first error")
+		s.Update(connEvent(false), w)
+		assert.Equal(t, 0, s.disconnectTick, "disconnectTick should be 0 on first disconnect")
 	})
 
 	t.Run("transitions after 12 ticks (3s)", func(t *testing.T) {
@@ -605,7 +500,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
+		s.Update(connEvent(false), w)
 
 		// Simulate 11 ticks — should stay on monitor.
 		for range 11 {
@@ -621,7 +516,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 	t.Run("no transition without onBack", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		// onBack is nil.
-		s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
+		s.Update(connEvent(false), w)
 
 		for range 20 {
 			screen, _ := s.Update(tui.TickMsg{}, w)
@@ -634,11 +529,11 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		s.onBack = func() tui.Screen { return &testStubScreen{} }
 
 		// A delivered log entry must not by itself drive connection state.
-		s.Update(logEntryMsg{entry: proxy.LogEntry{Domain: "a.com"}}, w)
+		s.Update(entryEvent(proxy.LogEntry{Domain: "a.com"}), w)
 		require.Equal(t, -1, s.disconnectTick, "log delivery does not change connection state")
 
 		// ...then the proxy dies mid-session.
-		s.Update(connStatusMsg{connected: false}, w)
+		s.Update(connEvent(false), w)
 		assert.Equal(t, 0, s.disconnectTick, "disconnect should arm the timer")
 	})
 
@@ -647,7 +542,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(connStatusMsg{connected: false}, w)
+		s.Update(connEvent(false), w)
 		for range disconnectGraceTicks - 1 {
 			screen, _ := s.Update(tui.TickMsg{}, w)
 			assert.Equal(t, s, screen, "should not transition before grace elapses")
@@ -661,10 +556,10 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(connStatusMsg{connected: false}, w)
+		s.Update(connEvent(false), w)
 		require.Equal(t, 0, s.disconnectTick, "armed on disconnect")
 
-		s.Update(connStatusMsg{connected: true}, w)
+		s.Update(connEvent(true), w)
 		assert.Equal(t, -1, s.disconnectTick, "reconnect should disarm the timer")
 
 		// Subsequent ticks must not transition.
@@ -678,7 +573,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		s, w := makeTestSetup(5)
 		// onBack is nil — standalone monitor with nowhere to return to.
 
-		s.Update(connStatusMsg{connected: false}, w)
+		s.Update(connEvent(false), w)
 		require.Error(t, w.Err(), "disconnect should surface an error in standalone mode")
 		assert.Contains(t, w.Err().Error(), "disconnected")
 		assert.Equal(t, -1, s.disconnectTick, "timer must not arm without onBack")
@@ -708,7 +603,7 @@ func TestMonitorScreen_DisconnectFooterMessage(t *testing.T) {
 	s, w := makeTestSetup(5)
 	s.onBack = func() tui.Screen { return &testStubScreen{} }
 
-	s.Update(subscribeErrMsg{err: fmt.Errorf("connection refused")}, w)
+	s.Update(connEvent(false), w)
 	require.Error(t, w.Err())
 	assert.Contains(t, w.Err().Error(), "test123456")
 	assert.Contains(t, w.Err().Error(), "disconnected")
@@ -724,7 +619,7 @@ func TestMonitor_LiveDelivery(t *testing.T) {
 	client := newCmdTestClient(t, bus, creds)
 
 	ch := make(chan proxy.LogEntry, 8)
-	stop, _, err := client.SubscribeLogs(ch)
+	stop, _, err := client.SubscribeLogs(context.Background(), ch)
 	require.NoError(t, err)
 	defer stop()
 

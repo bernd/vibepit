@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -214,7 +215,7 @@ func TestControlClient_SubscribeLogs(t *testing.T) {
 	client := newCmdTestClient(t, bus, creds)
 
 	ch := make(chan proxy.LogEntry, 8)
-	stop, _, err := client.SubscribeLogs(ch)
+	stop, _, err := client.SubscribeLogs(context.Background(), ch)
 	require.NoError(t, err)
 	defer stop()
 
@@ -226,6 +227,232 @@ func TestControlClient_SubscribeLogs(t *testing.T) {
 	}
 }
 
+// TestControlClient_WatchLogs_DeliversAndCancels verifies WatchLogs delivers
+// retained entries as log-entry events and closes its stream when the context is
+// canceled (so the owning UI's reader exits cleanly at teardown).
+func TestControlClient_WatchLogs_DeliversAndCancels(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+
+	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "watch.com", Action: proxy.ActionBlock})
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	client := newCmdTestClient(t, bus, creds)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := client.WatchLogs(ctx)
+
+	// The retained entry is delivered as a log-entry event.
+	select {
+	case ev := <-events:
+		require.Equal(t, LogEntryEvent, ev.Kind)
+		assert.Equal(t, "watch.com", ev.Entry.Domain)
+	case <-time.After(3 * time.Second):
+		t.Fatal("WatchLogs did not deliver the retained entry")
+	}
+
+	// Canceling the context closes the stream once any buffered events drain.
+	cancel()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("WatchLogs channel did not close after cancel")
+		}
+	}
+}
+
+// requireWatchEntry reads the WatchLogs stream until a log entry for domain
+// arrives, ignoring connection events and other entries.
+func requireWatchEntry(t *testing.T, events <-chan LogEvent, domain string) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatalf("watch stream closed before entry %q", domain)
+			}
+			if ev.Kind == LogEntryEvent && ev.Entry.Domain == domain {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("did not receive entry %q within 3s", domain)
+		}
+	}
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return port
+}
+
+// TestControlClient_WatchLogs_ResubscribesOnReconnect covers the reconnect path:
+// a reconnect must rebuild the consumer (the stream may have reset) and report
+// recovery. Driven by signalConn so the resubscribe is exercised deterministically
+// without a real network reconnect — a fresh consumer replays retained history.
+func TestControlClient_WatchLogs_ResubscribesOnReconnect(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+
+	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "before.com", Action: proxy.ActionAllow})
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	client := newCmdTestClient(t, bus, creds)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := client.WatchLogs(ctx)
+
+	// Initial subscription replays the retained entry.
+	requireWatchEntry(t, events, "before.com")
+
+	// A reconnect advances the generation, so the watcher opens a fresh consumer
+	// which replays the retained history again.
+	client.signalConn(true)
+	requireWatchEntry(t, events, "before.com")
+}
+
+// TestControlClient_WatchLogs_RecoversAcrossProxyRestart covers a real reconnect
+// to a restarted proxy whose stream was recreated (sequence numbers reset). The
+// watcher must resubscribe and deliver the new stream's entries, and must not
+// replay entries from the old stream (stale-channel/cursor isolation).
+func TestControlClient_WatchLogs_RecoversAcrossProxyRestart(t *testing.T) {
+	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
+	require.NoError(t, err)
+	serverTLS, err := creds.ServerTLSConfig()
+	require.NoError(t, err)
+	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
+	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
+	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
+	internalTLS, err := proxy.LoadInternalClientTLSConfigFromEnv()
+	require.NoError(t, err)
+
+	port := freePort(t)
+	startBus := func() *proxy.Bus {
+		var bus *proxy.Bus
+		// Retry the bind: the prior server may not have fully released the port yet.
+		require.Eventually(t, func() bool {
+			al, e := proxy.NewHTTPAllowlist(nil)
+			require.NoError(t, e)
+			dal, e := proxy.NewDNSAllowlist(nil)
+			require.NoError(t, e)
+			b, e := proxy.NewBus(proxy.BusOptions{
+				Port: port, ServerTLS: serverTLS, InternalTLS: internalTLS,
+				HTTPAllowlist: al, DNSAllowlist: dal,
+			})
+			if e != nil {
+				return false
+			}
+			bus = b
+			return true
+		}, 3*time.Second, 50*time.Millisecond)
+		require.NoError(t, bus.RegisterHandlers())
+		return bus
+	}
+
+	bus1 := startBus()
+	bus1.LogPublisher().PublishLog(proxy.LogEntry{Domain: "old.com", Action: proxy.ActionAllow})
+	require.NoError(t, bus1.FlushPublishes(2*time.Second))
+
+	client := newCmdTestClient(t, bus1, creds)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := client.WatchLogs(ctx)
+	requireWatchEntry(t, events, "old.com")
+
+	// Restart the proxy on the same port with a brand-new, empty stream.
+	bus1.Shutdown()
+	bus2 := startBus()
+	t.Cleanup(bus2.Shutdown)
+	bus2.LogPublisher().PublishLog(proxy.LogEntry{Domain: "new.com", Action: proxy.ActionAllow})
+	require.NoError(t, bus2.FlushPublishes(2*time.Second))
+
+	// The client auto-reconnects; the watcher resubscribes to the new stream and
+	// delivers new.com. old.com belongs to the destroyed stream and must not
+	// reappear from a stale cursor or a leftover channel.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("watch stream closed before delivering new.com")
+			}
+			if ev.Kind != LogEntryEvent {
+				continue
+			}
+			require.NotEqual(t, "old.com", ev.Entry.Domain, "stale entry replayed after restart")
+			if ev.Entry.Domain == "new.com" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("did not receive new.com from the restarted proxy within 5s")
+		}
+	}
+}
+
+// requireNoWatchEntry asserts no log entry for domain arrives within the window
+// (connection events are ignored). A replay would arrive within sub-millisecond
+// on an in-process bus, so the window only needs to be comfortably above that.
+func requireNoWatchEntry(t *testing.T, events <-chan LogEvent, domain string, within time.Duration) {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return // stream closed; no entry
+			}
+			if ev.Kind == LogEntryEvent && ev.Entry.Domain == domain {
+				t.Fatalf("unexpected replay of %q: a same-generation resubscribe was not coalesced", domain)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// TestControlClient_WatchLogs_CoalescesSameGenerationResubscribe covers the
+// retry/reconnect race: when a reconnect event arrives for a generation that a
+// coincident retry already resubscribed, the watcher must not open a second
+// consumer and replay history again. It is driven deterministically by injecting
+// a reconnect event onto the conn-event channel WITHOUT advancing the reconnect
+// counter — the exact state a buffered reconnect leaves after a retry already
+// rebuilt the consumer for that generation.
+func TestControlClient_WatchLogs_CoalescesSameGenerationResubscribe(t *testing.T) {
+	bus, creds := newCmdTestBus(t)
+	require.NoError(t, bus.RegisterHandlers())
+
+	bus.LogPublisher().PublishLog(proxy.LogEntry{Domain: "x.com", Action: proxy.ActionAllow})
+	require.NoError(t, bus.FlushPublishes(2*time.Second))
+
+	client := newCmdTestClient(t, bus, creds)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := client.WatchLogs(ctx)
+
+	// Initial subscription (generation 0) replays the retained entry.
+	requireWatchEntry(t, events, "x.com")
+
+	// A real reconnect advances the generation and rebuilds the consumer, replaying
+	// history once.
+	client.signalConn(true)
+	requireWatchEntry(t, events, "x.com")
+
+	// A second reconnect EVENT at the same generation (reconnects counter not
+	// advanced) must be coalesced: the live consumer already covers this
+	// generation, so no rebuild and no second replay.
+	client.connEvents <- true
+	requireNoWatchEntry(t, events, "x.com", time.Second)
+}
+
 // TestControlClient_SubscribeLogs_StopClosesDone verifies stop closes the done
 // channel (so waiters unblock at teardown) and is idempotent (no double-close
 // panic).
@@ -235,7 +462,7 @@ func TestControlClient_SubscribeLogs_StopClosesDone(t *testing.T) {
 	client := newCmdTestClient(t, bus, creds)
 
 	ch := make(chan proxy.LogEntry, 4)
-	stop, done, err := client.SubscribeLogs(ch)
+	stop, done, err := client.SubscribeLogs(context.Background(), ch)
 	require.NoError(t, err)
 
 	stop()
@@ -302,7 +529,7 @@ func TestControlClient_SubscribeLogs_BoundsInitialHistory(t *testing.T) {
 
 	client := newCmdTestClient(t, bus, creds)
 	ch := make(chan proxy.LogEntry, 256)
-	stop, _, err := client.SubscribeLogs(ch)
+	stop, _, err := client.SubscribeLogs(context.Background(), ch)
 	require.NoError(t, err)
 	defer stop()
 
