@@ -339,6 +339,7 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		InternalCertPEM: string(creds.InternalClientCertPEM()),
 		InternalKeyPEM:  string(creds.InternalClientKeyPEM()),
 		ProjectDir:      projectRoot,
+		ExtraHosts:      merged.ExtraHosts,
 	}
 	if opts.Daemon {
 		proxyCfg.NoRestart = true

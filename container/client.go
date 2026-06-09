@@ -615,6 +615,7 @@ type ProxyContainerConfig struct {
 	ProjectDir      string
 	NoRestart       bool // when true, omits the restart policy so the proxy stops with the session
 	SSHPort         int  // when > 0, publish this port for SSH forwarding to sandbox
+	ExtraHosts      []string
 }
 
 // StartProxyContainer creates and starts a minimal container that runs the
@@ -672,6 +673,9 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		},
 		ExtraHosts:   []string{"host-gateway:host-gateway"},
 		PortBindings: portBindings,
+	}
+	if len(cfg.ExtraHosts) > 0 {
+		hostConfig.ExtraHosts = append(hostConfig.ExtraHosts, cfg.ExtraHosts...)
 	}
 	if !cfg.NoRestart {
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}

@@ -1,11 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	"github.com/bernd/vibepit/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +30,8 @@ block-cidr:
   - 203.0.113.0/24
 allow-cidr:
   - 100.64.0.0/10
+extra-hosts:
+  - myhost.local:192.168.1.100
 `), 0o644)
 
 		projectFile := filepath.Join(projectDir, "network.yaml")
@@ -50,6 +54,7 @@ allow-http:
 		assert.Contains(t, merged.AllowDNS, "internal.example.com")
 		assert.Contains(t, merged.BlockCIDR, "203.0.113.0/24")
 		assert.Contains(t, merged.AllowCIDR, "100.64.0.0/10")
+		assert.Contains(t, merged.ExtraHosts, "myhost.local:192.168.1.100")
 	})
 
 	t.Run("CLI overrides add to merged config", func(t *testing.T) {
@@ -378,4 +383,103 @@ func TestMergeValidation(t *testing.T) {
 		_, err := cfg.Merge(nil, nil)
 		assert.NoError(t, err)
 	})
+}
+
+func TestUnmarshalUpstreamDNS(t *testing.T) {
+	t.Run("unmarshal upstream-dns string", func(t *testing.T) {
+		dir := t.TempDir()
+		globalFile := filepath.Join(dir, "config.yaml")
+		os.WriteFile(globalFile, []byte(`
+allow-http:
+  - github.com:443
+upstream-dns: 8.8.8.8:53
+`), 0o644)
+
+		cfg, err := Load(globalFile, "/nonexistent/project.yaml")
+		require.NoError(t, err)
+		assert.Equal(t, "8.8.8.8:53", cfg.Global.UpstreamDNS)
+	})
+
+	t.Run("unmarshal upstream-dns with port only", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		os.WriteFile(path, []byte(`upstream-dns: "1.1.1.1:5353"`), 0o644)
+
+		cfg := &GlobalConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Equal(t, "1.1.1.1:5353", cfg.UpstreamDNS)
+	})
+
+	t.Run("missing upstream-dns is empty string", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		os.WriteFile(path, []byte(`allow-dns:
+  - example.com`), 0o644)
+
+		cfg := &GlobalConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Empty(t, cfg.UpstreamDNS)
+	})
+
+	t.Run("merged config carries upstream", func(t *testing.T) {
+		dir := t.TempDir()
+		globalFile := filepath.Join(dir, "config.yaml")
+		os.WriteFile(globalFile, []byte(`
+upstream-dns: 9.9.9.9:53
+allow-dns:
+  - internal.example.com
+`), 0o644)
+
+		cfg, err := Load(globalFile, "/nonexistent/project.yaml")
+		require.NoError(t, err)
+
+		merged, err := cfg.Merge(nil, nil)
+		require.NoError(t, err)
+		assert.Equal(t, "9.9.9.9:53", merged.UpstreamDNS)
+	})
+}
+
+// TestMergedConfigRoundTripsToProxyConfig guards the full path every proxy
+// setting actually travels: bootstrap marshals a MergedConfig to JSON and the
+// proxy unmarshals it into a ProxyConfig. The two structs are maintained by
+// hand, so any JSON-key drift silently drops a setting (as upstream-dns did).
+// This test sets every field that is meant to cross the boundary to a sentinel
+// and asserts it survives.
+//
+// Two fields intentionally do NOT cross and are excluded by design:
+//   - MergedConfig.ExtraHosts: applied via the container config, not proxy JSON.
+//   - ProxyConfig.DNSPort: proxy-only, defaulted internally.
+func TestMergedConfigRoundTripsToProxyConfig(t *testing.T) {
+	merged := MergedConfig{
+		AllowHTTP:      []string{"github.com:443"},
+		AllowDNS:       []string{"example.com"},
+		BlockCIDR:      []string{"10.0.0.0/8"},
+		AllowCIDR:      []string{"192.168.0.0/16"},
+		UpstreamDNS:    "10.0.0.53:53",
+		AllowHostPorts: []int{8080},
+		ProxyIP:        "172.20.0.2",
+		HostGateway:    "host-gateway",
+		ProxyPort:      54321,
+		ControlAPIPort: 54322,
+		SSHForwardAddr: "172.20.0.3:2222",
+	}
+
+	data, err := json.Marshal(merged)
+	require.NoError(t, err)
+
+	var pc proxy.ProxyConfig
+	require.NoError(t, json.Unmarshal(data, &pc))
+
+	assert.Equal(t, merged.AllowHTTP, pc.AllowHTTP, "allow-http")
+	assert.Equal(t, merged.AllowDNS, pc.AllowDNS, "allow-dns")
+	assert.Equal(t, merged.BlockCIDR, pc.BlockCIDR, "block-cidr")
+	assert.Equal(t, merged.AllowCIDR, pc.AllowCIDR, "allow-cidr")
+	assert.Equal(t, merged.UpstreamDNS, pc.UpstreamDNS,
+		"upstream-dns must survive the round-trip, or the proxy falls back to its default")
+	assert.Equal(t, merged.AllowHostPorts, pc.AllowHostPorts, "allow-host-ports")
+	assert.Equal(t, merged.ProxyIP, pc.ProxyIP, "proxy-ip")
+	assert.Equal(t, merged.HostGateway, pc.HostGateway, "host-gateway")
+	assert.Equal(t, merged.ProxyPort, pc.ProxyPort, "proxy-port")
+	assert.Equal(t, merged.ControlAPIPort, pc.ControlAPIPort, "control-api-port")
+	assert.Equal(t, merged.SSHForwardAddr, pc.SSHForwardAddr, "ssh-forward-addr")
 }

@@ -142,10 +142,11 @@ func TestControlClient_Stats(t *testing.T) {
 
 func TestControlClient_Config(t *testing.T) {
 	bus, creds := newCmdTestBusWithConfig(t, proxy.ProxyConfig{
-		AllowHTTP: []string{"a.com:443", "b.com:443"},
-		AllowDNS:  []string{"c.com"},
-		BlockCIDR: []string{"10.0.0.0/8"},
-		AllowCIDR: []string{"100.64.0.0/10"},
+		AllowHTTP:  []string{"a.com:443", "b.com:443"},
+		AllowDNS:   []string{"c.com"},
+		BlockCIDR:  []string{"10.0.0.0/8"},
+		AllowCIDR:  []string{"100.64.0.0/10"},
+		ExtraHosts: []string{"myhost.local:192.168.1.100"},
 	})
 	require.NoError(t, bus.RegisterHandlers())
 	client := newCmdTestClient(t, bus, creds)
@@ -157,6 +158,7 @@ func TestControlClient_Config(t *testing.T) {
 	assert.Equal(t, []string{"c.com"}, cfg.AllowDNS)
 	assert.Equal(t, []string{"10.0.0.0/8"}, cfg.BlockCIDR)
 	assert.Equal(t, []string{"100.64.0.0/10"}, cfg.AllowCIDR)
+	assert.Equal(t, []string{"myhost.local:192.168.1.100"}, cfg.ExtraHosts)
 }
 
 func TestControlClient_SubscribeLogs(t *testing.T) {

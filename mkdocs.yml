@@ -57,6 +57,7 @@ nav:
       - Install Development Tools: how-to/install-tools.md
       - Configure Network Presets: how-to/configure-presets.md
       - Use with AI Coding Agents: how-to/ai-coding-agents.md
+      - Run with a Local LLM Provider: how-to/local-llm-provider.md
       - Troubleshoot Common Issues: how-to/troubleshooting.md
   - Reference:
       - CLI: reference/cli.md

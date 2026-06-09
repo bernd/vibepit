@@ -27,7 +27,8 @@ type ProxyConfig struct {
 	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
 	AllowCIDR      []string `json:"allow-cidr"`
-	Upstream       string   `json:"upstream"`
+	ExtraHosts     []string `json:"extra-hosts,omitempty"`
+	UpstreamDNS    string   `json:"upstream-dns"`
 	AllowHostPorts []int    `json:"allow-host-ports"`
 	ProxyIP        string   `json:"proxy-ip"`
 	HostGateway    string   `json:"host-gateway"`
@@ -53,8 +54,8 @@ func NewServer(configPath string) (*Server, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	if cfg.Upstream == "" {
-		cfg.Upstream = DefaultUpstreamDNS
+	if cfg.UpstreamDNS == "" {
+		cfg.UpstreamDNS = DefaultUpstreamDNS
 	}
 
 	return &Server{config: cfg}, nil
@@ -96,8 +97,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	pub := bus.LogPublisher()
-	httpProxy := NewHTTPProxy(allowlist, cidr, pub, s.config.Upstream)
-	dnsServer := NewDNSServer(dnsAllowlist, cidr, pub, s.config.Upstream)
+	httpProxy := NewHTTPProxy(allowlist, cidr, pub, s.config.UpstreamDNS)
+	dnsServer := NewDNSServer(dnsAllowlist, cidr, pub, s.config.UpstreamDNS)
 
 	// Configure host.vibepit support.
 	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {

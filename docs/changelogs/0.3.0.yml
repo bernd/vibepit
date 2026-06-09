@@ -1,0 +1,23 @@
+version: "0.3.0"
+
+added:
+  - msg: JetBrains AI service network preset
+  - msg: Packaging tools in the sandbox image
+  - msg: Session disconnect logging in `vibed`
+  - msg: "`allow-cidr` config option to explicitly allow local IP ranges"
+    pr: "10"
+  - msg: "`extra-hosts` config option"
+    pr: "11"
+  - msg: "Global `upstream-dns` config option to set the upstream DNS server"
+    pr: "12"
+  - msg: How-to for running with a local LLM provider
+    pr: "13"
+
+fixed:
+  - msg: Preserve formatting in `allow-http`/`allow-dns` appends
+    pr: "8"
+  - msg: State-file cleanup race in session test teardown
+    pr: "9"
+  - msg: "`install -m` parameter in the Dockerfile"
+  - msg: Force anonymous auth for cosign image signature verification
+  - msg: Distinguish forced detaches from clean shell exits
