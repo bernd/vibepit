@@ -448,6 +448,39 @@ func TestMonitorScreen_ReconnectResubscribes(t *testing.T) {
 	assert.Equal(t, -1, s.disconnectTick, "reconnect clears the disconnect timer")
 }
 
+// TestMonitorScreen_SubscriptionStartedRespectsConnState covers the follow-up to
+// finding 2: a delayed subscriptionStartedMsg must not clear the disconnect timer
+// while the connection is known down (SubscribeLogs succeeded, then the proxy
+// died), but must clear it on a retry recovery while still connected.
+func TestMonitorScreen_SubscriptionStartedRespectsConnState(t *testing.T) {
+	t.Run("delayed start after disconnect keeps the timer armed", func(t *testing.T) {
+		s, w := makeTestSetup(0)
+		s.onBack = func() tui.Screen { return &testStubScreen{} }
+		s.subGen = 1
+
+		s.Update(connStatusMsg{connected: false}, w)
+		require.Equal(t, 0, s.disconnectTick, "disconnect arms the timer")
+		require.True(t, s.connDown)
+
+		s.Update(subscriptionStartedMsg{gen: 1}, w)
+		assert.Equal(t, 0, s.disconnectTick, "delayed start must not clear the timer while disconnected")
+	})
+
+	t.Run("start clears the timer on retry recovery while connected", func(t *testing.T) {
+		s, w := makeTestSetup(0)
+		s.onBack = func() tui.Screen { return &testStubScreen{} }
+		s.subGen = 1
+
+		// Subscribe failed transiently with the connection still up.
+		s.Update(subscribeErrMsg{gen: 1, err: fmt.Errorf("transient")}, w)
+		require.Equal(t, 0, s.disconnectTick)
+		require.False(t, s.connDown)
+
+		s.Update(subscriptionStartedMsg{gen: 1}, w)
+		assert.Equal(t, -1, s.disconnectTick, "successful retry clears the timer")
+	})
+}
+
 // TestMonitorScreen_SubscribeErrorRetries covers finding 3: a failed subscription
 // schedules a retry instead of latching dead, and a stale failure (from a
 // superseded generation) is ignored.

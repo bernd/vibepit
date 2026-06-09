@@ -63,7 +63,8 @@ type monitorScreen struct {
 	items          []logItem
 	newCount       int
 	firstTickSeen  bool
-	disconnectTick int // -1 = connected, 0+ = ticks since disconnect
+	disconnectTick int  // -1 = connected, 0+ = ticks since disconnect
+	connDown       bool // last observed connection state (set by connStatusMsg)
 }
 
 func newMonitorScreen(session *SessionInfo, client *ControlClient, onBack func() tui.Screen) *monitorScreen {
@@ -321,10 +322,15 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		if msg.gen != s.subGen {
 			return s, nil // superseded by a newer subscription
 		}
-		// The subscription is live, so the connection and log flow are healthy:
-		// clear any disconnect state armed by an earlier failure or retry.
-		s.disconnectTick = -1
-		w.ClearError()
+		// Clear disconnect state armed by an earlier subscribe failure/retry — but
+		// only if the connection is still up. SubscribeLogs can succeed and then the
+		// proxy dies before this message is processed; if connStatusMsg{false} was
+		// handled first, clearing here would paper over the disconnect with no later
+		// event to re-arm it (the same frozen-monitor failure as a stale logEntryMsg).
+		if !s.connDown {
+			s.disconnectTick = -1
+			w.ClearError()
+		}
 		return s, waitForLog(msg.gen, msg.ch, msg.done)
 
 	case subscribeErrMsg:
@@ -359,12 +365,14 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		// old ordered consumer's cursor is stale and must be replaced rather than
 		// assumed to resume on the same channel.
 		if msg.connected {
+			s.connDown = false
 			s.disconnectTick = -1
 			w.ClearError()
 			if s.client != nil {
 				return s, tea.Batch(s.resubscribe(), s.watchConn())
 			}
 		} else {
+			s.connDown = true
 			if s.onBack != nil && s.disconnectTick < 0 {
 				s.disconnectTick = 0
 			}

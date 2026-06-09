@@ -171,6 +171,21 @@ func TestBusPublisher_DropAccounting(t *testing.T) {
 	assert.Equal(t, uint64(2), dropped.Load())
 }
 
+// TestBus_AsyncPublishErrorCounted covers the follow-up to finding 10: a publish
+// that fails asynchronously (here, to a subject no stream is bound to, so there
+// is no responder) is counted via WithPublishAsyncErrHandler, not silently lost.
+func TestBus_AsyncPublishErrorCounted(t *testing.T) {
+	bus, _ := newTestBus(t)
+
+	// Synchronous send succeeds; the failure is delivered to the async handler.
+	_, err := bus.js.PublishAsync("no.such.stream.subject", []byte("{}"))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return bus.droppedLogs.Load() >= 1
+	}, 5*time.Second, 20*time.Millisecond, "async publish failure should be counted")
+}
+
 // TestBus_StatsExposesDropped covers finding 10: the stats reply carries the
 // drop counter so a consumer can detect undercount.
 func TestBus_StatsExposesDropped(t *testing.T) {

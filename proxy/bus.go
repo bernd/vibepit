@@ -181,6 +181,19 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	// Dial our own server over loopback (the server cert's SAN is 127.0.0.1),
 	// using the bound port even though the listener is on 0.0.0.0.
 	clientURL := fmt.Sprintf("tls://127.0.0.1:%d", ns.Addr().(*net.TCPAddr).Port)
+
+	// Construct the Bus now so the async publish-error handler installed below can
+	// count failed publishes into droppedLogs. The publisher/watcher goroutines
+	// are not started until ok=true at the end, so an early failure leaks nothing.
+	b := &Bus{
+		ns: ns, storeDir: storeDir, clientURL: clientURL, opts: opts,
+		fatal:             make(chan error, 1),
+		shutdownInitiated: make(chan struct{}),
+		logCh:             make(chan logMsg, logPublishBuffer),
+		pubDone:           make(chan struct{}),
+		pubStopped:        make(chan struct{}),
+	}
+
 	nc, err = nats.Connect(clientURL,
 		nats.Secure(opts.InternalTLS), nats.TLSHandshakeFirst(), nats.Timeout(natsReadyTimeout),
 		// Never give up reconnecting to our own in-process server. The default
@@ -191,10 +204,22 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("internal client connect: %w", err)
 	}
-	js, err := jetstream.New(nc, jetstream.WithPublishAsyncMaxPending(publishAsyncPending))
+	b.nc = nc
+
+	js, err := jetstream.New(nc,
+		jetstream.WithPublishAsyncMaxPending(publishAsyncPending),
+		// Async publish failures (connection closed, reconnect buffer discarded,
+		// no stream response, invalid ack, ...) are delivered here rather than at
+		// the PublishAsync call site. Count them so StatsReply.Dropped reflects the
+		// real loss, not just the synchronous pre-check/marshal drops.
+		jetstream.WithPublishAsyncErrHandler(func(jetstream.JetStream, *nats.Msg, error) {
+			b.droppedLogs.Add(1)
+		}))
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: %w", err)
 	}
+	b.js = js
+
 	ctx, cancel := context.WithTimeout(context.Background(), natsReadyTimeout)
 	defer cancel()
 	if _, err := js.CreateStream(ctx, jetstream.StreamConfig{
@@ -208,14 +233,6 @@ func NewBus(opts BusOptions) (*Bus, error) {
 	}
 
 	ok = true
-	b := &Bus{
-		ns: ns, nc: nc, js: js, storeDir: storeDir, clientURL: clientURL, opts: opts,
-		fatal:             make(chan error, 1),
-		shutdownInitiated: make(chan struct{}),
-		logCh:             make(chan logMsg, logPublishBuffer),
-		pubDone:           make(chan struct{}),
-		pubStopped:        make(chan struct{}),
-	}
 	go b.watchServer()
 	go b.runPublisher()
 	return b, nil
@@ -372,7 +389,13 @@ func (b *Bus) handlePublish(m logMsg) {
 		b.droppedLogs.Add(1)
 		return
 	}
-	_, _ = b.js.PublishAsync(SubjectLogs, data)
+	// A synchronous error means the message never entered the async pipeline (so
+	// the async error handler won't see it) — count it here. Async ack failures
+	// are counted by WithPublishAsyncErrHandler instead, so there is no double
+	// count.
+	if _, err := b.js.PublishAsync(SubjectLogs, data); err != nil {
+		b.droppedLogs.Add(1)
+	}
 }
 
 // FlushPublishes waits until every entry queued before this call has been
