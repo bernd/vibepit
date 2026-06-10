@@ -35,7 +35,7 @@ curl -fsSL https://vibepit.dev/download.sh | bash
 This downloads the latest release for your platform. Move the binary to somewhere in your `PATH`:
 
 ```sh
-sudo mv vibepit /usr/local/bin/
+mv vibepit "$HOME/.local/bin/"
 ```
 
 ## Usage

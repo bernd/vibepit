@@ -203,7 +203,7 @@ main() {
     printf "%bDownloaded vibepit %s to %s/%bvibepit%b\n" "$CYAN" "$VERSION" "$dest" "$ORANGE" "$RESET"
     info "Move it to a directory in your PATH to use it, for example:"
     echo
-    printf "  %bsudo mv %s/vibepit /usr/local/bin/%b\n" "$BOLD" "$dest" "$RESET"
+    printf "  %bmv %s/vibepit \"\$HOME/.local/bin/\"%b\n" "$BOLD" "$dest" "$RESET"
     echo
 }
 

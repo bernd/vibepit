@@ -27,7 +27,7 @@ hide:
   <div class="vp-landing__install-wide">
     <p class="vp-landing__install-label">Quickstart</p>
     <pre class="vp-landing__install"><code>curl -fsSL https://vibepit.dev/download.sh | bash
-sudo mv vibepit /usr/local/bin/</code></pre>
+mv vibepit "$HOME/.local/bin/"</code></pre>
   </div>
 </section>
 

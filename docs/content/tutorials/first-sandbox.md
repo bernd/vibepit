@@ -20,7 +20,7 @@ Download the latest release and place the binary on your `PATH`:
 
 ```bash
 curl -fsSL https://vibepit.dev/download.sh | bash
-sudo mv vibepit /usr/local/bin/
+mv vibepit "$HOME/.local/bin/"
 ```
 
 Confirm the installation:
