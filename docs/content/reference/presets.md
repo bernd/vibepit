@@ -123,6 +123,7 @@ avatars.githubusercontent.com:443
 camo.githubusercontent.com:443
 gist.github.com:443
 release-assets.githubusercontent.com:443
+patch-diff.githubusercontent.com:443
 ```
 
 ### `vcs-other`
