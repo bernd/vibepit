@@ -113,8 +113,14 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	srv := &charmssh.Server{
-		Handler:     s.handleSession,
 		IdleTimeout: idleConnectionTimeout,
+		// Override the "session" channel handler so session output is written
+		// to the raw gossh.Channel rather than charmssh's emulated-PTY writer,
+		// which rewrites \n to \r\n and corrupts raw-mode TUIs. charmssh still
+		// provides accept, handshake, auth, idle timeout, and global requests.
+		ChannelHandlers: map[string]charmssh.ChannelHandler{
+			"session": s.handleSessionChannel,
+		},
 		RequestHandlers: map[string]charmssh.RequestHandler{
 			sessionCountRequestType: func(_ charmssh.Context, _ *charmssh.Server, _ *gossh.Request) (bool, []byte) {
 				reply := s.sessionCount()
@@ -198,17 +204,8 @@ func (s *Server) sessionCount() SessionCountReply {
 	}
 }
 
-func (s *Server) handleSession(sess charmssh.Session) {
-	ptyReq, winCh, isPty := sess.Pty()
-	if isPty {
-		s.handlePTYSession(sess, ptyReq, winCh)
-	} else {
-		s.handleExecSession(sess)
-	}
-}
-
-func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, winCh <-chan charmssh.Window) {
-	cols, rows := clampPTYSize(ptyReq.Window.Width, ptyReq.Window.Height)
+func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh <-chan charmssh.Window) {
+	cols, rows := clampPTYSize(winCols, winRows)
 	mgr := s.sessions
 
 	s.mu.Lock()
@@ -238,7 +235,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	// SSH clients typically don't forward COLORTERM. Fall back to the
 	// container's own value so the TUI can detect TrueColor support.
 	sshEnv := sess.Environ()
-	sshEnv = append(sshEnv, fmt.Sprintf("TERM=%s", ptyReq.Term))
+	sshEnv = append(sshEnv, fmt.Sprintf("TERM=%s", sess.term))
 	hasColorterm := slices.ContainsFunc(sshEnv, func(e string) bool {
 		return strings.HasPrefix(e, "COLORTERM=")
 	})
@@ -293,7 +290,15 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		w := tui.NewWindow(header, screen)
 		p := tea.NewProgram(w,
 			tea.WithInput(cr),
-			tea.WithOutput(sess),
+			// Cook the selector's output to CRLF. BubbleTea writes straight to
+			// the raw SSH channel (no real PTY between), and with no TTY input
+			// it forces newline-mapping on — emitting bare \n for vertical
+			// motion while assuming the terminal turns it into CRLF. Since the
+			// SSH layer no longer rewrites \n->\r\n, vibed must cook this
+			// vibed-generated output itself or each redraw stair-steps. Live PTY
+			// output stays raw; only this synthetic UI is cooked (cf. the replay
+			// in session.ToCRLF and rawSession.Stderr).
+			tea.WithOutput(crlfWriter{w: sess}),
 			tea.WithEnvironment(sshEnv),
 			tea.WithColorProfile(colorprofile.Env(sshEnv)),
 			tea.WithWindowSize(int(cols), int(rows)),
@@ -396,7 +401,14 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 		}()
 	}
 
-	// Copy session output to SSH.
+	// Copy session output to SSH. This pump stays raw on purpose: it carries
+	// the live TUI's own bytes, whose bare \n means "down, keep column" and
+	// must reach the raw-mode client intact. The SSH layer no longer rewrites
+	// \n->\r\n, so any vibed-*generated* bytes sent to the client (banners,
+	// status lines, another tea.NewProgram, errors) must be CRLF-cooked at
+	// their source instead — wrap them in crlfWriter (see the selector at
+	// tea.WithOutput above, rawSession.Stderr, and session.ToCRLF). Do not cook
+	// here, or live output double-CRs.
 	done := make(chan struct{})
 	go func() {
 		io.Copy(sess, client) //nolint:errcheck
@@ -419,7 +431,7 @@ func (s *Server) handlePTYSession(sess charmssh.Session, ptyReq charmssh.Pty, wi
 	finishPTY(client, detachExitCode(reason))
 }
 
-func (s *Server) handleExecSession(sess charmssh.Session) {
+func (s *Server) handleExecSession(sess *rawSession) {
 	rawCmd := sess.RawCommand()
 	if rawCmd == "" {
 		fmt.Fprintln(sess.Stderr(), "no command specified") //nolint:errcheck
@@ -481,7 +493,7 @@ func (s *Server) handleExecSession(sess charmssh.Session) {
 // deadline, preventing IdleTimeout from killing silent long-running
 // commands. The goroutine exits when done is closed or when the session
 // context is canceled (e.g. real client disconnect).
-func execKeepalive(sess charmssh.Session, done <-chan struct{}) {
+func execKeepalive(sess *rawSession, done <-chan struct{}) {
 	ticker := time.NewTicker(execKeepaliveInterval)
 	defer ticker.Stop()
 	for {

@@ -375,6 +375,73 @@ ready:
 	c2.Close()
 }
 
+// TestSession_ReplayUsesCRLF verifies that the reattach replay terminates every
+// line with CRLF, not a bare LF. The replay reconstructs screen state for a
+// terminal in raw mode (no \n->\r\n translation), so a bare \n would move down
+// without returning to column 0 and stair-step the reconstructed screen — the
+// regression seen with raw-mode TUIs (agy) after the SSH layer stopped cooking
+// newlines. Live PTY output is intentionally left raw; only the replay is
+// normalized.
+func TestSession_ReplayUsesCRLF(t *testing.T) {
+	m := testManager(t, 50)
+	s, err := m.Create(80, 24, nil)
+	require.NoError(t, err)
+
+	c1 := s.Attach(80, 24)
+	// Closing c1 on cleanup unblocks the reader goroutine below if the read
+	// loop bails via t.Fatal — its c1.Read would otherwise block forever.
+	t.Cleanup(func() { c1.Close() })
+	_, err = c1.Write([]byte("printf 'AAA\\nBBB\\nCCC\\n'\n"))
+	require.NoError(t, err)
+
+	buf := make([]byte, 65536)
+	deadline := time.After(3 * time.Second)
+	var collected strings.Builder
+	for {
+		readDone := make(chan int, 1)
+		go func() {
+			n, _ := c1.Read(buf)
+			readDone <- n
+		}()
+		select {
+		case n := <-readDone:
+			collected.Write(buf[:n])
+			if strings.Contains(collected.String(), "CCC") {
+				goto ready
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for output")
+		}
+	}
+ready:
+	c1.Close()
+
+	// Reattach. Attach delivers the replay as a single c.deliver() under s.mu
+	// before the client joins s.clients, so it is the first chunk and is not
+	// interleaved with live output; one large Read captures all of it.
+	c2 := s.Attach(80, 24)
+	n, err := c2.Read(buf)
+	require.NoError(t, err)
+	require.Greater(t, n, 0, "should receive replay output")
+	replay := buf[:n]
+	c2.Close()
+
+	// Tripwire for the single-chunk assumption: the replay ends with the
+	// cursor-position escape Attach appends last. If replay delivery is ever
+	// split so this Read holds only a prefix, this fails loudly instead of
+	// letting a bare \n in a later, unchecked chunk slip past the scan below.
+	require.Regexp(t, `\x1b\[[0-9]+;[0-9]+H$`, string(replay),
+		"expected the complete replay (ending in a cursor-position escape) in one Read")
+
+	require.Contains(t, string(replay), "\r\n", "replay should use CRLF line breaks")
+	for i, b := range replay {
+		if b == '\n' {
+			require.Truef(t, i > 0 && replay[i-1] == '\r',
+				"replay has a bare \\n at offset %d (stair-steps on a raw terminal)", i)
+		}
+	}
+}
+
 // TestSession_VTEDoesNotDropUnderBurst verifies that a large burst of shell
 // output does not cause the VT emulator state to desync from reality.
 // Historically, pump fed the emulator through a 1024-slot async channel and
