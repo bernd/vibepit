@@ -188,6 +188,13 @@ func (s *Session) Attach(cols, rows uint16) *Client {
 			// CSI cursor-position (ESC[<row>;<col>H) - 1-indexed; cursorPos is 0-indexed.
 			replay = append(replay, fmt.Sprintf("\033[%d;%dH", cursorPos.Y+1, cursorPos.X+1)...)
 		}
+		// The replay is reconstructed screen content (scrollback + VTE render)
+		// whose line breaks are bare \n. The connected terminal is in raw mode,
+		// so each line must return to column 0 explicitly — emit CRLF. Live PTY
+		// output is deliberately not rewritten (a raw-mode TUI's bare \n means
+		// "down, keep column" and must reach the client intact); only this
+		// vibed-generated replay needs newline semantics.
+		replay = ToCRLF(replay)
 		if len(replay) > 0 {
 			c.deliver(replay)
 		}
@@ -447,6 +454,21 @@ func (s *Session) expireTombstone() {
 
 func (s *Session) waitForCleanup() {
 	<-s.cleanup
+}
+
+// ToCRLF normalizes bare \n to \r\n without doubling carriage returns on
+// content that already uses \r\n. It is the single source of truth for cooking
+// vibed-generated output bound for a raw-mode terminal that does not translate
+// \n itself: the reattach replay below, and sshd's selector/stderr writers
+// (which wrap it in an io.Writer). Live PTY bytes are deliberately never run
+// through it — a raw-mode TUI's bare \n must reach the client intact.
+//
+// Note: this is a whole-buffer transform. A streaming caller that can split a
+// \r\n across two Write calls would double the CR; current callers emit bare
+// \n (the collapse step is defensive), so that boundary case never arises.
+func ToCRLF(b []byte) []byte {
+	b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
+	return bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n"))
 }
 
 // renderVTEScrollback renders the VTE emulator's scrollback buffer (lines
