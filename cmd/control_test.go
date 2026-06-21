@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"testing"
@@ -13,6 +14,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestMTLS generates session mTLS credentials, builds the server TLS config,
+// exports the internal-client env vars, and loads the internal client TLS config
+// the proxy uses to dial its own bus.
+func newTestMTLS(t *testing.T) (creds *proxy.MTLSCredentials, serverTLS, internalTLS *tls.Config) {
+	t.Helper()
+	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
+	require.NoError(t, err)
+	serverTLS, err = creds.ServerTLSConfig()
+	require.NoError(t, err)
+	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
+	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
+	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
+	internalTLS, err = proxy.LoadInternalClientTLSConfigFromEnv()
+	require.NoError(t, err)
+	return creds, serverTLS, internalTLS
+}
+
+// newTestAllowlists builds empty HTTP and DNS allowlists for a test bus.
+func newTestAllowlists(t *testing.T) (*proxy.HTTPAllowlist, *proxy.DNSAllowlist) {
+	t.Helper()
+	al, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dal, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	return al, dal
+}
+
 // newCmdTestBus starts an embedded bus over mTLS and registers its handlers.
 func newCmdTestBus(t *testing.T) (*proxy.Bus, *proxy.MTLSCredentials) {
 	return newCmdTestBusWithConfig(t, proxy.ProxyConfig{})
@@ -22,19 +50,8 @@ func newCmdTestBus(t *testing.T) (*proxy.Bus, *proxy.MTLSCredentials) {
 // the config subject so tests can assert it round-trips to the client.
 func newCmdTestBusWithConfig(t *testing.T, cfg proxy.ProxyConfig) (*proxy.Bus, *proxy.MTLSCredentials) {
 	t.Helper()
-	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
-	require.NoError(t, err)
-	serverTLS, err := creds.ServerTLSConfig()
-	require.NoError(t, err)
-	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
-	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
-	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
-	internalTLS, err := proxy.LoadInternalClientTLSConfigFromEnv()
-	require.NoError(t, err)
-	al, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dal, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
+	creds, serverTLS, internalTLS := newTestMTLS(t)
+	al, dal := newTestAllowlists(t)
 	bus, err := proxy.NewBus(proxy.BusOptions{
 		ServerTLS: serverTLS, InternalTLS: internalTLS,
 		HTTPAllowlist: al, DNSAllowlist: dal, Config: cfg,
@@ -66,19 +83,8 @@ func newCmdTestClient(t *testing.T, bus *proxy.Bus, creds *proxy.MTLSCredentials
 // and returns a connected client.
 func newCmdTestClientWithAllowlists(t *testing.T) (*proxy.HTTPAllowlist, *proxy.DNSAllowlist, *ControlClient) {
 	t.Helper()
-	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
-	require.NoError(t, err)
-	serverTLS, err := creds.ServerTLSConfig()
-	require.NoError(t, err)
-	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
-	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
-	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
-	internalTLS, err := proxy.LoadInternalClientTLSConfigFromEnv()
-	require.NoError(t, err)
-	al, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dal, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
+	creds, serverTLS, internalTLS := newTestMTLS(t)
+	al, dal := newTestAllowlists(t)
 	bus, err := proxy.NewBus(proxy.BusOptions{
 		ServerTLS: serverTLS, InternalTLS: internalTLS,
 		HTTPAllowlist: al, DNSAllowlist: dal, Config: proxy.ProxyConfig{},
@@ -325,15 +331,7 @@ func TestControlClient_WatchLogs_ResubscribesOnReconnect(t *testing.T) {
 // watcher must resubscribe and deliver the new stream's entries, and must not
 // replay entries from the old stream (stale-channel/cursor isolation).
 func TestControlClient_WatchLogs_RecoversAcrossProxyRestart(t *testing.T) {
-	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
-	require.NoError(t, err)
-	serverTLS, err := creds.ServerTLSConfig()
-	require.NoError(t, err)
-	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
-	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
-	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
-	internalTLS, err := proxy.LoadInternalClientTLSConfigFromEnv()
-	require.NoError(t, err)
+	creds, serverTLS, internalTLS := newTestMTLS(t)
 
 	port := freePort(t)
 	startBus := func() *proxy.Bus {

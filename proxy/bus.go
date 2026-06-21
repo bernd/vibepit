@@ -402,7 +402,11 @@ func (b *Bus) FlushPublishes(timeout time.Duration) error {
 	case <-time.After(time.Until(deadline)):
 		return fmt.Errorf("publish flush timeout")
 	}
-	return b.nc.FlushTimeout(time.Until(deadline))
+	rem := time.Until(deadline)
+	if rem <= 0 {
+		return fmt.Errorf("publish flush timeout")
+	}
+	return b.nc.FlushTimeout(rem)
 }
 
 // StatsReply is the response to the stats subject: per-domain counters plus the
