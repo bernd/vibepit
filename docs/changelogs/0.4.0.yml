@@ -1,0 +1,15 @@
+version: "0.4.0"
+
+added:
+  - msg: "`docs.github.com` to the GitHub network preset"
+    pr: "15"
+  - msg: "`patch-diff.githubusercontent.com` to the GitHub network preset"
+  - msg: "`google-ai` network preset for Google AI services"
+
+changed:
+  - msg: "`vibepit update` now shows a single merged changelog covering every release you skipped, with each entry labeled by its version"
+    pr: "17"
+
+fixed:
+  - msg: Fix garbled full-screen TUI rendering (e.g. Antigravity CLI) in `up`/`connect` SSH sessions
+    pr: "16"
