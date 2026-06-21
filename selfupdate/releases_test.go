@@ -194,3 +194,84 @@ func TestEndToEndUpdateFlow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "abc", asset.SHA256)
 }
+
+func TestReleasesBetween(t *testing.T) {
+	idx := &ChannelIndex{
+		Releases: []ReleaseEntry{
+			{Version: "0.4.0"}, {Version: "0.3.0"},
+			{Version: "0.2.0"}, {Version: "0.1.0"},
+		},
+	}
+	tests := []struct {
+		name            string
+		current, target string
+		want            []string
+	}{
+		{"spans multiple", "0.1.0", "0.4.0", []string{"0.4.0", "0.3.0", "0.2.0"}},
+		{"single step", "0.3.0", "0.4.0", []string{"0.4.0"}},
+		{"current equals target", "0.4.0", "0.4.0", nil},
+		{"current above latest", "0.5.0", "0.4.0", nil},
+		{"target excludes newer", "0.1.0", "0.3.0", []string{"0.3.0", "0.2.0"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := idx.ReleasesBetween(tt.current, tt.target)
+			var versions []string
+			for _, r := range got {
+				versions = append(versions, r.Version)
+			}
+			assert.Equal(t, tt.want, versions)
+		})
+	}
+}
+
+func TestReleasesBetweenSortsNewestFirst(t *testing.T) {
+	idx := &ChannelIndex{
+		Releases: []ReleaseEntry{
+			{Version: "0.2.0"}, {Version: "0.4.0"}, {Version: "0.3.0"},
+		},
+	}
+	got := idx.ReleasesBetween("0.1.0", "0.4.0")
+	require.Len(t, got, 3)
+	assert.Equal(t, "0.4.0", got[0].Version)
+	assert.Equal(t, "0.3.0", got[1].Version)
+	assert.Equal(t, "0.2.0", got[2].Version)
+}
+
+func TestOtherChannel(t *testing.T) {
+	assert.Equal(t, ChannelStable, OtherChannel(ChannelPrerelease))
+	assert.Equal(t, ChannelPrerelease, OtherChannel(ChannelStable))
+}
+
+func TestCombineReleases(t *testing.T) {
+	stable := &ChannelIndex{Releases: []ReleaseEntry{
+		{Version: "0.4.0"}, {Version: "0.3.0"},
+	}}
+	pre := &ChannelIndex{Releases: []ReleaseEntry{
+		{Version: "0.4.0-rc.1"}, {Version: "0.3.0-rc.1"},
+	}}
+
+	t.Run("union of both channels", func(t *testing.T) {
+		got := CombineReleases(stable, pre)
+		versions := make([]string, len(got))
+		for i, r := range got {
+			versions[i] = r.Version
+		}
+		assert.ElementsMatch(t, []string{"0.4.0", "0.3.0", "0.4.0-rc.1", "0.3.0-rc.1"}, versions)
+	})
+
+	t.Run("deduplicates by version", func(t *testing.T) {
+		dup := &ChannelIndex{Releases: []ReleaseEntry{{Version: "0.4.0"}, {Version: "0.5.0"}}}
+		got := CombineReleases(stable, dup)
+		versions := make([]string, len(got))
+		for i, r := range got {
+			versions[i] = r.Version
+		}
+		assert.ElementsMatch(t, []string{"0.4.0", "0.3.0", "0.5.0"}, versions)
+	})
+
+	t.Run("ignores nil index", func(t *testing.T) {
+		got := CombineReleases(stable, nil)
+		assert.Len(t, got, 2)
+	})
+}

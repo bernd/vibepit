@@ -2,6 +2,50 @@
   "version": "0.1.0",
   "timestamp": "2026-05-09T19:27:31+02:00",
   "changelog": "\nAdded:\n- SSH-based daemon mode with persistent PTY sessions (up, down, ssh, status commands)\n- Session selector TUI for detached sessions\n- Self-update command for binary updates with SHA256 and cosign verification\n- Session detector and live polling in monitor TUI\n- Global --version flag\n- Mistral AI network preset\n- NODE_USE_ENV_PROXY and grpc_proxy environment variables for sandbox\n\nChanged:\n- Update sandbox image to Ubuntu 26.04\n- Use \"unless-stopped\" restart policy for the proxy container\n- Add downloads.claude.ai:443 to Anthropic network preset\n- Add vuln.go.dev:443 to Golang network preset\n\nFixed:\n- Nil pointer dereference in control API log handler",
+  "changes": {
+    "added": [
+      {
+        "msg": "SSH-based daemon mode with persistent PTY sessions (up, down, ssh, status commands)"
+      },
+      {
+        "msg": "Session selector TUI for detached sessions"
+      },
+      {
+        "msg": "Self-update command for binary updates with SHA256 and cosign verification"
+      },
+      {
+        "msg": "Session detector and live polling in monitor TUI"
+      },
+      {
+        "msg": "Global --version flag"
+      },
+      {
+        "msg": "Mistral AI network preset"
+      },
+      {
+        "msg": "NODE_USE_ENV_PROXY and grpc_proxy environment variables for sandbox"
+      }
+    ],
+    "changed": [
+      {
+        "msg": "Update sandbox image to Ubuntu 26.04"
+      },
+      {
+        "msg": "Use \"unless-stopped\" restart policy for the proxy container"
+      },
+      {
+        "msg": "Add downloads.claude.ai:443 to Anthropic network preset"
+      },
+      {
+        "msg": "Add vuln.go.dev:443 to Golang network preset"
+      }
+    ],
+    "fixed": [
+      {
+        "msg": "Nil pointer dereference in control API log handler"
+      }
+    ]
+  },
   "assets": [
     {
       "os": "linux",

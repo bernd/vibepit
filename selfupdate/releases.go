@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -29,10 +32,26 @@ type ReleaseEntry struct {
 
 // VersionMetadata represents a per-version metadata file (e.g., 0.2.0.json).
 type VersionMetadata struct {
-	Version   string  `json:"version"`
-	Timestamp string  `json:"timestamp"`
-	Changelog string  `json:"changelog"`
-	Assets    []Asset `json:"assets"`
+	Version   string                      `json:"version"`
+	Timestamp string                      `json:"timestamp"`
+	Changelog string                      `json:"changelog"`
+	Changes   map[string][]ChangelogEntry `json:"changes,omitempty"`
+	Assets    []Asset                     `json:"assets"`
+}
+
+// ChangelogEntry is a single structured changelog entry parsed from a
+// docs/changelogs/{version}.yml file.
+type ChangelogEntry struct {
+	Msg   string `json:"msg"`
+	PR    string `json:"pr,omitempty"`
+	Issue string `json:"issue,omitempty"`
+}
+
+// MergedEntry is a ChangelogEntry tagged with the release version it came
+// from, used when merging changelogs across multiple releases.
+type MergedEntry struct {
+	Entry   ChangelogEntry
+	Version string
 }
 
 // Asset represents a platform-specific release asset.
@@ -52,6 +71,56 @@ func (m *VersionMetadata) FindAsset(os, arch string) (*Asset, error) {
 		}
 	}
 	return nil, fmt.Errorf("no asset found for %s/%s", os, arch)
+}
+
+// ReleasesBetween returns the releases newer than current and no newer than
+// target (current < v <= target), sorted newest-first. The caller must ensure
+// current is a valid release version; an invalid semver sorts below all
+// releases and would match everything.
+func (idx *ChannelIndex) ReleasesBetween(current, target string) []ReleaseEntry {
+	vCurrent, vTarget := addV(current), addV(target)
+	var out []ReleaseEntry
+	for _, r := range idx.Releases {
+		if semver.Compare(vCurrent, addV(r.Version)) < 0 &&
+			semver.Compare(addV(r.Version), vTarget) <= 0 {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return semver.Compare(addV(out[i].Version), addV(out[j].Version)) > 0
+	})
+	return out
+}
+
+// OtherChannel returns the opposite release channel.
+func OtherChannel(channel string) string {
+	if channel == ChannelPrerelease {
+		return ChannelStable
+	}
+	return ChannelPrerelease
+}
+
+// CombineReleases returns the union of the two indexes' release entries,
+// deduplicated by version (first occurrence wins). Stable and prerelease
+// releases live in separate indexes, so a cross-channel update needs both to
+// see every release it skipped; a single index alone would omit the other
+// channel's intervening releases. nil indexes are ignored.
+func CombineReleases(a, b *ChannelIndex) []ReleaseEntry {
+	seen := make(map[string]bool)
+	var out []ReleaseEntry
+	for _, idx := range []*ChannelIndex{a, b} {
+		if idx == nil {
+			continue
+		}
+		for _, r := range idx.Releases {
+			if seen[r.Version] {
+				continue
+			}
+			seen[r.Version] = true
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Client fetches release metadata from vibepit.dev.
