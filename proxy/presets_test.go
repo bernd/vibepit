@@ -30,6 +30,7 @@ func TestPresetRegistry(t *testing.T) {
 		assert.Exactly(t, []string{
 			"anthropic",
 			"cdn-github",
+			"google-ai",
 			"homebrew",
 			"mistral",
 			"openai",
