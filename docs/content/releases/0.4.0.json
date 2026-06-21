@@ -1,0 +1,61 @@
+{
+  "version": "0.4.0",
+  "timestamp": "2026-06-21T13:45:30+02:00",
+  "changelog": "\nAdded:\n- `docs.github.com` to the GitHub network preset ([#15](https://github.com/bernd/vibepit/pull/15))\n- `patch-diff.githubusercontent.com` to the GitHub network preset\n- `google-ai` network preset for Google AI services\n\nChanged:\n- `vibepit update` now shows a single merged changelog covering every release you skipped, with each entry labeled by its version ([#17](https://github.com/bernd/vibepit/pull/17))\n\nFixed:\n- Fix garbled full-screen TUI rendering (e.g. Antigravity CLI) in `up`/`connect` SSH sessions ([#16](https://github.com/bernd/vibepit/pull/16))",
+  "changes": {
+    "added": [
+      {
+        "msg": "`docs.github.com` to the GitHub network preset",
+        "pr": "15"
+      },
+      {
+        "msg": "`patch-diff.githubusercontent.com` to the GitHub network preset"
+      },
+      {
+        "msg": "`google-ai` network preset for Google AI services"
+      }
+    ],
+    "changed": [
+      {
+        "msg": "`vibepit update` now shows a single merged changelog covering every release you skipped, with each entry labeled by its version",
+        "pr": "17"
+      }
+    ],
+    "fixed": [
+      {
+        "msg": "Fix garbled full-screen TUI rendering (e.g. Antigravity CLI) in `up`/`connect` SSH sessions",
+        "pr": "16"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-linux-x86_64.tar.gz",
+      "sha256": "6b2d029e06db3bcd1c601a77feb59ade45714fd63fa1c16584ee3e46635f18d4",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-linux-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-linux-aarch64.tar.gz",
+      "sha256": "f361c8af19aa956b1ae7017c12d3c64ee66de915e218774ea05f978ee9a29344",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-linux-aarch64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-darwin-x86_64.tar.gz",
+      "sha256": "ac3c34097e7ba863a7ce66461ecb7b8102d5694b6d2c6cda5569fe204e4f8c30",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-darwin-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-darwin-aarch64.tar.gz",
+      "sha256": "11238be265d863c40e4a085d13bf48314533c6fa96875e44a3f689b2deb1b600",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.4.0/vibepit-0.4.0-darwin-aarch64.tar.gz.bundle"
+    }
+  ]
+}
