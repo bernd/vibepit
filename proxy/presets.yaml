@@ -9,6 +9,7 @@
   includes:
     - "anthropic"
     - "cdn-github"
+    - "google-ai"
     - "homebrew"
     - "mistral"
     - "openai"
@@ -69,6 +70,16 @@
     - "ingrazzio-cloud-prod.labs.jb.gg:443"
     - "junie.jetbrains.com:443"
     - "oauth.account.jetbrains.com:443"
+
+- name: "google-ai"
+  group: "Infrastructure"
+  description: "Google AI services"
+  domains:
+    - "oauth2.googleapis.com:443"
+    - "daily-cloudcode-pa.googleapis.com:443"
+    - "www.googleapis.com:443"
+    - "lh3.googleusercontent.com:443"
+    - "antigravity-unleash.goog:443"
 
 - name: "vcs-github"
   group: "Infrastructure"

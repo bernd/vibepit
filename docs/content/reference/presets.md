@@ -25,6 +25,7 @@ following presets:
 
 - [`anthropic`](#anthropic)
 - [`cdn-github`](#cdn-github)
+- [`google-ai`](#google-ai)
 - [`homebrew`](#homebrew)
 - [`mistral`](#mistral)
 - [`openai`](#openai)
@@ -104,6 +105,18 @@ JetBrains AI services.
 ingrazzio-cloud-prod.labs.jb.gg:443
 junie.jetbrains.com:443
 oauth.account.jetbrains.com:443
+```
+
+### `google-ai`
+
+Google AI services.
+
+```
+oauth2.googleapis.com:443
+daily-cloudcode-pa.googleapis.com:443
+www.googleapis.com:443
+lh3.googleusercontent.com:443
+antigravity-unleash.goog:443
 ```
 
 ### `vcs-github`
