@@ -146,8 +146,76 @@ func runCheck(client *selfupdate.Client, pre bool) error {
 	return nil
 }
 
+// updateChangelog returns the changelog text to display for an update, and
+// whether it merges multiple releases. It falls back to the target's rendered
+// changelog string (today's behavior) for a dev-build current version, a nil
+// idx (the direct --use path, or a cross-channel update whose enumeration
+// could not be completed), a single-release step, a fetch failure, or any
+// in-range release whose JSON predates the structured changes field. A release
+// that legitimately has no notes (an empty, non-nil changes map) is not a
+// fallback trigger: it contributes nothing to the merge but does not suppress
+// the other releases' notes.
+func updateChangelog(client *selfupdate.Client, idx *selfupdate.ChannelIndex, current string, meta *selfupdate.VersionMetadata) (string, bool) {
+	if idx == nil || selfupdate.IsDevBuild(current) {
+		return meta.Changelog, false
+	}
+
+	rng := idx.ReleasesBetween(current, meta.Version)
+	if len(rng) <= 1 {
+		return meta.Changelog, false
+	}
+
+	metas := make([]*selfupdate.VersionMetadata, 0, len(rng))
+	for _, r := range rng {
+		var vm *selfupdate.VersionMetadata
+		if r.Version == meta.Version {
+			vm = meta // target metadata already in hand; no refetch
+		} else {
+			fetched, err := client.FetchVersionMetadata(r.Version)
+			if err != nil {
+				return meta.Changelog, false
+			}
+			vm = fetched
+		}
+		// A nil map means the JSON predates the structured changes field, so it
+		// cannot be merged and we fall back. An empty (non-nil) map is a release
+		// with no notes; it stays in the merge contributing nothing.
+		if vm.Changes == nil {
+			return meta.Changelog, false
+		}
+		metas = append(metas, vm)
+	}
+
+	return selfupdate.RenderMerged(selfupdate.MergeChanges(metas)), true
+}
+
+// enumerationIndex returns the channel index used to enumerate the releases a
+// changelog should span, or nil when complete enumeration is not possible.
+// Stable and prerelease releases live in separate indexes, so a cross-channel
+// update must union both to avoid omitting the other channel's intervening
+// releases; a same-channel update wants only its resolved index (so a stable
+// update isn't polluted with prerelease notes). For a cross-channel update
+// whose other index cannot be fetched, enumeration would be incomplete:
+// returning the resolved index alone would render a partial merge under a
+// heading claiming the full range, so we return nil to signal the caller to
+// fall back to the target's changelog instead.
+func enumerationIndex(client *selfupdate.Client, idx *selfupdate.ChannelIndex, channel string, crossChannel bool) *selfupdate.ChannelIndex {
+	if !crossChannel {
+		return idx
+	}
+	other, found, err := client.FetchChannelIndex(selfupdate.OtherChannel(channel))
+	if err != nil || !found {
+		return nil
+	}
+	return &selfupdate.ChannelIndex{
+		Latest:   idx.Latest,
+		Releases: selfupdate.CombineReleases(idx, other),
+	}
+}
+
 func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion string, pre, yes bool) error {
 	var meta *selfupdate.VersionMetadata
+	var idx *selfupdate.ChannelIndex
 
 	if useVersion != "" {
 		// Direct version fetch, bypass channel logic.
@@ -158,10 +226,11 @@ func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion st
 		}
 	} else {
 		// Channel-based update check.
-		idx, channel, err := client.ResolveChannel(pre)
+		resolved, channel, err := client.ResolveChannel(pre)
 		if err != nil {
 			return err
 		}
+		idx = resolved
 
 		crossChannel := isCrossChannel(config.Version, channel)
 		if !selfupdate.ShouldUpdate(config.Version, idx.Latest, crossChannel) {
@@ -173,6 +242,10 @@ func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion st
 		if err != nil {
 			return err
 		}
+
+		// For a cross-channel update, widen enumeration to both channels so the
+		// merged changelog includes releases skipped on the other channel.
+		idx = enumerationIndex(client, idx, channel, crossChannel)
 	}
 
 	// Find asset for current platform.
@@ -185,8 +258,14 @@ func runBinaryUpdate(_ context.Context, client *selfupdate.Client, useVersion st
 	label := lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true)
 	fmt.Printf("%s %s\n", label.Render("Current version:"), config.Version)
 	fmt.Printf("%s  %s (%s)\n", label.Render("Target version:"), meta.Version, meta.Timestamp)
-	if meta.Changelog != "" {
-		fmt.Printf("\n%s\n\n%s\n", label.Render("Changelog:"), meta.Changelog)
+
+	changelog, merged := updateChangelog(client, idx, config.Version, meta)
+	if changelog != "" {
+		heading := "Changelog:"
+		if merged {
+			heading = fmt.Sprintf("Changelog (v%s → v%s):", config.Version, meta.Version)
+		}
+		fmt.Printf("\n%s\n\n%s\n", label.Render(heading), changelog)
 	}
 
 	// Confirm.

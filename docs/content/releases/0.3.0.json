@@ -2,6 +2,54 @@
   "version": "0.3.0",
   "timestamp": "2026-06-09T00:04:34+02:00",
   "changelog": "\nAdded:\n- JetBrains AI service network preset\n- Packaging tools in the sandbox image\n- Session disconnect logging in `vibed`\n- `allow-cidr` config option to explicitly allow local IP ranges ([#10](https://github.com/bernd/vibepit/pull/10))\n- `extra-hosts` config option ([#11](https://github.com/bernd/vibepit/pull/11))\n- Global `upstream-dns` config option to set the upstream DNS server ([#12](https://github.com/bernd/vibepit/pull/12))\n- How-to for running with a local LLM provider ([#13](https://github.com/bernd/vibepit/pull/13))\n\nFixed:\n- Preserve formatting in `allow-http`/`allow-dns` appends ([#8](https://github.com/bernd/vibepit/pull/8))\n- State-file cleanup race in session test teardown ([#9](https://github.com/bernd/vibepit/pull/9))\n- `install -m` parameter in the Dockerfile\n- Force anonymous auth for cosign image signature verification\n- Distinguish forced detaches from clean shell exits",
+  "changes": {
+    "added": [
+      {
+        "msg": "JetBrains AI service network preset"
+      },
+      {
+        "msg": "Packaging tools in the sandbox image"
+      },
+      {
+        "msg": "Session disconnect logging in `vibed`"
+      },
+      {
+        "msg": "`allow-cidr` config option to explicitly allow local IP ranges",
+        "pr": "10"
+      },
+      {
+        "msg": "`extra-hosts` config option",
+        "pr": "11"
+      },
+      {
+        "msg": "Global `upstream-dns` config option to set the upstream DNS server",
+        "pr": "12"
+      },
+      {
+        "msg": "How-to for running with a local LLM provider",
+        "pr": "13"
+      }
+    ],
+    "fixed": [
+      {
+        "msg": "Preserve formatting in `allow-http`/`allow-dns` appends",
+        "pr": "8"
+      },
+      {
+        "msg": "State-file cleanup race in session test teardown",
+        "pr": "9"
+      },
+      {
+        "msg": "`install -m` parameter in the Dockerfile"
+      },
+      {
+        "msg": "Force anonymous auth for cosign image signature verification"
+      },
+      {
+        "msg": "Distinguish forced detaches from clean shell exits"
+      }
+    ]
+  },
   "assets": [
     {
       "os": "linux",
