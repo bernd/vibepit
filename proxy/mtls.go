@@ -234,11 +234,21 @@ func (c *MTLSCredentials) ServerTLSConfig() (*tls.Config, error) {
 // The server cert's only SAN is 127.0.0.1 and every caller dials that address, so
 // pinning ServerName here (via the shared builder) is correct.
 func (c *MTLSCredentials) ClientTLSConfig() (*tls.Config, error) {
-	return clientTLSFromPEM(c.ClientCertPEM(), c.ClientKeyPEM(), c.CACertPEM())
+	return ClientTLSFromPEM(c.ClientCertPEM(), c.ClientKeyPEM(), c.CACertPEM())
 }
 
-// clientTLSFromPEM builds a client TLS config from PEM material, pinning the CA.
-func clientTLSFromPEM(certPEM, keyPEM, caPEM []byte) (*tls.Config, error) {
+// InternalClientTLSConfig returns a tls.Config for the proxy's own internal client.
+func (c *MTLSCredentials) InternalClientTLSConfig() (*tls.Config, error) {
+	return ClientTLSFromPEM(c.InternalClientCertPEM(), c.InternalClientKeyPEM(), c.CACertPEM())
+}
+
+// SandboxClientTLSConfig returns a tls.Config for the sandbox client.
+func (c *MTLSCredentials) SandboxClientTLSConfig() (*tls.Config, error) {
+	return ClientTLSFromPEM(c.SandboxClientCertPEM(), c.SandboxClientKeyPEM(), c.CACertPEM())
+}
+
+// ClientTLSFromPEM builds a client TLS config from PEM material, pinning the CA.
+func ClientTLSFromPEM(certPEM, keyPEM, caPEM []byte) (*tls.Config, error) {
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("load client keypair: %w", err)
@@ -307,5 +317,5 @@ func LoadInternalClientTLSConfigFromEnv() (*tls.Config, error) {
 		return nil, fmt.Errorf("internal client TLS env vars must be set: %s, %s, %s",
 			EnvProxyInternalCert, EnvProxyInternalKey, EnvProxyCACert)
 	}
-	return clientTLSFromPEM([]byte(certPEM), []byte(keyPEM), []byte(caPEM))
+	return ClientTLSFromPEM([]byte(certPEM), []byte(keyPEM), []byte(caPEM))
 }

@@ -20,7 +20,7 @@ func newTestBus(t *testing.T) (*Bus, *MTLSCredentials) {
 	require.NoError(t, err)
 	serverTLS, err := creds.ServerTLSConfig()
 	require.NoError(t, err)
-	internalTLS, err := clientTLSFromPEM(creds.InternalClientCertPEM(), creds.InternalClientKeyPEM(), creds.CACertPEM())
+	internalTLS, err := creds.InternalClientTLSConfig()
 	require.NoError(t, err)
 
 	al, err := NewHTTPAllowlist(nil)
@@ -44,7 +44,7 @@ func newTestBus(t *testing.T) (*Bus, *MTLSCredentials) {
 // dialAs connects to the bus as the given client cert.
 func dialAs(t *testing.T, bus *Bus, certPEM, keyPEM, caPEM []byte) *nats.Conn {
 	t.Helper()
-	tlsCfg, err := clientTLSFromPEM(certPEM, keyPEM, caPEM)
+	tlsCfg, err := ClientTLSFromPEM(certPEM, keyPEM, caPEM)
 	require.NoError(t, err)
 	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(), nats.Timeout(5*time.Second))
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestBus_UserMappingAndPermissions(t *testing.T) {
 	bus, creds := newTestBus(t)
 
 	permCh := make(chan struct{}, 1)
-	tlsCfg, err := clientTLSFromPEM(creds.SandboxClientCertPEM(), creds.SandboxClientKeyPEM(), creds.CACertPEM())
+	tlsCfg, err := creds.SandboxClientTLSConfig()
 	require.NoError(t, err)
 	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, e error) {
@@ -122,7 +122,7 @@ func TestBus_SandboxInboxScoped(t *testing.T) {
 	bus, creds := newTestBus(t)
 
 	permCh := make(chan struct{}, 1)
-	tlsCfg, err := clientTLSFromPEM(creds.SandboxClientCertPEM(), creds.SandboxClientKeyPEM(), creds.CACertPEM())
+	tlsCfg, err := creds.SandboxClientTLSConfig()
 	require.NoError(t, err)
 	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, e error) {
@@ -312,7 +312,7 @@ func TestBus_RegisterHandlers_NilAllowlists(t *testing.T) {
 	require.NoError(t, err)
 	serverTLS, err := creds.ServerTLSConfig()
 	require.NoError(t, err)
-	internalTLS, err := clientTLSFromPEM(creds.InternalClientCertPEM(), creds.InternalClientKeyPEM(), creds.CACertPEM())
+	internalTLS, err := creds.InternalClientTLSConfig()
 	require.NoError(t, err)
 
 	bus, err := NewBus(BusOptions{ServerTLS: serverTLS, InternalTLS: internalTLS})
@@ -392,7 +392,7 @@ func TestBus_UserRoleDeniedForeignSubject(t *testing.T) {
 	bus, creds := newTestBus(t)
 
 	permCh := make(chan struct{}, 1)
-	tlsCfg, err := clientTLSFromPEM(creds.ClientCertPEM(), creds.ClientKeyPEM(), creds.CACertPEM())
+	tlsCfg, err := creds.ClientTLSConfig()
 	require.NoError(t, err)
 	nc, err := nats.Connect(bus.ClientURL(), nats.Secure(tlsCfg), nats.TLSHandshakeFirst(),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, e error) {

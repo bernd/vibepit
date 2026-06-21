@@ -15,18 +15,14 @@ import (
 )
 
 // newTestMTLS generates session mTLS credentials, builds the server TLS config,
-// exports the internal-client env vars, and loads the internal client TLS config
-// the proxy uses to dial its own bus.
+// and builds the internal client TLS config the proxy uses to dial its own bus.
 func newTestMTLS(t *testing.T) (creds *proxy.MTLSCredentials, serverTLS, internalTLS *tls.Config) {
 	t.Helper()
 	creds, err := proxy.GenerateMTLSCredentials(time.Hour)
 	require.NoError(t, err)
 	serverTLS, err = creds.ServerTLSConfig()
 	require.NoError(t, err)
-	t.Setenv(proxy.EnvProxyInternalCert, string(creds.InternalClientCertPEM()))
-	t.Setenv(proxy.EnvProxyInternalKey, string(creds.InternalClientKeyPEM()))
-	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
-	internalTLS, err = proxy.LoadInternalClientTLSConfigFromEnv()
+	internalTLS, err = creds.InternalClientTLSConfig()
 	require.NoError(t, err)
 	return creds, serverTLS, internalTLS
 }

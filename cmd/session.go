@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -146,21 +145,7 @@ func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
 		return nil, fmt.Errorf("read client key: %w", err)
 	}
 
-	cert, err := tls.X509KeyPair(clientCert, clientKey)
-	if err != nil {
-		return nil, fmt.Errorf("load client keypair: %w", err)
-	}
-
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA certificate")
-	}
-
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caPool,
-	}, nil
+	return proxy.ClientTLSFromPEM(clientCert, clientKey, caCert)
 }
 
 // WriteSSHCredentials persists SSH key material for a session into
