@@ -335,6 +335,7 @@ npmjs.com:443
 npmjs.org:443
 yarnpkg.com:443
 registry.yarnpkg.com:443
+nodejs.org:443
 ```
 
 ### `pkg-python`
