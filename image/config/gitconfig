@@ -1,0 +1,8 @@
+# vim: ft=gitconfig
+
+# Vibepit Git settings
+
+# The sandbox only reaches GitHub over HTTPS through the filtering proxy.
+[url "https://github.com/"]
+	insteadOf = git@github.com:
+	insteadOf = ssh://git@github.com/
