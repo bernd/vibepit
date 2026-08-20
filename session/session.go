@@ -52,12 +52,16 @@ type Session struct {
 	cleanupOnce sync.Once
 }
 
-func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Session, error) {
+func newSession(id string, cols, rows uint16, env []string, dir string, mgr *Manager) (*Session, error) {
 	shellCmd := []string{"/bin/bash", "--login"}
 	if mgr != nil && len(mgr.Command) > 0 {
 		shellCmd = mgr.Command
 	}
 	cmd := exec.Command(shellCmd[0], shellCmd[1:]...)
+	if dir != "" {
+		cmd.Dir = dir
+		env = append(append([]string(nil), env...), "PWD="+dir)
+	}
 	cmd.Env = MergeEnv(env)
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/internal/runtimeenv"
 	"github.com/bernd/vibepit/sshd"
 	"github.com/bernd/vibepit/ward"
 	"github.com/urfave/cli/v3"
@@ -80,6 +81,14 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 			return &ctr.ExitError{Code: exitCode}
 		}
 		return nil
+	}
+
+	_, relativeWorkingDir, err := resolveProjectWorkingDirectory(sandbox.ProjectDir, "")
+	if err != nil {
+		return err
+	}
+	if err := session.Setenv(runtimeenv.WorkingDir, relativeWorkingDir); err != nil {
+		return fmt.Errorf("set remote working directory: %w", err)
 	}
 
 	fd := int(os.Stdin.Fd())

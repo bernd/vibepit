@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	charmssh "charm.land/ssh"
+	"github.com/bernd/vibepit/internal/runtimeenv"
 	"github.com/bernd/vibepit/keygen"
 	"github.com/bernd/vibepit/session"
 	"github.com/stretchr/testify/assert"
@@ -695,6 +698,67 @@ func TestRejectsLateEnvViaSSH(t *testing.T) {
 	require.NoError(t, sess.Setenv("EARLY", "1"), "env before shell should be accepted")
 	require.NoError(t, sess.Shell())
 	require.Error(t, sess.Setenv("LATE", "1"), "env after shell should be rejected")
+}
+
+func TestResolveWorkingDirectory(t *testing.T) {
+	projectDir := t.TempDir()
+	nestedDir := filepath.Join(projectDir, "nested", "project")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+	filePath := filepath.Join(projectDir, "file")
+	require.NoError(t, os.WriteFile(filePath, nil, 0o600))
+	t.Setenv(runtimeenv.ProjectDir, projectDir)
+
+	tests := []struct {
+		name        string
+		relativeDir string
+		want        string
+		wantErr     bool
+	}{
+		{name: "project root", relativeDir: ".", want: projectDir},
+		{name: "nested directory", relativeDir: filepath.Join("nested", "project"), want: nestedDir},
+		{name: "parent traversal", relativeDir: "..", wantErr: true},
+		{name: "absolute path", relativeDir: projectDir, wantErr: true},
+		{name: "missing directory", relativeDir: "missing", wantErr: true},
+		{name: "regular file", relativeDir: "file", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveWorkingDirectory(tt.relativeDir)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestPTYSessionStartsInRequestedWorkingDirectory(t *testing.T) {
+	projectDir := t.TempDir()
+	relativeDir := filepath.Join("nested", "project")
+	workingDir := filepath.Join(projectDir, relativeDir)
+	require.NoError(t, os.MkdirAll(workingDir, 0o755))
+	t.Setenv(runtimeenv.ProjectDir, projectDir)
+
+	mgr := session.NewManager(50)
+	mgr.Command = []string{"/bin/sh", "-c", `printf '%s\n' "$PWD"; pwd; printf '%s\n' "$VIBEPIT_WORKING_DIR"`}
+	client := dialTestServer(t, mgr)
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	defer sess.Close() //nolint:errcheck
+
+	var out syncBuf
+	sess.Stdout = &out
+	require.NoError(t, sess.Setenv(runtimeenv.WorkingDir, relativeDir))
+	require.NoError(t, sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{}))
+	require.NoError(t, sess.Shell())
+	require.NoError(t, sess.Wait())
+
+	got := strings.ReplaceAll(out.String(), "\r\n", "\n")
+	assert.Contains(t, got, workingDir+"\n"+workingDir+"\n"+workingDir+"\n")
 }
 
 // fakeChannel is a minimal gossh.Channel that captures stderr writes, for unit

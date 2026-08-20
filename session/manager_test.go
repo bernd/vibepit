@@ -102,6 +102,17 @@ func TestManager_CreateAndList(t *testing.T) {
 	assert.Equal(t, 0, sessions[0].ClientCount)
 }
 
+func TestManager_CreateInDir(t *testing.T) {
+	m := testManager(t, 50)
+	workingDir := t.TempDir()
+
+	s, err := m.CreateInDir(80, 24, []string{"PWD=/old/path"}, workingDir)
+	require.NoError(t, err)
+	assert.Equal(t, workingDir, s.cmd.Dir)
+	assert.Contains(t, s.cmd.Env, "PWD="+workingDir)
+	assert.NotContains(t, s.cmd.Env, "PWD=/old/path")
+}
+
 func TestManager_Limit(t *testing.T) {
 	m := testManager(t, 1)
 	_, err := m.Create(80, 24, nil)

@@ -8,12 +8,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/bernd/vibepit/internal/runtimeenv"
 	"github.com/bernd/vibepit/session"
 	"github.com/bernd/vibepit/tui"
 	"github.com/charmbracelet/colorprofile"
@@ -47,6 +49,27 @@ type Server struct {
 // keepaliveRequestType is the SSH global request name used by both the PTY
 // and exec keepalive paths. It matches the OpenSSH client/server convention.
 const keepaliveRequestType = "keepalive@openssh.com"
+
+func resolveWorkingDirectory(relativeDir string) (string, error) {
+	if !filepath.IsLocal(relativeDir) {
+		return "", fmt.Errorf("invalid project-relative working directory %q", relativeDir)
+	}
+
+	projectDir := os.Getenv(runtimeenv.ProjectDir)
+	if projectDir == "" {
+		return "", fmt.Errorf("%s is not set", runtimeenv.ProjectDir)
+	}
+
+	workingDir := filepath.Join(projectDir, relativeDir)
+	info, err := os.Stat(workingDir)
+	if err != nil {
+		return "", fmt.Errorf("access working directory %q: %w", workingDir, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("working directory %q is not a directory", workingDir)
+	}
+	return workingDir, nil
+}
 
 // DisconnectExitCode is the exit status reported to the connecting client when
 // a PTY client is force-detached (keepalive timeout, lost connection, or slow
@@ -235,6 +258,7 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 	// SSH clients typically don't forward COLORTERM. Fall back to the
 	// container's own value so the TUI can detect TrueColor support.
 	sshEnv := sess.Environ()
+	requestedWorkingDir, hasRequestedWorkingDir := runtimeenv.Lookup(sshEnv, runtimeenv.WorkingDir)
 	sshEnv = append(sshEnv, fmt.Sprintf("TERM=%s", sess.term))
 	hasColorterm := slices.ContainsFunc(sshEnv, func(e string) bool {
 		return strings.HasPrefix(e, "COLORTERM=")
@@ -243,6 +267,19 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 		if ct := os.Getenv("COLORTERM"); ct != "" {
 			sshEnv = append(sshEnv, "COLORTERM="+ct)
 		}
+	}
+	createSession := func() (*session.Session, error) {
+		workingDir := ""
+		sessionEnv := sshEnv
+		if hasRequestedWorkingDir {
+			var err error
+			workingDir, err = resolveWorkingDirectory(requestedWorkingDir)
+			if err != nil {
+				return nil, err
+			}
+			sessionEnv = runtimeenv.Set(sshEnv, runtimeenv.WorkingDir, workingDir)
+		}
+		return mgr.CreateInDir(cols, rows, sessionEnv, workingDir)
 	}
 
 	allSessions := mgr.List()
@@ -271,7 +308,7 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 	if len(detached) == 0 {
 		// No detached sessions — create one directly.
 		var err error
-		target, err = mgr.Create(cols, rows, sshEnv)
+		target, err = createSession()
 		if err != nil {
 			fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
 			finishPTY(nil, 1)
@@ -321,7 +358,7 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 		if result.sessionID == "" {
 			// New session.
 			var err error
-			target, err = mgr.Create(cols, rows, sshEnv)
+			target, err = createSession()
 			if err != nil {
 				fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
 				finishPTY(nil, 1)

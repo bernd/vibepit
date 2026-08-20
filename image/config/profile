@@ -3,7 +3,9 @@
 # Vibepit shell settings
 
 # Alias to return to the current project dir.
-alias cdp='cd $VIBEPIT_PROJECT_DIR'
+alias cdp='cd "$VIBEPIT_PROJECT_DIR"'
+# Alias to return to the current working dir.
+alias cdw='cd "$VIBEPIT_WORKING_DIR"'
 
 if [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
 	eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"

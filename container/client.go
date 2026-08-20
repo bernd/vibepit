@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/config"
+	"github.com/bernd/vibepit/internal/runtimeenv"
 	"github.com/bernd/vibepit/tui"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -478,20 +479,25 @@ func (c *Client) AttachAndStartSession(ctx context.Context, containerID string) 
 	}
 }
 
-// ExecSession starts a new interactive shell inside a running container.
-// Used when reattaching to an existing session. Returns an *ExitError if
-// the shell exits with a non-zero status code.
-func (c *Client) ExecSession(ctx context.Context, containerID string) error {
-	size := terminalSize()
-
-	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+func execSessionOptions(size *[2]uint, workingDir string, env []string) container.ExecOptions {
+	return container.ExecOptions{
 		Tty:          true,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          []string{"/bin/bash", "--login"},
 		ConsoleSize:  size,
-	})
+		WorkingDir:   workingDir,
+		Env:          env,
+	}
+}
+
+// ExecSession starts a new interactive shell in workingDir with the additional
+// environment entries applied to the exec process.
+func (c *Client) ExecSession(ctx context.Context, containerID, workingDir string, env []string) error {
+	size := terminalSize()
+
+	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, execSessionOptions(size, workingDir, env))
 	if err != nil {
 		return fmt.Errorf("exec create: %w", err)
 	}
@@ -755,6 +761,7 @@ type SandboxContainerConfig struct {
 	Image               string
 	ProjectDir          string
 	WorkDir             string
+	ExtraEnv            []string
 	RuntimeDir          string
 	HomeVolumeName      string
 	LinuxbrewVolumeName string
@@ -776,15 +783,13 @@ type SandboxContainerConfig struct {
 	DaemonEntrypoint    []string // entrypoint override for daemon mode
 }
 
-// CreateSandboxContainer creates the sandboxed development container
-// with proxy environment variables and a read-only root filesystem.
-func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContainerConfig) (string, error) {
+func sandboxEnvironment(cfg SandboxContainerConfig) []string {
 	proxyURL := fmt.Sprintf("http://%s", net.JoinHostPort(cfg.ProxyIP, strconv.Itoa(cfg.ProxyPort)))
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
 		"LANG=en_US.UTF-8",
 		"LC_ALL=en_US.UTF-8",
-		fmt.Sprintf("VIBEPIT_PROJECT_DIR=%s", cfg.ProjectDir),
+		fmt.Sprintf("%s=%s", runtimeenv.ProjectDir, cfg.ProjectDir),
 		"HTTP_PROXY=" + proxyURL,
 		"HTTPS_PROXY=" + proxyURL,
 		"http_proxy=" + proxyURL,
@@ -798,6 +803,13 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 	if cfg.ColorTerm != "" {
 		env = append(env, fmt.Sprintf("COLORTERM=%s", cfg.ColorTerm))
 	}
+	return append(env, cfg.ExtraEnv...)
+}
+
+// CreateSandboxContainer creates the sandboxed development container
+// with proxy environment variables and a read-only root filesystem.
+func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContainerConfig) (string, error) {
+	env := sandboxEnvironment(cfg)
 
 	binds := []string{
 		cfg.HomeVolumeName + ":" + HomeMountPath,
