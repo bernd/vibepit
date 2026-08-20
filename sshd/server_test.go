@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	charmssh "charm.land/ssh"
 	"github.com/bernd/vibepit/keygen"
 	"github.com/bernd/vibepit/session"
-	charmssh "github.com/charmbracelet/ssh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gossh "golang.org/x/crypto/ssh"

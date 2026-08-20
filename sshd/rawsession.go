@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	charmssh "github.com/charmbracelet/ssh"
+	charmssh "charm.land/ssh"
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/bernd/vibepit/session"
