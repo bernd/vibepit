@@ -25,8 +25,8 @@ type selectorScreen struct {
 
 func newSelectorScreen(sessions []session.SessionInfo) *selectorScreen {
 	return &selectorScreen{
-		Cursor:   tui.Cursor{ItemCount: len(sessions) + 1}, // +1 for "new session"
-		sessions: sessions,
+		ItemCount: len(sessions) + 1, // +1 for "new session"
+		sessions:  sessions,
 	}
 }
 
