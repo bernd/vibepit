@@ -73,7 +73,7 @@ type sessionSelectResultMsg struct {
 func newSessionScreen(sessions []ctr.ProxySession, onSelect func(*SessionInfo) (tui.Screen, tea.Cmd), pollSessions func() ([]ctr.ProxySession, error)) *sessionScreen {
 	sortSessions(sessions)
 	return &sessionScreen{
-		Cursor:        tui.Cursor{ItemCount: len(sessions)},
+		ItemCount:     len(sessions),
 		sessions:      sessions,
 		onSelect:      onSelect,
 		pollSessions:  pollSessions,
