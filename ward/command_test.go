@@ -505,3 +505,22 @@ func TestProcessInputHotkeyFollowedByActionInSameChunk(t *testing.T) {
 	assert.Equal(t, byte('a'), calledKey)
 	assert.Equal(t, []byte("prez"), pty.written)
 }
+
+func TestProcessInputCommandModeForwardsSizeReportIntact(t *testing.T) {
+	pty := &mockPTY{}
+	cancelCh := make(chan barEvent, 1)
+	handler := &inputHandler{
+		hotkey:      0x1D,
+		eventCh:     cancelCh,
+		visibleKeys: []byte{'8', '9'},
+		onKey:       func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
+	}
+
+	// A resize during command mode makes tmux query the terminal; the
+	// reply must reach the child with its ESC so the rewriter can see it.
+	input := []byte("\x1b[8;48;97t")
+	inCommand := processInput(input, pty, 0x1D, true, handler, t.Context())
+	assert.False(t, inCommand)
+	assert.Equal(t, input, pty.written)
+	require.Len(t, cancelCh, 1)
+}

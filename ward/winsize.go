@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/parser"
 )
 
 // winsizeRewriter filters XTWINOPS window-size reports on their way from
@@ -32,14 +33,14 @@ import (
 // past the scroll region; no known application does, so that is out of
 // scope.
 type winsizeRewriter struct {
-	w      io.Writer
-	rows   *atomic.Int32 // full terminal height, as seen by ward
-	parser *ansi.Parser
+	w    io.Writer
+	rows *atomic.Int32 // full terminal height, as seen by ward
 
 	mu      sync.Mutex
 	pending [maxPending]byte // partial CSI that may still become a size report
 	npend   int
 	flush   *time.Timer // releases pending bytes if no continuation arrives
+	gen     uint64      // bumped whenever pending changes; stale flushes bail out
 }
 
 // winsizeFlushDelay bounds how long a size-report prefix is held back.
@@ -53,16 +54,16 @@ const winsizeFlushDelay = 50 * time.Millisecond
 const maxPending = 32
 
 func newWinsizeRewriter(w io.Writer, rows *atomic.Int32) *winsizeRewriter {
-	p := ansi.NewParser()
-	p.SetDataSize(0) // only CSI params are needed; no OSC/DCS payloads
-	return &winsizeRewriter{w: w, rows: rows, parser: p}
+	return &winsizeRewriter{w: w, rows: rows}
 }
 
-// Write implements io.Writer. It always reports len(p) bytes consumed.
-// Bytes that might be the prefix of a size report are held back until the
-// sequence completes, is ruled out, or the flush delay expires. A lone
-// trailing ESC is never held back: terminals emit reports atomically, so
-// a split right after ESC is far less likely than a user pressing Esc.
+// Write implements io.Writer. Bytes that might be the prefix of a size
+// report are held back until the sequence completes, is ruled out, or the
+// flush delay expires; they count as consumed by the call that held them.
+// A lone trailing ESC is never held back: terminals emit reports
+// atomically, so a split right after ESC is far less likely than a user
+// pressing Esc. On error, n is the number of bytes of p handed to the
+// underlying writer and any held-back bytes are discarded.
 func (r *winsizeRewriter) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -72,6 +73,7 @@ func (r *winsizeRewriter) Write(p []byte) (int, error) {
 		return len(p), err
 	}
 
+	r.gen++
 	if r.flush != nil {
 		r.flush.Stop()
 	}
@@ -81,6 +83,8 @@ func (r *winsizeRewriter) Write(p []byte) (int, error) {
 		data = append(r.pending[:r.npend:r.npend], p...)
 		r.npend = 0
 	}
+	// Bytes of p still unwritten; the held prefix belonged to an earlier call.
+	consumed := func() int { return max(0, len(p)-len(data)) }
 
 	for len(data) > 0 {
 		idx := bytes.IndexByte(data, asciiESC)
@@ -89,7 +93,7 @@ func (r *winsizeRewriter) Write(p []byte) (int, error) {
 		}
 		if idx > 0 {
 			if _, err := r.w.Write(data[:idx]); err != nil {
-				return 0, err
+				return consumed(), err
 			}
 			data = data[idx:]
 			continue
@@ -102,21 +106,33 @@ func (r *winsizeRewriter) Write(p []byte) (int, error) {
 			data = nil
 		case n > 0:
 			if _, err := r.w.Write(repl); err != nil {
-				return 0, err
+				return consumed(), err
 			}
 			data = data[n:]
 		default:
-			if _, err := r.w.Write(data[:1]); err != nil {
-				return 0, err
+			// Not a size report: forward everything up to the next ESC in
+			// one write, so the child never sees a sequence split after
+			// its ESC and mistakes it for a bare Esc key.
+			end := bytes.IndexByte(data[1:], asciiESC)
+			if end < 0 {
+				end = len(data)
+			} else {
+				end++
 			}
-			data = data[1:]
+			if _, err := r.w.Write(data[:end]); err != nil {
+				return consumed(), err
+			}
+			data = data[end:]
 		}
 	}
 
 	if r.npend > 0 {
+		gen := r.gen
 		if r.flush == nil {
-			r.flush = time.AfterFunc(winsizeFlushDelay, r.flushPending)
+			r.flush = time.AfterFunc(winsizeFlushDelay, func() { r.flushPending(gen) })
 		} else {
+			// Reset does not wait for a running callback; the generation
+			// check in flushPending makes such a stale run a no-op.
 			r.flush.Reset(winsizeFlushDelay)
 		}
 	}
@@ -124,10 +140,11 @@ func (r *winsizeRewriter) Write(p []byte) (int, error) {
 }
 
 // flushPending writes held-back bytes verbatim once the flush delay expires.
-func (r *winsizeRewriter) flushPending() {
+// gen identifies the Write that armed the timer; a later Write supersedes it.
+func (r *winsizeRewriter) flushPending(gen uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.npend == 0 {
+	if r.npend == 0 || gen != r.gen {
 		return
 	}
 	n := r.npend
@@ -135,46 +152,104 @@ func (r *winsizeRewriter) flushPending() {
 	r.w.Write(r.pending[:n]) //nolint:errcheck
 }
 
+// maxReportParams is the longest parameter list of any size report
+// (CSI 48 ; rows ; cols ; height ; width t).
+const maxReportParams = 5
+
 // matchSizeReport inspects data, which must start with ESC. It returns the
 // number of bytes consumed and their replacement when a complete size
 // report is present, incomplete=true when data is a proper prefix of one,
 // and (0, nil, false) when data cannot be a size report.
+//
+// Size reports are plain CSI sequences with numeric parameters only, so
+// the match is a direct scan rather than a full ANSI parse. Anything else
+// (private prefixes, intermediates, OSC/DCS strings) is rejected as soon
+// as it is recognisable, so unrelated input is never delayed.
 func (r *winsizeRewriter) matchSizeReport(data []byte) (int, []byte, bool) {
-	_, _, n, state := ansi.DecodeSequence(data, ansi.NormalState, r.parser)
-	if state != ansi.NormalState {
-		return 0, nil, true
+	var ps [maxReportParams]int
+	n, nps, incomplete := scanSizeReport(data, &ps)
+	if n == 0 {
+		return 0, nil, incomplete
 	}
-	cmd := ansi.Cmd(r.parser.Command())
-	if cmd.Final() != 't' || cmd.Prefix() != 0 || cmd.Intermediate() != 0 {
-		return 0, nil, false
+	return r.rewriteReport(n, ps[:nps])
+}
+
+// looksLikeSizeReport reports whether data, starting with ESC, is a
+// complete size report or an unambiguous prefix of one (at least ESC [).
+func looksLikeSizeReport(data []byte) bool {
+	var ps [maxReportParams]int
+	n, _, incomplete := scanSizeReport(data, &ps)
+	return n > 0 || (incomplete && len(data) >= 2)
+}
+
+// scanSizeReport parses ESC [ digits ( ; digits )* t at the start of data
+// into ps. It returns the sequence length and parameter count on a full
+// match, incomplete=true for a proper prefix, and n=0, incomplete=false
+// when data cannot be a size report.
+func scanSizeReport(data []byte, ps *[maxReportParams]int) (int, int, bool) {
+	if len(data) < 2 {
+		return 0, 0, true
+	}
+	if data[1] != '[' {
+		return 0, 0, false
 	}
 
-	params := r.parser.Params()
-	if len(params) == 0 {
-		return 0, nil, false
-	}
-	ps := make([]int, len(params))
-	for i, p := range params {
-		// Sub-parameters or missing values never occur in a size report.
-		if p.HasMore() || p.Param(-1) < 0 {
-			return 0, nil, false
+	nps := 0
+	val, ndigits := 0, 0
+	for i := 2; i < len(data); i++ {
+		c := data[i]
+		switch {
+		case c >= '0' && c <= '9':
+			val = val*10 + int(c-'0')
+			if val > parser.MaxParam {
+				return 0, 0, false
+			}
+			ndigits++
+		case c == ';' || c == 't':
+			// Missing values never occur in a size report.
+			if ndigits == 0 || nps == maxReportParams {
+				return 0, 0, false
+			}
+			ps[nps] = val
+			nps++
+			val, ndigits = 0, 0
+			if c == 't' {
+				return i + 1, nps, false
+			}
+		default:
+			return 0, 0, false
 		}
-		ps[i] = p.Param(-1)
 	}
+	return 0, 0, true
+}
 
+// rewriteReport builds the replacement for a complete size report of n
+// bytes with parameters ps, or reports (0, nil, false) if it is not a
+// kind ward needs to adjust.
+func (r *winsizeRewriter) rewriteReport(n int, ps []int) (int, []byte, bool) {
 	// ps[1] is the row count (or pixel height for kind 4);
 	// ps[3] is the pixel height for in-band resize reports.
 	kind := ps[0]
-	rows := int(r.rows.Load())
 	switch {
-	case rows <= 1:
-		return 0, nil, false
 	case (kind == 8 || kind == 9) && len(ps) == 3:
 		ps[1] = shrinkRows(ps[1])
 	case kind == 4 && len(ps) == 3:
+		// The pixel reply carries no row count, so scale by ward's view of
+		// the terminal height.
+		rows := int(r.rows.Load())
+		if rows <= 1 {
+			return 0, nil, false
+		}
 		ps[1] = ps[1] * (rows - 1) / rows
 	case kind == 48 && len(ps) == 5:
-		ps[1] = shrinkRows(ps[1])
+		// Scale by the report's own row count rather than ward's, which may
+		// lag behind during a resize; the pair must stay self-consistent so
+		// the child derives the right cell height.
+		rows := ps[1]
+		if rows <= 1 {
+			return 0, nil, false
+		}
+		ps[1] = rows - 1
 		ps[3] = ps[3] * (rows - 1) / rows
 	default:
 		return 0, nil, false

@@ -113,8 +113,13 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 				kind: barEventCancelCommand,
 				gen:  handler.gen,
 			}
-			// Forward remaining bytes to PTY
-			if i < len(data) {
+			// Forward remaining bytes to PTY. A terminal size report that
+			// lands here (a resize during command mode makes tmux query
+			// the terminal) is not a keypress: keep its ESC so the
+			// winsize rewriter downstream can recognise it.
+			if looksLikeSizeReport(data[i-1:]) {
+				pty.Write(data[i-1:]) //nolint:errcheck
+			} else if i < len(data) {
 				pty.Write(data[i:]) //nolint:errcheck
 			}
 			return false

@@ -2,6 +2,8 @@ package ward
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,4 +130,130 @@ func TestWinsizeRewriterFlushesHeldPrefix(t *testing.T) {
 		defer r.mu.Unlock()
 		return out.String() == "\x1b[8;4"
 	}, time.Second, 5*time.Millisecond)
+}
+
+// recordingWriter keeps each Write call separate so tests can assert on
+// write boundaries, not just the concatenated output.
+type recordingWriter struct {
+	chunks []string
+}
+
+func (w *recordingWriter) Write(p []byte) (int, error) {
+	w.chunks = append(w.chunks, string(p))
+	return len(p), nil
+}
+
+func TestWinsizeRewriterKeepsSequencesWhole(t *testing.T) {
+	var out recordingWriter
+	r := newWinsizeRewriter(&out, atomicRows(48))
+
+	_, err := r.Write([]byte("\x1b[A\x1b[Bxyz"))
+	require.NoError(t, err)
+	for _, c := range out.chunks {
+		assert.NotEqual(t, "\x1b", c, "a lone ESC must not be split off from its sequence: %q", out.chunks)
+	}
+	assert.Equal(t, "\x1b[A\x1b[Bxyz", strings.Join(out.chunks, ""))
+}
+
+func TestWinsizeRewriterDoesNotHoldNonReportPrefixes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"OSC colour reply", "\x1b]11;rgb:1e1e"},
+		{"DCS reply", "\x1bP1+r"},
+		{"split SGR mouse report", "\x1b[<0;10;2"},
+		{"private CSI prefix", "\x1b[?8;4"},
+		{"alt-bracket-close", "\x1b]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			r := newWinsizeRewriter(&out, atomicRows(48))
+			_, err := r.Write([]byte(tt.input))
+			require.NoError(t, err)
+			assert.Equal(t, tt.input, out.String(), "cannot become a size report; must not be delayed")
+		})
+	}
+}
+
+func TestWinsizeRewriterRejectsOutOfRangeParams(t *testing.T) {
+	tests := []string{
+		"\x1b[8;18446744073709551640;97t", // wraps past int64 back into range
+		"\x1b[8;65536;97t",                // above the parser's MaxParam
+	}
+	for _, in := range tests {
+		var out bytes.Buffer
+		r := newWinsizeRewriter(&out, atomicRows(48))
+		_, err := r.Write([]byte(in))
+		require.NoError(t, err)
+		assert.Equal(t, in, out.String())
+	}
+}
+
+func TestWinsizeRewriterInBandResizeUsesReportedRows(t *testing.T) {
+	var out bytes.Buffer
+	// ward's own row count lags behind the report during a resize.
+	r := newWinsizeRewriter(&out, atomicRows(24))
+	_, err := r.Write([]byte("\x1b[48;48;97;960;1940t"))
+	require.NoError(t, err)
+	assert.Equal(t, "\x1b[48;47;97;940;1940t", out.String())
+}
+
+func TestWinsizeRewriterStaleFlushIsIgnored(t *testing.T) {
+	var out bytes.Buffer
+	r := newWinsizeRewriter(&out, atomicRows(48))
+
+	_, err := r.Write([]byte("\x1b[8;4"))
+	require.NoError(t, err)
+	r.mu.Lock()
+	stale := r.gen
+	r.mu.Unlock()
+
+	_, err = r.Write([]byte("8;9"))
+	require.NoError(t, err)
+
+	// A timer that fired for the first prefix must not release the second.
+	r.flushPending(stale)
+	assert.Empty(t, out.String())
+
+	_, err = r.Write([]byte("7t"))
+	require.NoError(t, err)
+	assert.Equal(t, "\x1b[8;47;97t", out.String())
+}
+
+// failAfterWriter succeeds for the first ok calls, then fails.
+type failAfterWriter struct {
+	ok    int
+	calls int
+}
+
+var errWrite = errors.New("pty closed")
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	w.calls++
+	if w.calls > w.ok {
+		return 0, errWrite
+	}
+	return len(p), nil
+}
+
+func TestWinsizeRewriterReportsBytesConsumedOnError(t *testing.T) {
+	r := newWinsizeRewriter(&failAfterWriter{ok: 1}, atomicRows(48))
+	n, err := r.Write([]byte("abc\x1b[A"))
+	require.ErrorIs(t, err, errWrite)
+	assert.Equal(t, 3, n)
+}
+
+func TestWinsizeRewriterDiscardsPendingOnError(t *testing.T) {
+	r := newWinsizeRewriter(&failAfterWriter{ok: 0}, atomicRows(48))
+	_, err := r.Write([]byte("\x1b[8;4"))
+	require.NoError(t, err, "held prefix does not touch the writer")
+	_, err = r.Write([]byte("8;97t"))
+	require.ErrorIs(t, err, errWrite)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	assert.Zero(t, r.npend, "pending bytes must not survive a write error")
+	assert.False(t, r.flush != nil && r.flush.Stop(), "flush timer must be disarmed after a write error")
 }
