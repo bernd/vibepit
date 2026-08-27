@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -140,6 +141,10 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	barScrollSeq := scrollRegionSeq(rows - 1)
 	termRows := rows
 	termCols := cols
+	// Lock-free copy of termRows for the stdin path, so the input goroutine
+	// never waits behind a blocking stdout write while holding its own lock.
+	var termRowsAtomic atomic.Int32
+	termRowsAtomic.Store(int32(rows))
 	var lastOutputAt time.Time
 
 	var cache barCache // shared with output goroutine and SIGWINCH; guarded by outputMu
@@ -225,6 +230,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 					oldRows := termRows
 					clearResizeBarRows(oldRows, h)
 					termCols, termRows = w, h
+					termRowsAtomic.Store(int32(h))
 					os.Stdout.WriteString(resizeRepairSeq(termRows-1, lastOutputAt, time.Now())) //nolint:errcheck
 					_ = pty.Setsize(ptmx, &pty.Winsize{
 						Rows: uint16(termRows - 1),
@@ -626,6 +632,10 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	}()
 
 	// stdin -> PTY goroutine with command mode input parsing.
+	//
+	// Input passes through a rewriter that adjusts XTWINOPS window-size
+	// reports to match the one-row-shorter PTY the child was given.
+	ptyIn := newWinsizeRewriter(ptmx, &termRowsAtomic)
 	go func() {
 		buf := make([]byte, 32*1024)
 		inCommand := false
@@ -644,7 +654,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
 				if handler == nil {
-					if _, werr := ptmx.Write(buf[:n]); werr != nil {
+					if _, werr := ptyIn.Write(buf[:n]); werr != nil {
 						break
 					}
 				} else {
@@ -656,7 +666,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 						default:
 						}
 					}
-					inCommand = processInput(buf[:n], ptmx, w.opts.Hotkey, inCommand, handler, cmdCtx)
+					inCommand = processInput(buf[:n], ptyIn, w.opts.Hotkey, inCommand, handler, cmdCtx)
 					if inCommand {
 						cmdCtx = handler.cmdCtx
 					} else {
