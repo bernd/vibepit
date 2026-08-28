@@ -516,9 +516,29 @@ func TestProcessInputCommandModeForwardsSizeReportIntact(t *testing.T) {
 		onKey:       func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
 	}
 
-	// A resize during command mode makes tmux query the terminal; the
-	// reply must reach the child with its ESC so the rewriter can see it.
-	input := []byte("\x1b[8;48;97t")
+	// An unsolicited in-band resize report during command mode is not a
+	// keypress: it must reach the child intact, and the bar must stay open.
+	input := []byte("\x1b[48;48;97;960;1940t")
+	inCommand := processInput(input, pty, 0x1D, true, handler, t.Context())
+	assert.True(t, inCommand)
+	assert.Equal(t, input, pty.written)
+	assert.Empty(t, cancelCh)
+}
+
+func TestProcessInputCommandModeSplitSizeReportPrefix(t *testing.T) {
+	pty := &mockPTY{}
+	cancelCh := make(chan barEvent, 1)
+	handler := &inputHandler{
+		hotkey:  0x1D,
+		eventCh: cancelCh,
+		onKey:   func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
+	}
+
+	// A prefix split at the chunk boundary cannot be told apart from Esc
+	// followed by '[' here; it is forwarded with its ESC so the rewriter can
+	// still complete it, and command mode ends so the continuation is not
+	// consumed as command keys.
+	input := []byte("\x1b[8;4")
 	inCommand := processInput(input, pty, 0x1D, true, handler, t.Context())
 	assert.False(t, inCommand)
 	assert.Equal(t, input, pty.written)
