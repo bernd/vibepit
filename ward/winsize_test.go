@@ -257,3 +257,19 @@ func TestWinsizeRewriterDiscardsPendingOnError(t *testing.T) {
 	assert.Zero(t, r.npend, "pending bytes must not survive a write error")
 	assert.False(t, r.flush != nil && r.flush.Stop(), "flush timer must be disarmed after a write error")
 }
+
+func TestInputWriterBypassesRewriterWithoutTerminal(t *testing.T) {
+	var out bytes.Buffer
+	rows := atomicRows(24)
+	report := "\x1b[8;24;80t"
+
+	// Piped stdin carries application data, not terminal replies.
+	_, err := newInputWriter(&out, false, rows).Write([]byte(report))
+	require.NoError(t, err)
+	assert.Equal(t, report, out.String())
+
+	out.Reset()
+	_, err = newInputWriter(&out, true, rows).Write([]byte(report))
+	require.NoError(t, err)
+	assert.Equal(t, "\x1b[8;23;80t", out.String())
+}

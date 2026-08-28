@@ -632,9 +632,10 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 
 	// stdin -> PTY goroutine with command mode input parsing.
 	//
-	// Input passes through a rewriter that adjusts XTWINOPS window-size
-	// reports to match the one-row-shorter PTY the child was given.
-	ptyIn := newWinsizeRewriter(ptmx, &termRows)
+	// On a terminal, input passes through a rewriter that adjusts XTWINOPS
+	// window-size reports to match the one-row-shorter PTY the child was
+	// given.
+	ptyIn := newInputWriter(ptmx, isTTY, &termRows)
 	go func() {
 		buf := make([]byte, 32*1024)
 		inCommand := false

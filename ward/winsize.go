@@ -57,6 +57,17 @@ func newWinsizeRewriter(w io.Writer, rows *atomic.Int32) *winsizeRewriter {
 	return &winsizeRewriter{w: w, rows: rows}
 }
 
+// newInputWriter returns the writer the stdin path should feed the child
+// through. Size reports only come from a real terminal; with piped or
+// redirected stdin matching bytes are application data and must pass
+// through untouched.
+func newInputWriter(ptmx io.Writer, isTTY bool, rows *atomic.Int32) io.Writer {
+	if !isTTY {
+		return ptmx
+	}
+	return newWinsizeRewriter(ptmx, rows)
+}
+
 // Write implements io.Writer. Bytes that might be the prefix of a size
 // report are held back until the sequence completes, is ruled out, or the
 // flush delay expires; they count as consumed by the call that held them.
