@@ -7,13 +7,14 @@ event loop that owns the bar. The stdin path includes a two-state machine
 (normal/command) that intercepts the hotkey (Ctrl+], 0x1D) when OnKey is
 configured and stdin is a TTY.
 
-Input: user keystrokes → child stdin
+Input: user keystrokes → child stdin (+ window-size report rewriting)
 
-	┌──────┐            ┌──────────┐   stdin.Read()   ┌────────┐     ┌───────┐
-	│ user │  os.Stdin  │          │  ──────────────► │  PTY   │ ──► │ child │
-	│ term │ ─────────► │ Wrapper  │   ptmx.Write()   │ master │     │ stdin │
-	└──────┘            │          │                  └────────┘     └───────┘
-	                    └──────────┘
+	┌──────┐            ┌──────────┐   stdin.Read()   ┌─────────────────┐     ┌────────┐     ┌───────┐
+	│ user │  os.Stdin  │          │  ──────────────► │ winsizeRewriter │ ──► │  PTY   │ ──► │ child │
+	│ term │ ─────────► │ Wrapper  │                  │ .Write()        │     │ master │     │ stdin │
+	└──────┘            │          │                  └─────────────────┘     └────────┘     └───────┘
+	                    └──────────┘                   rewrites CSI 4/8/9/48 … t
+	                                                   to the N-1 row PTY height
 
 Output: child stdout → user terminal (+ escape sequence scanning)
 
@@ -93,7 +94,7 @@ Terminal protection via DECSTBM scroll region:
 	row N   │  ward notification bar │  ◄── protected: outside scroll region
 	        └────────────────────────┘
 
-Three things worth calling out:
+Four things worth calling out:
 
  1. The scroll region is the primary protection mechanism. Ward sets
     DECSTBM to rows 1..N-1 so normal output and scrolling cannot reach
@@ -112,5 +113,16 @@ Three things worth calling out:
     escape sequences into terminal scrollback. Repainting occurs only on
     three occasions: when the escScanner detects a scroll/erase reset,
     when the event loop changes bar content, and when SIGWINCH fires.
+
+ 4. The PTY size alone does not hide row N. Applications such as tmux
+    query the terminal directly (CSI 18 t / CSI 14 t) and trust the reply
+    over TIOCGWINSZ, and terminals with in-band resize (mode 2048) push
+    CSI 48 … t unsolicited on every resize. The winsizeRewriter on the
+    stdin path rewrites those XTWINOPS reports to the N-1 row height so
+    the child's two views of the terminal agree. Replies are rewritten on
+    input rather than queries suppressed on output because the in-band
+    notifications have no query to suppress. A report prefix split across
+    reads is held for at most 50 ms; a lone ESC is never held, so the Esc
+    key stays responsive.
 */
 package ward

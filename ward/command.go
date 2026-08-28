@@ -108,14 +108,30 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 		i++
 
 		switch b {
-		case 0x1B: // Esc — cancel
+		case 0x1B: // Esc — cancel, unless this is a terminal size report
+			// A size report landing here (a resize during command mode
+			// makes tmux query the terminal, or the terminal pushes an
+			// in-band CSI 48 t) is not a keypress. Forward a complete one
+			// intact and stay in command mode.
+			if n := sizeReportLen(data[i-1:]); n > 0 {
+				pty.Write(data[i-1 : i-1+n]) //nolint:errcheck
+				i += n - 1
+				continue
+			}
+
 			handler.eventCh <- barEvent{
 				kind: barEventCancelCommand,
 				gen:  handler.gen,
 			}
-			// Forward remaining bytes to PTY
+			// A lone trailing ESC is the Esc key and is consumed here.
+			// Anything following it in the same read is an escape sequence
+			// (arrow key, mouse report, Alt+key, a size report cut at the
+			// read boundary): forward it with its ESC intact so the child
+			// never sees the tail as typed text. Leaving command mode
+			// ensures a cut report's continuation is not consumed as
+			// command keys; the rewriter downstream still completes it.
 			if i < len(data) {
-				pty.Write(data[i:]) //nolint:errcheck
+				pty.Write(data[i-1:]) //nolint:errcheck
 			}
 			return false
 

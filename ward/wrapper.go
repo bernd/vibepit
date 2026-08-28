@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -138,7 +139,10 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	// Mutex protecting: stdout writes, screen access, bar state, term dimensions
 	var outputMu sync.Mutex
 	barScrollSeq := scrollRegionSeq(rows - 1)
-	termRows := rows
+	// termRows is atomic so the stdin path can read it lock-free and never
+	// waits behind a blocking stdout write; writes still happen under outputMu.
+	var termRows atomic.Int32
+	termRows.Store(int32(rows))
 	termCols := cols
 	var lastOutputAt time.Time
 
@@ -150,14 +154,14 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 		// Avoid writing into the final column. Many terminals set a
 		// pending autowrap state when the last column is filled; after a
 		// resize that state can reflow the bar into normal scrollback.
-		return fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows, bar)
+		return fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows.Load(), bar)
 	}
 
 	renderCommandBarEsc := func(target string, hints []KeyHint) string {
 		barWidth := max(termCols-1, 1)
 		hasAlert := target != ""
 		bar := RenderCommandBar(target, hints, barWidth, hasAlert)
-		return fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows, bar)
+		return fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows.Load(), bar)
 	}
 
 	clearBarRowEsc := func(row int) string {
@@ -165,7 +169,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	}
 
 	clearBarEsc := func() string {
-		return clearBarRowEsc(termRows)
+		return clearBarRowEsc(int(termRows.Load()))
 	}
 
 	clearResizeBarRows := func(oldRows, newRows int) {
@@ -222,15 +226,15 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 			if isTTY {
 				if w, h, err := term.GetSize(stdoutFd); err == nil {
 					outputMu.Lock()
-					oldRows := termRows
-					clearResizeBarRows(oldRows, h)
-					termCols, termRows = w, h
-					os.Stdout.WriteString(resizeRepairSeq(termRows-1, lastOutputAt, time.Now())) //nolint:errcheck
+					clearResizeBarRows(int(termRows.Load()), h)
+					termCols = w
+					termRows.Store(int32(h))
+					os.Stdout.WriteString(resizeRepairSeq(h-1, lastOutputAt, time.Now())) //nolint:errcheck
 					_ = pty.Setsize(ptmx, &pty.Winsize{
-						Rows: uint16(termRows - 1),
+						Rows: uint16(h - 1),
 						Cols: uint16(termCols),
 					})
-					barScrollSeq = scrollRegionSeq(termRows - 1)
+					barScrollSeq = scrollRegionSeq(h - 1)
 					switch cache.mode {
 					case barStatus, barAlert:
 						cache.rendered = renderBarEsc(cache.message, cache.mode == barAlert)
@@ -254,8 +258,9 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	defer func() {
 		if stdoutIsTTY {
 			outputMu.Lock()
-			os.Stdout.WriteString(scrollRegionSeq(termRows))               //nolint:errcheck
-			fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[K\x1b8", termRows) //nolint:errcheck
+			rows := int(termRows.Load())
+			os.Stdout.WriteString(scrollRegionSeq(rows))               //nolint:errcheck
+			fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[K\x1b8", rows) //nolint:errcheck
 			outputMu.Unlock()
 		}
 	}()
@@ -494,7 +499,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 					barWidth := max(termCols-1, 1)
 					bar := RenderCommandBar(target, hints, barWidth, hasAlert)
 					cache = barCache{
-						rendered: fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows, bar),
+						rendered: fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows.Load(), bar),
 						message:  target,
 						mode:     barCommand,
 						target:   target,
@@ -626,6 +631,13 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	}()
 
 	// stdin -> PTY goroutine with command mode input parsing.
+	//
+	// When stdin is a terminal, input passes through a rewriter that
+	// adjusts XTWINOPS window-size reports to match the one-row-shorter PTY
+	// the child was given. The PTY is shrunk regardless of stdout, so the
+	// gate here must be stdin alone: piped stdin carries application data,
+	// but a terminal on stdin answers size queries with its full height.
+	ptyIn := newInputWriter(ptmx, stdinIsTTY, &termRows)
 	go func() {
 		buf := make([]byte, 32*1024)
 		inCommand := false
@@ -644,7 +656,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
 				if handler == nil {
-					if _, werr := ptmx.Write(buf[:n]); werr != nil {
+					if _, werr := ptyIn.Write(buf[:n]); werr != nil {
 						break
 					}
 				} else {
@@ -656,7 +668,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 						default:
 						}
 					}
-					inCommand = processInput(buf[:n], ptmx, w.opts.Hotkey, inCommand, handler, cmdCtx)
+					inCommand = processInput(buf[:n], ptyIn, w.opts.Hotkey, inCommand, handler, cmdCtx)
 					if inCommand {
 						cmdCtx = handler.cmdCtx
 					} else {
