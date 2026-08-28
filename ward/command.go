@@ -113,8 +113,7 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 			// makes tmux query the terminal, or the terminal pushes an
 			// in-band CSI 48 t) is not a keypress. Forward a complete one
 			// intact and stay in command mode.
-			n, prefix := sizeReportLen(data[i-1:])
-			if n > 0 {
+			if n := sizeReportLen(data[i-1:]); n > 0 {
 				pty.Write(data[i-1 : i-1+n]) //nolint:errcheck
 				i += n - 1
 				continue
@@ -124,14 +123,15 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 				kind: barEventCancelCommand,
 				gen:  handler.gen,
 			}
-			// Forward remaining bytes to PTY. A report prefix cut at the
-			// chunk boundary keeps its ESC so the rewriter downstream can
-			// still complete it; leaving command mode ensures the
-			// continuation is not consumed as command keys.
-			if prefix {
+			// A lone trailing ESC is the Esc key and is consumed here.
+			// Anything following it in the same read is an escape sequence
+			// (arrow key, mouse report, Alt+key, a size report cut at the
+			// read boundary): forward it with its ESC intact so the child
+			// never sees the tail as typed text. Leaving command mode
+			// ensures a cut report's continuation is not consumed as
+			// command keys; the rewriter downstream still completes it.
+			if i < len(data) {
 				pty.Write(data[i-1:]) //nolint:errcheck
-			} else if i < len(data) {
-				pty.Write(data[i:]) //nolint:errcheck
 			}
 			return false
 

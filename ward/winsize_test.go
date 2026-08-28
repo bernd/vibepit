@@ -90,6 +90,7 @@ func TestWinsizeRewriter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			disableFlushTimer(t)
 			var out bytes.Buffer
 			r := newWinsizeRewriter(&out, atomicRows(tt.rows))
 			for _, w := range tt.writes {
@@ -97,9 +98,27 @@ func TestWinsizeRewriter(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, len(w), n)
 			}
-			assert.Equal(t, tt.want, out.String())
+			assert.Equal(t, tt.want, output(r, &out))
 		})
 	}
+}
+
+// disableFlushTimer makes held prefixes stay held for the duration of the
+// test, so assertions never race the real flush timer. flushPending can
+// still be driven explicitly.
+func disableFlushTimer(t *testing.T) {
+	t.Helper()
+	old := winsizeFlushDelay
+	winsizeFlushDelay = time.Hour
+	t.Cleanup(func() { winsizeFlushDelay = old })
+}
+
+// output returns what the rewriter has written so far, synchronised
+// against the flush timer goroutine.
+func output(r *winsizeRewriter, out *bytes.Buffer) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return out.String()
 }
 
 func atomicRows(n int) *atomic.Int32 {
@@ -123,12 +142,9 @@ func TestWinsizeRewriterFlushesHeldPrefix(t *testing.T) {
 
 	_, err := r.Write([]byte("\x1b[8;4"))
 	require.NoError(t, err)
-	assert.Empty(t, out.String(), "size-report prefix should be held briefly")
 
 	assert.Eventually(t, func() bool {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		return out.String() == "\x1b[8;4"
+		return output(r, &out) == "\x1b[8;4"
 	}, time.Second, 5*time.Millisecond)
 }
 
@@ -178,16 +194,21 @@ func TestWinsizeRewriterDoesNotHoldNonReportPrefixes(t *testing.T) {
 }
 
 func TestWinsizeRewriterRejectsOutOfRangeParams(t *testing.T) {
-	tests := []string{
-		"\x1b[8;18446744073709551640;97t", // wraps past int64 back into range
-		"\x1b[8;65536;97t",                // above the parser's MaxParam
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"wraps past int64 back into range", "\x1b[8;18446744073709551640;97t"},
+		{"above the parser's MaxParam", "\x1b[8;65536;97t"},
 	}
-	for _, in := range tests {
-		var out bytes.Buffer
-		r := newWinsizeRewriter(&out, atomicRows(48))
-		_, err := r.Write([]byte(in))
-		require.NoError(t, err)
-		assert.Equal(t, in, out.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			r := newWinsizeRewriter(&out, atomicRows(48))
+			_, err := r.Write([]byte(tt.input))
+			require.NoError(t, err)
+			assert.Equal(t, tt.input, out.String())
+		})
 	}
 }
 
@@ -201,6 +222,7 @@ func TestWinsizeRewriterInBandResizeUsesReportedRows(t *testing.T) {
 }
 
 func TestWinsizeRewriterStaleFlushIsIgnored(t *testing.T) {
+	disableFlushTimer(t)
 	var out bytes.Buffer
 	r := newWinsizeRewriter(&out, atomicRows(48))
 
@@ -215,11 +237,11 @@ func TestWinsizeRewriterStaleFlushIsIgnored(t *testing.T) {
 
 	// A timer that fired for the first prefix must not release the second.
 	r.flushPending(stale)
-	assert.Empty(t, out.String())
+	assert.Empty(t, output(r, &out))
 
 	_, err = r.Write([]byte("7t"))
 	require.NoError(t, err)
-	assert.Equal(t, "\x1b[8;47;97t", out.String())
+	assert.Equal(t, "\x1b[8;47;97t", output(r, &out))
 }
 
 // failAfterWriter succeeds for the first ok calls, then fails.
@@ -246,6 +268,7 @@ func TestWinsizeRewriterReportsBytesConsumedOnError(t *testing.T) {
 }
 
 func TestWinsizeRewriterDiscardsPendingOnError(t *testing.T) {
+	disableFlushTimer(t)
 	r := newWinsizeRewriter(&failAfterWriter{ok: 0}, atomicRows(48))
 	_, err := r.Write([]byte("\x1b[8;4"))
 	require.NoError(t, err, "held prefix does not touch the writer")
@@ -255,7 +278,6 @@ func TestWinsizeRewriterDiscardsPendingOnError(t *testing.T) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	assert.Zero(t, r.npend, "pending bytes must not survive a write error")
-	assert.False(t, r.flush != nil && r.flush.Stop(), "flush timer must be disarmed after a write error")
 }
 
 func TestInputWriterBypassesRewriterWithoutTerminal(t *testing.T) {
@@ -281,9 +303,7 @@ func TestWinsizeRewriterFlushesEachHeldPrefix(t *testing.T) {
 	waitFlushed := func(want string) {
 		t.Helper()
 		assert.Eventually(t, func() bool {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			return out.String() == want
+			return output(r, &out) == want
 		}, time.Second, 5*time.Millisecond)
 	}
 

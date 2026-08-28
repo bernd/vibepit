@@ -95,14 +95,47 @@ func TestProcessInputEscCancels(t *testing.T) {
 		onKey:   func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
 	}
 
-	input := []byte{0x1B, 'z'}
+	input := []byte{0x1B}
 	cmdCtx := t.Context()
 
 	inCommand := processInput(input, pty, 0x1D, true, handler, cmdCtx)
 	assert.False(t, inCommand)
-	// 'z' after Esc goes to PTY
-	assert.Equal(t, []byte("z"), pty.written)
+	// A bare Esc is consumed by the cancel.
+	assert.Empty(t, pty.written)
 	require.Len(t, cancelCh, 1)
+}
+
+func TestProcessInputCommandModeForwardsEscapeSequencesIntact(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"arrow key", "\x1b[A"},
+		{"function key", "\x1b[15~"},
+		{"SGR mouse report", "\x1b[<35;10;20M"},
+		{"bracketed paste start", "\x1b[200~"},
+		{"alt+key", "\x1bz"},
+		{"alt+bracket", "\x1b["},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pty := &mockPTY{}
+			cancelCh := make(chan barEvent, 1)
+			handler := &inputHandler{
+				hotkey:  0x1D,
+				eventCh: cancelCh,
+				onKey:   func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
+			}
+
+			// Bytes following ESC in the same read are an escape sequence,
+			// not an Esc keypress plus text: the child must receive them
+			// with the ESC, never as literal "[A".
+			inCommand := processInput([]byte(tt.input), pty, 0x1D, true, handler, t.Context())
+			assert.False(t, inCommand)
+			assert.Equal(t, []byte(tt.input), pty.written)
+			require.Len(t, cancelCh, 1)
+		})
+	}
 }
 
 // testEventLoop is a minimal event loop for testing command mode logic
@@ -534,10 +567,9 @@ func TestProcessInputCommandModeSplitSizeReportPrefix(t *testing.T) {
 		onKey:   func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
 	}
 
-	// A prefix split at the chunk boundary cannot be told apart from Esc
-	// followed by '[' here; it is forwarded with its ESC so the rewriter can
-	// still complete it, and command mode ends so the continuation is not
-	// consumed as command keys.
+	// A prefix split at the chunk boundary is forwarded with its ESC so the
+	// rewriter can still complete it, and command mode ends so the
+	// continuation is not consumed as command keys.
 	input := []byte("\x1b[8;4")
 	inCommand := processInput(input, pty, 0x1D, true, handler, t.Context())
 	assert.False(t, inCommand)

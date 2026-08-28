@@ -632,10 +632,12 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 
 	// stdin -> PTY goroutine with command mode input parsing.
 	//
-	// On a terminal, input passes through a rewriter that adjusts XTWINOPS
-	// window-size reports to match the one-row-shorter PTY the child was
-	// given.
-	ptyIn := newInputWriter(ptmx, isTTY, &termRows)
+	// When stdin is a terminal, input passes through a rewriter that
+	// adjusts XTWINOPS window-size reports to match the one-row-shorter PTY
+	// the child was given. The PTY is shrunk regardless of stdout, so the
+	// gate here must be stdin alone: piped stdin carries application data,
+	// but a terminal on stdin answers size queries with its full height.
+	ptyIn := newInputWriter(ptmx, stdinIsTTY, &termRows)
 	go func() {
 		buf := make([]byte, 32*1024)
 		inCommand := false
