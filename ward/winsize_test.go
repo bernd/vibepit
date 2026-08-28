@@ -273,3 +273,26 @@ func TestInputWriterBypassesRewriterWithoutTerminal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "\x1b[8;23;80t", out.String())
 }
+
+func TestWinsizeRewriterFlushesEachHeldPrefix(t *testing.T) {
+	var out bytes.Buffer
+	r := newWinsizeRewriter(&out, atomicRows(48))
+
+	waitFlushed := func(want string) {
+		t.Helper()
+		assert.Eventually(t, func() bool {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			return out.String() == want
+		}, time.Second, 5*time.Millisecond)
+	}
+
+	_, err := r.Write([]byte("\x1b[8;4"))
+	require.NoError(t, err)
+	waitFlushed("\x1b[8;4")
+
+	// A second prefix must time out on its own, not stay buffered forever.
+	_, err = r.Write([]byte("\x1b[9;1"))
+	require.NoError(t, err)
+	waitFlushed("\x1b[8;4\x1b[9;1")
+}

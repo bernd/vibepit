@@ -138,14 +138,11 @@ func (r *winsizeRewriter) Write(p []byte) (int, error) {
 	}
 
 	if r.npend > 0 {
+		// A fresh timer per arm: Reset would keep the closure (and gen) of
+		// the first arm, and Stop does not wait for a callback already
+		// running, so the generation check is what makes a stale run a no-op.
 		gen := r.gen
-		if r.flush == nil {
-			r.flush = time.AfterFunc(winsizeFlushDelay, func() { r.flushPending(gen) })
-		} else {
-			// Reset does not wait for a running callback; the generation
-			// check in flushPending makes such a stale run a no-op.
-			r.flush.Reset(winsizeFlushDelay)
-		}
+		r.flush = time.AfterFunc(winsizeFlushDelay, func() { r.flushPending(gen) })
 	}
 	return len(p), nil
 }
