@@ -165,3 +165,9 @@ func TestScannerAltScreenSplitAcrossReads(t *testing.T) {
 	assert.True(t, r2.ScrollReset, "completing CSI ?1049h across reads should set ScrollReset")
 	assert.True(t, s.InGround())
 }
+
+func TestScannerAltScreenAmongOtherModes(t *testing.T) {
+	var s escScanner
+	r := s.Scan([]byte("\x1b[?1000;1049h"))
+	assert.True(t, r.ScrollReset)
+}
