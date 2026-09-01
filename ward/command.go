@@ -1,10 +1,13 @@
 package ward
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"slices"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // commandState tracks the event loop's command mode state.
@@ -48,8 +51,14 @@ type inputHandler struct {
 
 const onKeyTimeout = 5 * time.Second
 
+var pasteStart = []byte(ansi.BracketedPasteStart)
+
 // processInput scans a byte chunk and dispatches to the PTY or command mode.
 // Returns true if still in command mode after processing the chunk.
+//
+// Whenever command mode is left, the rest of the chunk is rescanned in
+// normal mode rather than forwarded blindly, so a hotkey later in the same
+// read still opens the bar.
 func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handler *inputHandler, cmdCtx context.Context) bool {
 	i := 0
 
@@ -96,11 +105,9 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 		// Command mode: check context first
 		select {
 		case <-cmdCtx.Done():
-			// Timeout cancelled command mode — forward remaining to PTY
-			if i < len(data) {
-				pty.Write(data[i:]) //nolint:errcheck
-			}
-			return false
+			// Timeout cancelled command mode
+			inCommand = false
+			continue
 		default:
 		}
 
@@ -108,44 +115,40 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 		i++
 
 		switch b {
-		case 0x1B: // Esc — cancel, unless this is a terminal size report
-			// A size report landing here (a resize during command mode
-			// makes tmux query the terminal, or the terminal pushes an
-			// in-band CSI 48 t) is not a keypress. Forward a complete one
-			// intact and stay in command mode.
-			if n := sizeReportLen(data[i-1:]); n > 0 {
-				pty.Write(data[i-1 : i-1+n]) //nolint:errcheck
+		case asciiESC:
+			// Command keys are single bytes, so a complete escape sequence
+			// (arrow or function key, mouse or focus event, a size report
+			// from a resize during command mode, a reply to a child's
+			// query) is never meant for the bar, and terminal-initiated
+			// traffic must not close it out from under the user. Forward
+			// the sequence intact and stay in command mode. Bracketed
+			// paste is the exception: its body is text that must not be
+			// read as command keys, so it cancels like Alt+key below.
+			seq := data[i-1:]
+			if n := escSeqLen(seq); n > 0 && !bytes.HasPrefix(seq, pasteStart) {
+				pty.Write(seq[:n]) //nolint:errcheck
 				i += n - 1
 				continue
 			}
 
-			handler.eventCh <- barEvent{
-				kind: barEventCancelCommand,
-				gen:  handler.gen,
-			}
+			handler.cancel()
+			inCommand = false
 			// A lone trailing ESC is the Esc key and is consumed here.
-			// Anything following it in the same read is an escape sequence
-			// (arrow key, mouse report, Alt+key, a size report cut at the
-			// read boundary): forward it with its ESC intact so the child
-			// never sees the tail as typed text. Leaving command mode
-			// ensures a cut report's continuation is not consumed as
-			// command keys; the rewriter downstream still completes it.
+			// Anything following it in the same read (Alt+key, a paste, a
+			// sequence cut at the read boundary) is rescanned from the ESC
+			// so it reaches the child with its ESC intact, never as typed
+			// text; the rewriter downstream still completes a cut size
+			// report.
 			if i < len(data) {
-				pty.Write(data[i-1:]) //nolint:errcheck
+				i--
 			}
-			return false
+			continue
 
 		case hotkey: // Second hotkey — forward literal
 			pty.Write([]byte{hotkey}) //nolint:errcheck
-			handler.eventCh <- barEvent{
-				kind: barEventCancelCommand,
-				gen:  handler.gen,
-			}
-			// Forward remaining bytes to PTY
-			if i < len(data) {
-				pty.Write(data[i:]) //nolint:errcheck
-			}
-			return false
+			handler.cancel()
+			inCommand = false
+			continue
 
 		default:
 			// Check if this is a visible key hint
@@ -165,10 +168,8 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 			ack := <-ackCh
 			if !ack {
 				// Command mode was cancelled (e.g., timeout race)
-				if i < len(data) {
-					pty.Write(data[i:]) //nolint:errcheck
-				}
-				return false
+				inCommand = false
+				continue
 			}
 
 			// Call OnKey synchronously with a fresh context
@@ -181,13 +182,84 @@ func processInput(data []byte, pty io.Writer, hotkey byte, inCommand bool, handl
 				gen:    handler.gen,
 				result: actionResult{Message: msg, Err: err},
 			}
-			// Forward remaining bytes to PTY
-			if i < len(data) {
-				pty.Write(data[i:]) //nolint:errcheck
-			}
-			return false
+			inCommand = false
+			continue
 		}
 	}
 
 	return inCommand
 }
+
+// cancel tells the event loop to leave command mode.
+func (h *inputHandler) cancel() {
+	h.eventCh <- barEvent{
+		kind: barEventCancelCommand,
+		gen:  h.gen,
+	}
+}
+
+// escSeqLen returns the length of the complete escape sequence at the start
+// of data, which must begin with ESC, or 0 if data is not one or is cut
+// short. Recognised forms are the ones keyboards, mice and terminal replies
+// use:
+//
+//   - CSI: ESC [ params intermediates final, plus two irregular shapes that
+//     would otherwise be cut after a byte in the final range — the X10
+//     mouse report ESC [ M Cb Cx Cy and the Linux console's ESC [ [ A..E
+//     for F1–F5;
+//   - SS3: ESC O final;
+//   - OSC, DCS, APC, PM and SOS strings (ESC ] P _ ^ X) up to ST (ESC \),
+//     or BEL for OSC.
+//
+// Everything else (Alt+key, a bare ESC [ or ESC O, a CSI broken off by a
+// control byte) is Esc followed by ordinary bytes.
+func escSeqLen(data []byte) int {
+	if len(data) < 3 {
+		return 0
+	}
+	switch data[1] {
+	case 'O':
+		if isCSIFinal(data[2]) {
+			return 3
+		}
+	case '[':
+		switch data[2] {
+		case 'M':
+			if len(data) >= 6 {
+				return 6
+			}
+			return 0
+		case '[':
+			if len(data) >= 4 && data[3] >= 'A' && data[3] <= 'E' {
+				return 4
+			}
+			return 0
+		}
+		i := 2
+		for i < len(data) && data[i] >= csiParamMin && data[i] <= csiParamMax {
+			i++
+		}
+		for i < len(data) && data[i] >= csiIntermediateMin && data[i] <= csiIntermediateMax {
+			i++
+		}
+		if i < len(data) && isCSIFinal(data[i]) {
+			return i + 1
+		}
+	case ']', 'P', '_', '^', 'X':
+		for i := 2; i < len(data); i++ {
+			switch data[i] {
+			case asciiBEL:
+				if data[1] == ']' {
+					return i + 1
+				}
+			case asciiESC:
+				if i+1 < len(data) && data[i+1] == '\\' {
+					return i + 2
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func isCSIFinal(c byte) bool { return c >= csiFinalMin && c <= csiFinalMax }

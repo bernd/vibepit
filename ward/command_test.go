@@ -105,35 +105,182 @@ func TestProcessInputEscCancels(t *testing.T) {
 	require.Len(t, cancelCh, 1)
 }
 
-func TestProcessInputCommandModeForwardsEscapeSequencesIntact(t *testing.T) {
+func TestProcessInputCommandModeEscapeSequences(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
+		name      string
+		input     string
+		staysOpen bool
+		// written overrides the expected PTY output; by default the whole
+		// input is expected to be forwarded.
+		written *string
 	}{
-		{"arrow key", "\x1b[A"},
-		{"function key", "\x1b[15~"},
-		{"SGR mouse report", "\x1b[<35;10;20M"},
-		{"bracketed paste start", "\x1b[200~"},
-		{"alt+key", "\x1bz"},
-		{"alt+bracket", "\x1b["},
+		// Complete sequences (keys, mouse, focus, terminal replies) are
+		// never command keys: forwarded intact, bar stays open.
+		{name: "CSI arrow key", input: "\x1b[A", staysOpen: true},
+		{name: "SS3 arrow key", input: "\x1bOA", staysOpen: true},
+		{name: "function key", input: "\x1b[15~", staysOpen: true},
+		{name: "modified arrow key", input: "\x1b[1;5C", staysOpen: true},
+		{name: "CSI with intermediate", input: "\x1b[?1;2$y", staysOpen: true},
+		{name: "SGR mouse press", input: "\x1b[<0;10;20M", staysOpen: true},
+		{name: "SGR mouse release", input: "\x1b[<0;10;20m", staysOpen: true},
+		{name: "X10 mouse report", input: "\x1b[M a1", staysOpen: true},
+		{name: "linux console F1", input: "\x1b[[A", staysOpen: true},
+		{name: "focus in", input: "\x1b[I", staysOpen: true},
+		{name: "in-band size report", input: "\x1b[48;48;97;960;1940t", staysOpen: true},
+		{name: "XTWINOPS size report", input: "\x1b[8;48;97t", staysOpen: true},
+		{name: "OSC reply with ST", input: "\x1b]11;rgb:1a1a/1a1a/1a1a\x1b\\", staysOpen: true},
+		{name: "OSC reply with BEL", input: "\x1b]11;rgb:1a1a/1a1a/1a1a\a", staysOpen: true},
+		{name: "DCS reply", input: "\x1bP1+r524742=8/8/8\x1b\\", staysOpen: true},
+		{name: "mouse motion flood", input: "\x1b[<35;10;20M\x1b[<35;11;20M\x1b[<35;12;21M", staysOpen: true},
+
+		// A bare Esc cancels and is consumed.
+		{name: "bare Esc", input: "\x1b", written: new("")},
+
+		// Anything else — Alt+key, a sequence cut at the read boundary, or
+		// a paste — cancels and is forwarded with its ESC intact. A cut
+		// size report is still completed by the rewriter downstream.
+		{name: "alt+key", input: "\x1bz"},
+		{name: "alt+bracket", input: "\x1b["},
+		{name: "alt+bracket then enter", input: "\x1b[\r"},
+		{name: "cut mouse report", input: "\x1b[<0;1"},
+		{name: "cut X10 mouse report", input: "\x1b[M a"},
+		{name: "cut size report", input: "\x1b[8;4"},
+		{name: "cut OSC reply", input: "\x1b]11;rgb:1a1a"},
+		{name: "bracketed paste", input: "\x1b[200~hello\x1b[201~"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pty := &mockPTY{}
-			cancelCh := make(chan barEvent, 1)
+			eventCh := make(chan barEvent, 1)
 			handler := &inputHandler{
 				hotkey:  0x1D,
-				eventCh: cancelCh,
+				eventCh: eventCh,
+				// Bytes that occur inside the sequences and paste bodies
+				// must not be consumed as command keys.
+				visibleKeys: []byte("12478AIMahelou"),
+				onKey: func(ctx context.Context, key byte, target string) (string, error) {
+					t.Errorf("unexpected command key %q", key)
+					return "", nil
+				},
+			}
+
+			inCommand := processInput([]byte(tt.input), pty, 0x1D, true, handler, t.Context())
+			assert.Equal(t, tt.staysOpen, inCommand)
+			want := tt.input
+			if tt.written != nil {
+				want = *tt.written
+			}
+			assert.Equal(t, want, string(pty.written))
+			if tt.staysOpen {
+				assert.Empty(t, eventCh)
+			} else {
+				require.Len(t, eventCh, 1)
+				assert.Equal(t, barEventCancelCommand, (<-eventCh).kind)
+			}
+		})
+	}
+}
+
+func TestEscSeqLen(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		n     int
+	}{
+		{"too short", "\x1b[", 0},
+		{"CSI", "\x1b[1;5C", 6},
+		{"CSI with intermediate", "\x1b[!p", 4},
+		{"CSI cut in params", "\x1b[1;", 0},
+		{"CSI ended by control byte", "\x1b[\r", 0},
+		{"CSI ended by ESC", "\x1b[1;\x1b[A", 0},
+		{"SS3", "\x1bOP", 3},
+		{"SS3 with non-final", "\x1bO\r", 0},
+		{"X10 mouse", "\x1b[M a1", 6},
+		{"X10 mouse cut", "\x1b[M a", 0},
+		{"linux console F1", "\x1b[[A", 4},
+		{"linux console prefix", "\x1b[[", 0},
+		{"linux console prefix then other", "\x1b[[x", 0},
+		{"OSC with BEL", "\x1b]0;x\a", 6},
+		{"OSC with ST", "\x1b]0;x\x1b\\", 7},
+		{"OSC cut", "\x1b]0;x", 0},
+		{"DCS with BEL is not terminated", "\x1bP0;x\a", 0},
+		{"DCS with ST", "\x1bP0;x\x1b\\", 7},
+		{"alt+key", "\x1bzz", 0},
+		{"sequence then more", "\x1b[Aab", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.n, escSeqLen([]byte(tt.input)))
+		})
+	}
+}
+
+func TestProcessInputCommandModeSequenceThenCommandKey(t *testing.T) {
+	pty := &mockPTY{}
+	eventCh := make(chan barEvent, 2)
+	var calledKey byte
+	handler := &inputHandler{
+		hotkey:      0x1D,
+		eventCh:     eventCh,
+		visibleKeys: []byte{'a'},
+		onKey: func(ctx context.Context, key byte, target string) (string, error) {
+			calledKey = key
+			return "", nil
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ev := <-eventCh
+		assert.Equal(t, barEventBeginAction, ev.kind)
+		ev.ackCh <- true
+	}()
+
+	inCommand := processInput([]byte("\x1b[<0;10;20Ma"), pty, 0x1D, true, handler, t.Context())
+	<-done
+	assert.False(t, inCommand)
+	assert.Equal(t, "\x1b[<0;10;20M", string(pty.written))
+	assert.Equal(t, byte('a'), calledKey)
+}
+
+func TestProcessInputCommandModeTailIsRescanned(t *testing.T) {
+	// Command mode is left, then the hotkey in the same read reopens it
+	// instead of reaching the child.
+	tests := []struct {
+		name    string
+		input   string
+		written string
+	}{
+		{"hotkey after Alt+key", "\x1bx\x1d", "\x1bx"},
+		{"hotkey after second hotkey", "\x1dx\x1d", "\x1dx"},
+		// Alt+Ctrl+] under metaSendsEscape: the ESC reaches the child and
+		// the hotkey reopens the bar, as it would in normal mode.
+		{"hotkey after Esc", "\x1b\x1d", "\x1b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pty := &mockPTY{}
+			eventCh := make(chan barEvent, 2)
+			handler := &inputHandler{
+				hotkey:  0x1D,
+				eventCh: eventCh,
 				onKey:   func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
 			}
 
-			// Bytes following ESC in the same read are an escape sequence,
-			// not an Esc keypress plus text: the child must receive them
-			// with the ESC, never as literal "[A".
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				ev := <-eventCh
+				assert.Equal(t, barEventCancelCommand, ev.kind)
+				ev = <-eventCh
+				assert.Equal(t, barEventEnterCommand, ev.kind)
+				ev.respCh <- commandResponse{Gen: 2, Ctx: context.Background()}
+			}()
 			inCommand := processInput([]byte(tt.input), pty, 0x1D, true, handler, t.Context())
-			assert.False(t, inCommand)
-			assert.Equal(t, []byte(tt.input), pty.written)
-			require.Len(t, cancelCh, 1)
+			<-done
+			assert.True(t, inCommand)
+			assert.Equal(t, tt.written, string(pty.written))
 		})
 	}
 }
@@ -537,42 +684,4 @@ func TestProcessInputHotkeyFollowedByActionInSameChunk(t *testing.T) {
 	assert.False(t, inCommand)
 	assert.Equal(t, byte('a'), calledKey)
 	assert.Equal(t, []byte("prez"), pty.written)
-}
-
-func TestProcessInputCommandModeForwardsSizeReportIntact(t *testing.T) {
-	pty := &mockPTY{}
-	cancelCh := make(chan barEvent, 1)
-	handler := &inputHandler{
-		hotkey:      0x1D,
-		eventCh:     cancelCh,
-		visibleKeys: []byte{'8', '9'},
-		onKey:       func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
-	}
-
-	// An unsolicited in-band resize report during command mode is not a
-	// keypress: it must reach the child intact, and the bar must stay open.
-	input := []byte("\x1b[48;48;97;960;1940t")
-	inCommand := processInput(input, pty, 0x1D, true, handler, t.Context())
-	assert.True(t, inCommand)
-	assert.Equal(t, input, pty.written)
-	assert.Empty(t, cancelCh)
-}
-
-func TestProcessInputCommandModeSplitSizeReportPrefix(t *testing.T) {
-	pty := &mockPTY{}
-	cancelCh := make(chan barEvent, 1)
-	handler := &inputHandler{
-		hotkey:  0x1D,
-		eventCh: cancelCh,
-		onKey:   func(ctx context.Context, key byte, target string) (string, error) { return "", nil },
-	}
-
-	// A prefix split at the chunk boundary is forwarded with its ESC so the
-	// rewriter can still complete it, and command mode ends so the
-	// continuation is not consumed as command keys.
-	input := []byte("\x1b[8;4")
-	inCommand := processInput(input, pty, 0x1D, true, handler, t.Context())
-	assert.False(t, inCommand)
-	assert.Equal(t, input, pty.written)
-	require.Len(t, cancelCh, 1)
 }

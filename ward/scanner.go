@@ -34,10 +34,12 @@ const (
 	asciiBEL byte = 0x07
 	asciiESC byte = 0x1B
 
-	csiParamMin byte = 0x30
-	csiParamMax byte = 0x3F
-	csiFinalMin byte = 0x40
-	csiFinalMax byte = 0x7E
+	csiParamMin        byte = 0x30
+	csiParamMax        byte = 0x3F
+	csiIntermediateMin byte = 0x20
+	csiIntermediateMax byte = 0x2F
+	csiFinalMin        byte = 0x40
+	csiFinalMax        byte = 0x7E
 )
 
 // Scan processes a chunk of PTY output and returns which ward-relevant

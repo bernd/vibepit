@@ -183,14 +183,6 @@ func (r *winsizeRewriter) matchSizeReport(data []byte) (int, []byte, bool) {
 	return n, repl, false
 }
 
-// sizeReportLen inspects data, which must start with ESC. It returns the
-// length of a complete size report at the start of data, or 0.
-func sizeReportLen(data []byte) int {
-	var ps [maxReportParams]int
-	n, _, _ := scanSizeReport(data, &ps)
-	return n
-}
-
 // scanSizeReport parses ESC [ digits ( ; digits )* t at the start of data
 // into ps. It returns the sequence length and parameter count on a full
 // match, incomplete=true for a proper prefix, and n=0, incomplete=false
