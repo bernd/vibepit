@@ -94,7 +94,7 @@ Terminal protection via DECSTBM scroll region:
 	row N   │  ward notification bar │  ◄── protected: outside scroll region
 	        └────────────────────────┘
 
-Four things worth calling out:
+Five things worth calling out:
 
  1. The scroll region is the primary protection mechanism. Ward sets
     DECSTBM to rows 1..N-1 so normal output and scrolling cannot reach
@@ -124,5 +124,12 @@ Four things worth calling out:
     notifications have no query to suppress. A report prefix split across
     reads is held for at most 50 ms; a lone ESC is never held, so the Esc
     key stays responsive.
+
+ 5. In command mode a complete escape sequence (arrow or function key,
+    mouse or focus event, size report, OSC/DCS reply) is forwarded intact
+    and does not cancel command mode: command keys are single bytes, so a
+    sequence is never meant for the bar. A bare Esc, Alt+key, a sequence
+    cut at the read boundary and a bracketed paste still cancel; all but
+    the Esc are forwarded with their ESC intact.
 */
 package ward

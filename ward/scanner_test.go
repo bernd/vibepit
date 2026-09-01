@@ -165,3 +165,27 @@ func TestScannerAltScreenSplitAcrossReads(t *testing.T) {
 	assert.True(t, r2.ScrollReset, "completing CSI ?1049h across reads should set ScrollReset")
 	assert.True(t, s.InGround())
 }
+
+func TestScannerAltScreenAmongOtherModes(t *testing.T) {
+	var s escScanner
+	r := s.Scan([]byte("\x1b[?1000;1049h"))
+	assert.True(t, r.ScrollReset)
+}
+
+func TestScannerEscRestartsUnfinishedCSI(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"RIS after cut CSI", "\x1b[\x1bc"},
+		{"alt screen after cut CSI", "\x1b[?10\x1b[?1049h"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s escScanner
+			r := s.Scan([]byte(tt.input))
+			assert.True(t, r.ScrollReset)
+			assert.True(t, s.InGround())
+		})
+	}
+}

@@ -11,6 +11,9 @@ type escScanner struct {
 	csiHasParams bool
 	csiParamByte byte
 	csiNumParam  int
+	// csiAltScreen is set once a parameter of the CSI being scanned names
+	// an alternate screen mode, so CSI ? 1000 ; 1049 h is not missed.
+	csiAltScreen bool
 }
 
 // scanResult reports what the scanner found in a chunk of PTY output.
@@ -31,10 +34,12 @@ const (
 	asciiBEL byte = 0x07
 	asciiESC byte = 0x1B
 
-	csiParamMin byte = 0x30
-	csiParamMax byte = 0x3F
-	csiFinalMin byte = 0x40
-	csiFinalMax byte = 0x7E
+	csiParamMin        byte = 0x30
+	csiParamMax        byte = 0x3F
+	csiIntermediateMin byte = 0x20
+	csiIntermediateMax byte = 0x2F
+	csiFinalMin        byte = 0x40
+	csiFinalMax        byte = 0x7E
 )
 
 // Scan processes a chunk of PTY output and returns which ward-relevant
@@ -61,6 +66,7 @@ func (s *escScanner) Scan(data []byte) scanResult {
 				s.csiHasParams = false
 				s.csiParamByte = 0
 				s.csiNumParam = 0
+				s.csiAltScreen = false
 			case ']', 'P', '^', '_':
 				s.state = esString
 			default:
@@ -72,19 +78,30 @@ func (s *escScanner) Scan(data []byte) scanResult {
 					s.csiParamByte = b
 				}
 				s.csiHasParams = true
-				if s.csiParamByte == '?' && b >= '0' && b <= '9' {
-					s.csiNumParam = s.csiNumParam*10 + int(b-'0')
+				if s.csiParamByte == '?' {
+					switch {
+					case b >= '0' && b <= '9':
+						s.csiNumParam = s.csiNumParam*10 + int(b-'0')
+					case b == ';':
+						s.endPrivateMode()
+					}
 				}
 			} else if b >= csiFinalMin && b <= csiFinalMax {
+				s.endPrivateMode()
 				switch {
 				case b == 'r' && !s.csiHasParams:
 					r.ScrollReset = true
 				case b == 'J' && (!s.csiHasParams || s.csiParamByte == '0' || s.csiParamByte == '2' || s.csiParamByte == '3'):
 					r.BarErased = true
-				case (b == 'h' || b == 'l') && s.csiParamByte == '?' && isAltScreenMode(s.csiNumParam):
+				case (b == 'h' || b == 'l') && s.csiAltScreen:
 					r.ScrollReset = true
 				}
 				s.state = esGround
+			} else if b == asciiESC {
+				// A CSI cut short by a new ESC: the terminal restarts
+				// parsing there, and so must ward, or the sequence that
+				// follows (a RIS, an alt-screen switch) goes unseen.
+				s.state = esEsc
 			}
 		case esString:
 			switch b {
@@ -101,6 +118,15 @@ func (s *escScanner) Scan(data []byte) scanResult {
 		}
 	}
 	return r
+}
+
+// endPrivateMode notes the private mode number just completed in a
+// CSI ? ... h/l and resets the accumulator for the next one.
+func (s *escScanner) endPrivateMode() {
+	if isAltScreenMode(s.csiNumParam) {
+		s.csiAltScreen = true
+	}
+	s.csiNumParam = 0
 }
 
 // InGround reports whether the scanner is in the ground state (not
