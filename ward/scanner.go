@@ -95,6 +95,11 @@ func (s *escScanner) Scan(data []byte) scanResult {
 					r.ScrollReset = true
 				}
 				s.state = esGround
+			} else if b == asciiESC {
+				// A CSI cut short by a new ESC: the terminal restarts
+				// parsing there, and so must ward, or the sequence that
+				// follows (a RIS, an alt-screen switch) goes unseen.
+				s.state = esEsc
 			}
 		case esString:
 			switch b {
