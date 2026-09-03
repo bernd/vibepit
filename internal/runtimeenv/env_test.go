@@ -14,13 +14,3 @@ func TestLookupUsesLastValue(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, "nested/project", value)
 }
-
-func TestSetReplacesExistingValues(t *testing.T) {
-	environ := []string{"TERM=xterm", WorkingDir + "=first", WorkingDir + "=nested/project"}
-	wantInput := append([]string(nil), environ...)
-
-	got := Set(environ, WorkingDir, "/project/nested/project")
-
-	assert.Equal(t, []string{"TERM=xterm", WorkingDir + "=/project/nested/project"}, got)
-	assert.Equal(t, wantInput, environ, "input must not be mutated")
-}

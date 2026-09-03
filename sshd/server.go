@@ -277,9 +277,11 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 			if err != nil {
 				return nil, err
 			}
-			sessionEnv = runtimeenv.Set(sshEnv, runtimeenv.WorkingDir, workingDir)
+			// MergeEnv is last-wins, so appending overrides the client's
+			// project-relative value with the resolved absolute path.
+			sessionEnv = append(sshEnv, runtimeenv.WorkingDir+"="+workingDir)
 		}
-		return mgr.CreateInDir(cols, rows, sessionEnv, workingDir)
+		return mgr.Create(cols, rows, sessionEnv, workingDir)
 	}
 
 	allSessions := mgr.List()
@@ -486,6 +488,19 @@ func (s *Server) handleExecSession(sess *rawSession) {
 	shell := userShell()
 	cmd := exec.CommandContext(sess.Context(), shell, "-c", rawCmd)
 	cmd.Env = session.MergeEnv(sess.Environ())
+	// Honor the client's requested working directory, rewriting the
+	// project-relative value to the resolved absolute path — mirroring the
+	// PTY path — so the raw relative value never leaks into the child env.
+	if requestedWorkingDir, ok := runtimeenv.Lookup(sess.Environ(), runtimeenv.WorkingDir); ok {
+		workingDir, err := resolveWorkingDirectory(requestedWorkingDir)
+		if err != nil {
+			fmt.Fprintf(sess.Stderr(), "working directory: %s\n", err) //nolint:errcheck
+			sess.Exit(1)                                               //nolint:errcheck
+			return
+		}
+		cmd.Dir = workingDir
+		cmd.Env = append(cmd.Env, runtimeenv.WorkingDir+"="+workingDir, "PWD="+workingDir)
+	}
 	cmd.Stdout = sess
 	cmd.Stderr = sess.Stderr()
 

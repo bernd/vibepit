@@ -23,22 +23,6 @@ func TestNextIP(t *testing.T) {
 	}
 }
 
-func TestExecSessionOptions(t *testing.T) {
-	size := &[2]uint{24, 80}
-	env := []string{runtimeenv.WorkingDir + "=/project/nested/project"}
-
-	opts := execSessionOptions(size, "/project/nested/project", env)
-
-	assert.True(t, opts.Tty)
-	assert.True(t, opts.AttachStdin)
-	assert.True(t, opts.AttachStdout)
-	assert.True(t, opts.AttachStderr)
-	assert.Equal(t, []string{"/bin/bash", "--login"}, opts.Cmd)
-	assert.Equal(t, size, opts.ConsoleSize)
-	assert.Equal(t, "/project/nested/project", opts.WorkingDir)
-	assert.Equal(t, env, opts.Env)
-}
-
 func TestSandboxEnvironmentIncludesExtraEnv(t *testing.T) {
 	env := sandboxEnvironment(SandboxContainerConfig{
 		ProjectDir: "/project",

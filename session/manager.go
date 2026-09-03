@@ -60,16 +60,11 @@ func NewManager(limit int) *Manager {
 	}
 }
 
-// Create starts a new shell session with the given terminal dimensions.
-// The env parameter provides additional environment variables (e.g., from
-// the SSH session) that are merged with the container's environment.
-func (m *Manager) Create(cols, rows uint16, env []string) (*Session, error) {
-	return m.CreateInDir(cols, rows, env, "")
-}
-
-// CreateInDir starts a new shell session in dir. An empty dir preserves the
-// default behavior of inheriting the session manager process's directory.
-func (m *Manager) CreateInDir(cols, rows uint16, env []string, dir string) (*Session, error) {
+// Create starts a new shell session with the given terminal dimensions in
+// dir. The env parameter provides additional environment variables (e.g.,
+// from the SSH session) that are merged with the container's environment.
+// An empty dir inherits the session manager process's directory.
+func (m *Manager) Create(cols, rows uint16, env []string, dir string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

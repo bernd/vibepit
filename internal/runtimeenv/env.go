@@ -20,16 +20,3 @@ func Lookup(environ []string, name string) (string, bool) {
 	}
 	return value, found
 }
-
-// Set returns a copy of environ with name assigned exactly once.
-func Set(environ []string, name, value string) []string {
-	result := make([]string, 0, len(environ)+1)
-	for _, entry := range environ {
-		key, _, ok := strings.Cut(entry, "=")
-		if ok && key == name {
-			continue
-		}
-		result = append(result, entry)
-	}
-	return append(result, name+"="+value)
-}

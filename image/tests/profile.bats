@@ -27,3 +27,11 @@ teardown() {
 
 	[ "$PWD" = "$VIBEPIT_WORKING_DIR" ]
 }
+
+@test "cdw falls back to the project directory when VIBEPIT_WORKING_DIR is unset" {
+	unset VIBEPIT_WORKING_DIR
+	cd /
+	eval cdw
+
+	[ "$PWD" = "$VIBEPIT_PROJECT_DIR" ]
+}

@@ -479,8 +479,12 @@ func (c *Client) AttachAndStartSession(ctx context.Context, containerID string) 
 	}
 }
 
-func execSessionOptions(size *[2]uint, workingDir string, env []string) container.ExecOptions {
-	return container.ExecOptions{
+// ExecSession starts a new interactive shell in workingDir with the additional
+// environment entries applied to the exec process.
+func (c *Client) ExecSession(ctx context.Context, containerID, workingDir string, env []string) error {
+	size := terminalSize()
+
+	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		Tty:          true,
 		AttachStdin:  true,
 		AttachStdout: true,
@@ -489,15 +493,7 @@ func execSessionOptions(size *[2]uint, workingDir string, env []string) containe
 		ConsoleSize:  size,
 		WorkingDir:   workingDir,
 		Env:          env,
-	}
-}
-
-// ExecSession starts a new interactive shell in workingDir with the additional
-// environment entries applied to the exec process.
-func (c *Client) ExecSession(ctx context.Context, containerID, workingDir string, env []string) error {
-	size := terminalSize()
-
-	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, execSessionOptions(size, workingDir, env))
+	})
 	if err != nil {
 		return fmt.Errorf("exec create: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/internal/runtimeenv"
 	"github.com/bernd/vibepit/sshd"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
@@ -27,7 +28,7 @@ func ExecCommand() *cli.Command {
 }
 
 func ExecAction(ctx context.Context, cmd *cli.Command) error {
-	conn, _, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
+	conn, sandbox, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
 	if err != nil {
 		return err
 	}
@@ -38,6 +39,14 @@ func ExecAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("ssh session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck
+
+	// Run the command in the caller's project subdirectory, matching the
+	// working directory a `vibepit connect` shell would start in.
+	if relativeWorkingDir, ok := remoteWorkingDirectory(sandbox.ProjectDir, os.Stderr); ok {
+		if err := session.Setenv(runtimeenv.WorkingDir, relativeWorkingDir); err != nil {
+			return fmt.Errorf("set remote working directory: %w", err)
+		}
+	}
 
 	// Command mode — shell-escape each argument before joining so
 	// spaces, quotes, $VAR, $(cmd), and globs survive the wire as

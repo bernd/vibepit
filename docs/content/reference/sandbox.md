@@ -57,6 +57,12 @@ proxy automatically.
 | `LANG` | `en_US.UTF-8` |
 | `LC_ALL` | `en_US.UTF-8` |
 | `VIBEPIT_PROJECT_DIR` | Absolute path to your project directory |
+| `VIBEPIT_WORKING_DIR` | Absolute path to the project subdirectory the `vibepit` command was started from |
+
+Shell sessions start in `VIBEPIT_WORKING_DIR`. The shell provides two aliases:
+`cdp` changes to the project directory, and `cdw` changes back to the initial
+working directory (falling back to the project directory when
+`VIBEPIT_WORKING_DIR` is not set).
 
 ## DNS
 

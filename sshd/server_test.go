@@ -306,7 +306,7 @@ func TestSessionCount(t *testing.T) {
 		}
 
 		// Create starts a session with zero clients → Detached.
-		_, err := mgr.Create(80, 24, nil)
+		_, err := mgr.Create(80, 24, nil, "")
 		require.NoError(t, err)
 
 		reply := s.sessionCount()
@@ -329,7 +329,7 @@ func TestSessionCount(t *testing.T) {
 			execSessions: make(map[uint64]*execSession),
 		}
 
-		sess, err := mgr.Create(80, 24, nil)
+		sess, err := mgr.Create(80, 24, nil, "")
 		require.NoError(t, err)
 
 		// Attach a client → session becomes Attached.
@@ -805,7 +805,7 @@ func TestSelectorOutputUsesCRLFViaSSH(t *testing.T) {
 	// Short-lived so the detached session self-terminates after the test; alive
 	// long enough that the selector lists it on connect.
 	mgr.Command = []string{"/bin/sh", "-c", "sleep 5"}
-	_, err := mgr.Create(80, 24, nil) // zero clients -> Detached -> selector shows
+	_, err := mgr.Create(80, 24, nil, "") // zero clients -> Detached -> selector shows
 	require.NoError(t, err)
 
 	client := dialTestServer(t, mgr)
@@ -833,4 +833,38 @@ func TestSelectorOutputUsesCRLFViaSSH(t *testing.T) {
 	}
 
 	stdin.Write([]byte("q")) //nolint:errcheck
+}
+
+func TestExecSessionRunsInRequestedWorkingDirectory(t *testing.T) {
+	projectDir := t.TempDir()
+	relativeDir := filepath.Join("nested", "project")
+	workingDir := filepath.Join(projectDir, relativeDir)
+	require.NoError(t, os.MkdirAll(workingDir, 0o755))
+	t.Setenv(runtimeenv.ProjectDir, projectDir)
+
+	client := dialTestServer(t, session.NewManager(50))
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	defer sess.Close() //nolint:errcheck
+
+	require.NoError(t, sess.Setenv(runtimeenv.WorkingDir, relativeDir))
+	out, err := sess.Output(`pwd; printf '%s\n' "$VIBEPIT_WORKING_DIR"`)
+	require.NoError(t, err)
+
+	assert.Equal(t, workingDir+"\n"+workingDir+"\n", string(out))
+}
+
+func TestExecSessionRejectsInvalidWorkingDirectory(t *testing.T) {
+	projectDir := t.TempDir()
+	t.Setenv(runtimeenv.ProjectDir, projectDir)
+
+	client := dialTestServer(t, session.NewManager(50))
+
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	defer sess.Close() //nolint:errcheck
+
+	require.NoError(t, sess.Setenv(runtimeenv.WorkingDir, "missing"))
+	require.Error(t, sess.Run("pwd"), "exec with an unresolvable working directory must fail instead of running in the wrong directory")
 }

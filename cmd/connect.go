@@ -83,12 +83,13 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	_, relativeWorkingDir, err := resolveProjectWorkingDirectory(sandbox.ProjectDir, "")
-	if err != nil {
-		return err
-	}
-	if err := session.Setenv(runtimeenv.WorkingDir, relativeWorkingDir); err != nil {
-		return fmt.Errorf("set remote working directory: %w", err)
+	// A resolve failure must not block the connection: reattaching to a
+	// detached session never uses the working directory, and a new session
+	// can simply start in the project root.
+	if relativeWorkingDir, ok := remoteWorkingDirectory(sandbox.ProjectDir, os.Stderr); ok {
+		if err := session.Setenv(runtimeenv.WorkingDir, relativeWorkingDir); err != nil {
+			return fmt.Errorf("set remote working directory: %w", err)
+		}
 	}
 
 	fd := int(os.Stdin.Fd())

@@ -18,7 +18,7 @@ func TestStateFile_WrittenOnCreate(t *testing.T) {
 	m := testManager(t, 50)
 	m.SetStateFilePath(path)
 
-	_, err := m.Create(80, 24, nil)
+	_, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -52,7 +52,7 @@ func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 
 	// Seed 3 sessions with the hook disabled so none of these Creates park.
 	for range 3 {
-		_, err := m.Create(80, 24, nil)
+		_, err := m.Create(80, 24, nil, "")
 		require.NoError(t, err)
 	}
 
@@ -81,7 +81,7 @@ func TestStateFile_ConcurrentWritesNoStaleOverwrite(t *testing.T) {
 	// Create also calls writeStateFile, which takes the non-parking path
 	// (first is already true) and writes+renames a 5-session snapshot.
 	for range 2 {
-		_, err := m.Create(80, 24, nil)
+		_, err := m.Create(80, 24, nil, "")
 		require.NoError(t, err)
 	}
 

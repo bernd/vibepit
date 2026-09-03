@@ -91,7 +91,7 @@ func waitForTestSessionsExited(sessions []*Session, timeout time.Duration) bool 
 
 func TestManager_CreateAndList(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -102,11 +102,11 @@ func TestManager_CreateAndList(t *testing.T) {
 	assert.Equal(t, 0, sessions[0].ClientCount)
 }
 
-func TestManager_CreateInDir(t *testing.T) {
+func TestManager_CreateWithDir(t *testing.T) {
 	m := testManager(t, 50)
 	workingDir := t.TempDir()
 
-	s, err := m.CreateInDir(80, 24, []string{"PWD=/old/path"}, workingDir)
+	s, err := m.Create(80, 24, []string{"PWD=/old/path"}, workingDir)
 	require.NoError(t, err)
 	assert.Equal(t, workingDir, s.cmd.Dir)
 	assert.Contains(t, s.cmd.Env, "PWD="+workingDir)
@@ -115,15 +115,15 @@ func TestManager_CreateInDir(t *testing.T) {
 
 func TestManager_Limit(t *testing.T) {
 	m := testManager(t, 1)
-	_, err := m.Create(80, 24, nil)
+	_, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
-	_, err = m.Create(80, 24, nil)
+	_, err = m.Create(80, 24, nil, "")
 	require.Error(t, err)
 }
 
 func TestManager_Get(t *testing.T) {
 	m := testManager(t, 50)
-	s, _ := m.Create(80, 24, nil)
+	s, _ := m.Create(80, 24, nil, "")
 	got := m.Get(s.ID())
 	assert.Equal(t, s, got)
 	assert.Nil(t, m.Get("nonexistent"))
@@ -131,7 +131,7 @@ func TestManager_Get(t *testing.T) {
 
 func TestSession_AttachDetach(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -150,7 +150,7 @@ func TestSession_AttachDetach(t *testing.T) {
 
 func TestSession_WriterPromotion(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -177,7 +177,7 @@ func TestSession_WriterPromotion(t *testing.T) {
 
 func TestSession_TakeOver(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -202,7 +202,7 @@ func TestSession_TakeOver(t *testing.T) {
 
 func TestSession_FanOut(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -250,7 +250,7 @@ func TestSession_FanOut(t *testing.T) {
 
 func TestSession_Resize(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -271,7 +271,7 @@ func TestSession_Resize(t *testing.T) {
 
 func TestSession_ShellExit(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c := s.Attach(80, 24)
@@ -309,7 +309,7 @@ func TestSession_ShellExit(t *testing.T) {
 
 func TestSession_SlowConsumerDisconnected(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	writer := s.Attach(80, 24)
@@ -345,7 +345,7 @@ func TestSession_SlowConsumerDisconnected(t *testing.T) {
 
 func TestSession_ReplayOnAttach(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	// Attach first client (writer) and send a command.
@@ -395,7 +395,7 @@ ready:
 // normalized.
 func TestSession_ReplayUsesCRLF(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -461,7 +461,7 @@ ready:
 // design and passes with synchronous in-pump vte.Write.
 func TestSession_VTEDoesNotDropUnderBurst(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c := s.Attach(80, 24)
@@ -552,7 +552,7 @@ func TestSession_AttachAfterExitNeverHangs(t *testing.T) {
 	const iterations = 200
 	for i := range iterations {
 		m := testManager(t, 50)
-		s, err := m.Create(80, 24, nil)
+		s, err := m.Create(80, 24, nil, "")
 		require.NoError(t, err)
 
 		// Writer triggers exit as soon as it can.
@@ -710,7 +710,7 @@ func TestRenderVTEScrollback_WideCharacters(t *testing.T) {
 // a later Resize event happened.
 func TestSession_AttachAsWriterResizesVTE(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	// First client attaches at 80x24 — matches the session; nothing to update.
@@ -755,7 +755,7 @@ func TestSession_AttachReplayBeforeLiveOutput(t *testing.T) {
 	defer func() { attachReplayTestHook = prev }()
 
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -829,7 +829,7 @@ func TestSession_AttachReplayBeforeLiveOutput(t *testing.T) {
 func TestSession_NonWriterAltScreenAttachNoPTYInjection(t *testing.T) {
 	m := testManager(t, 50)
 	m.Command = []string{"/bin/sh", "-c", "stty raw -echo; exec cat"}
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	c1 := s.Attach(80, 24)
@@ -912,7 +912,7 @@ func stripSGR(s string) string {
 
 func TestClient_DetachReason(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	t.Run("fresh client has no reason", func(t *testing.T) {
@@ -958,7 +958,7 @@ func TestDetachReason_Label(t *testing.T) {
 
 func TestSession_RecordsLastDetachReason(t *testing.T) {
 	m := testManager(t, 50)
-	s, err := m.Create(80, 24, nil)
+	s, err := m.Create(80, 24, nil, "")
 	require.NoError(t, err)
 
 	require.Equal(t, DetachNone, s.Info().LastDetachReason)
