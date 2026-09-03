@@ -24,6 +24,7 @@ RUN apt-get update \
     info \
     ipcalc \
     jq \
+    kitty-terminfo \
     less \
     locales \
     man-db \
