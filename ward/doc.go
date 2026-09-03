@@ -19,10 +19,10 @@ Input: user keystrokes → child stdin (+ window-size report rewriting)
 Output: child stdout → user terminal (+ escape sequence scanning)
 
 	┌───────┐    ┌────────┐     ┌──────────────┐     ┌───────────┐     ┌──────┐
-	│ child │ ─► │  PTY   │ ──► │  output      │ ──► │ escScanner│ ──► │ user │
-	│stdout │    │ master │     │  goroutine   │     │ .Scan()   │     │ term │
+	│ child │ ─► │  PTY   │ ──► │  output      │ ──► │ outputGate│ ──► │ user │
+	│stdout │    │ master │     │  goroutine   │     │ .Forward()│     │ term │
 	└───────┘    └────────┘     │  ptmx.Read() │     └─────┬─────┘     └──────┘
-	                            └──────────────┘           │
+	                            └──────────────┘           │ escScanner
 	                                                       │ detects:
 	                                                       │  • ESC c (RIS)
 	                                                       │  • CSI r (no params)
@@ -33,6 +33,12 @@ Output: child stdout → user terminal (+ escape sequence scanning)
 	                                                 │ region + repaint│
 	                                                 │ bar if needed   │
 	                                                 └─────────────────┘
+
+	Every write of ward's own (bar, scroll region, resize repair) goes
+	through outputGate.Emit. The gate writes at once when the child stream
+	is at a safe point and otherwise holds the bytes until the first safe
+	byte of the next Forward, or for at most 50 ms if the child stalls
+	mid-sequence.
 
 Notifications: status channel feeds the event loop
 
@@ -106,13 +112,18 @@ Five things worth calling out:
     It recognizes just enough ECMA-48/DEC grammar to detect the three
     sequence classes that can destroy the bar (reset, margin clear,
     screen erase). It also tracks whether the byte stream is mid-sequence
-    so ward never injects its own escapes inside the child's incomplete
-    sequences.
+    or between the bytes of one UTF-8 character, so ward never injects
+    its own escapes inside the child's incomplete sequences or characters.
+    A PTY read ends at an arbitrary byte, and a bar written between two
+    reads that split a "─" shows up as two replacement glyphs.
 
  3. The bar is not repainted on every PTY read. Doing so would leak bar
     escape sequences into terminal scrollback. Repainting occurs only on
     three occasions: when the escScanner detects a scroll/erase reset,
     when the event loop changes bar content, and when SIGWINCH fires.
+    The latter two run between PTY reads, so they go through the
+    outputGate, which defers the write while the stream is mid-sequence
+    or mid-character and releases it at the first safe byte that follows.
 
  4. The PTY size alone does not hide row N. Applications such as tmux
     query the terminal directly (CSI 18 t / CSI 14 t) and trust the reply

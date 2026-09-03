@@ -138,6 +138,9 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 
 	// Mutex protecting: stdout writes, screen access, bar state, term dimensions
 	var outputMu sync.Mutex
+	// All of ward's own writes go through the gate so they never land inside
+	// a character or escape sequence of the child. Used under outputMu.
+	gate := newOutputGate(os.Stdout, &outputMu)
 	barScrollSeq := scrollRegionSeq(rows - 1)
 	// termRows is atomic so the stdin path can read it lock-free and never
 	// waits behind a blocking stdout write; writes still happen under outputMu.
@@ -188,7 +191,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 				continue
 			}
 			cleared[row] = true
-			os.Stdout.WriteString(clearBarRowEsc(row)) //nolint:errcheck
+			gate.Emit(clearBarRowEsc(row))
 		}
 	}
 
@@ -229,7 +232,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 					clearResizeBarRows(int(termRows.Load()), h)
 					termCols = w
 					termRows.Store(int32(h))
-					os.Stdout.WriteString(resizeRepairSeq(h-1, lastOutputAt, time.Now())) //nolint:errcheck
+					gate.Emit(resizeRepairSeq(h-1, lastOutputAt, time.Now()))
 					_ = pty.Setsize(ptmx, &pty.Winsize{
 						Rows: uint16(h - 1),
 						Cols: uint16(termCols),
@@ -238,13 +241,13 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 					switch cache.mode {
 					case barStatus, barAlert:
 						cache.rendered = renderBarEsc(cache.message, cache.mode == barAlert)
-						os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+						gate.Emit(cache.rendered)
 					case barCommand:
 						cache.rendered = renderCommandBarEsc(cache.target, cache.keyHints)
-						os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+						gate.Emit(cache.rendered)
 					case barCleared:
 						cache.rendered = clearBarEsc()
-						os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+						gate.Emit(cache.rendered)
 					case barHidden:
 						// Nothing to do
 					}
@@ -254,10 +257,12 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 		}
 	}()
 
-	// Restore full scroll region on exit
+	// Restore full scroll region on exit. The child is gone by then, so
+	// anything the gate still holds (a resize clear, a bar) goes out first.
 	defer func() {
 		if stdoutIsTTY {
 			outputMu.Lock()
+			gate.Drain()
 			rows := int(termRows.Load())
 			os.Stdout.WriteString(scrollRegionSeq(rows))               //nolint:errcheck
 			fmt.Fprintf(os.Stdout, "\x1b7\x1b[%d;1H\x1b[K\x1b8", rows) //nolint:errcheck
@@ -301,7 +306,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 				mode:     barAlert,
 			}
 			if stdoutIsTTY {
-				os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+				gate.Emit(cache.rendered)
 			}
 			outputMu.Unlock()
 
@@ -324,7 +329,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 				mode:     barStatus,
 			}
 			if stdoutIsTTY {
-				os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+				gate.Emit(cache.rendered)
 			}
 			outputMu.Unlock()
 		}
@@ -337,7 +342,7 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 				mode:     barCleared,
 			}
 			if stdoutIsTTY {
-				os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+				gate.Emit(cache.rendered)
 			}
 			outputMu.Unlock()
 		}
@@ -490,23 +495,20 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 						Ctx:         ctx,
 					}
 
-					hasAlert := activeAlert != nil && activeAlert.Target != ""
 					var hints []KeyHint
 					if activeAlert != nil {
 						hints = activeAlert.KeyHints
 					}
 					outputMu.Lock()
-					barWidth := max(termCols-1, 1)
-					bar := RenderCommandBar(target, hints, barWidth, hasAlert)
 					cache = barCache{
-						rendered: fmt.Sprintf("\x1b7\x1b[%d;1H\x1b[K%s\x1b8", termRows.Load(), bar),
+						rendered: renderCommandBarEsc(target, hints),
 						message:  target,
 						mode:     barCommand,
 						target:   target,
 						keyHints: hints,
 					}
 					if stdoutIsTTY {
-						os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+						gate.Emit(cache.rendered)
 					}
 					outputMu.Unlock()
 
@@ -581,23 +583,14 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 	go func() {
 		defer close(outputDone)
 		buf := make([]byte, 32*1024)
-		var scanner escScanner
-		pendingScrollReset := false
-		pendingBarErased := false
 
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
-				data := buf[:n]
-
 				outputMu.Lock()
 
-				result := scanner.Scan(data)
-				pendingScrollReset = pendingScrollReset || result.ScrollReset
-				pendingBarErased = pendingBarErased || result.BarErased
+				result := gate.Forward(buf[:n])
 				lastOutputAt = time.Now()
-
-				os.Stdout.Write(data) //nolint:errcheck
 
 				// The bar is NOT repainted after every read. The scroll
 				// region keeps it in place during normal output. Repainting
@@ -607,19 +600,16 @@ func (w *Wrapper) Run(ctx context.Context) (int, error) {
 				// repainted only on scroll/erase reset (here), content
 				// change (event loop), and resize (SIGWINCH handler).
 				//
-				// Pending flags preserve detected repairs across chunk
-				// boundaries. Injection is deferred until the scanner
-				// returns to ground state to avoid corrupting an
-				// in-progress escape sequence.
-				if stdoutIsTTY && scanner.InGround() {
-					if pendingScrollReset {
-						os.Stdout.WriteString(barScrollSeq) //nolint:errcheck
+				// A reset detected while the chunk ends inside another
+				// sequence (an erase followed by a cut OSC) is held by the
+				// gate until the stream reaches a safe point.
+				if stdoutIsTTY {
+					if result.ScrollReset {
+						gate.Emit(barScrollSeq)
 					}
-					if (pendingScrollReset || pendingBarErased) && cache.mode != barHidden {
-						os.Stdout.WriteString(cache.rendered) //nolint:errcheck
+					if (result.ScrollReset || result.BarErased) && cache.mode != barHidden {
+						gate.Emit(cache.rendered)
 					}
-					pendingScrollReset = false
-					pendingBarErased = false
 				}
 
 				outputMu.Unlock()

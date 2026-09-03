@@ -189,3 +189,65 @@ func TestScannerEscRestartsUnfinishedCSI(t *testing.T) {
 		})
 	}
 }
+
+func TestScannerInGroundTracksUTF8(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+		want   []bool // InGround after each chunk
+	}{
+		{"complete 3-byte rune", []string{"─"}, []bool{true}},
+		{"3-byte rune split after lead", []string{"\xe2", "\x94\x80"}, []bool{false, true}},
+		{"3-byte rune split before last byte", []string{"\xe2\x94", "\x80"}, []bool{false, true}},
+		{"2-byte rune split", []string{"\xc3", "\xa9"}, []bool{false, true}},
+		{"4-byte rune split", []string{"\xf0\x9f", "\x98\x80"}, []bool{false, true}},
+		{"ASCII after truncated lead resyncs", []string{"\xe2", "a"}, []bool{false, true}},
+		{"ESC after truncated lead starts a sequence", []string{"\xe2", "\x1b[", "m"}, []bool{false, false, true}},
+		{"stray continuation byte is ground", []string{"\x80"}, []bool{true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s escScanner
+			for i, c := range tt.chunks {
+				s.Scan([]byte(c))
+				assert.Equal(t, tt.want[i], s.InGround(), "after chunk %d", i)
+			}
+		})
+	}
+}
+
+func TestScannerEscIntermediateIsNotGround(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+		want   []bool // InGround after each chunk
+	}{
+		{"charset designation split after ESC (", []string{"\x1b(", "B"}, []bool{false, true}},
+		{"DECALN split after ESC #", []string{"\x1b#", "8"}, []bool{false, true}},
+		{"several intermediates", []string{"\x1b ", "(", "F"}, []bool{false, false, true}},
+		{"ESC inside intermediate restarts", []string{"\x1b(", "\x1b", "c"}, []bool{false, false, true}},
+		{"complete in one chunk", []string{"\x1b(B"}, []bool{true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s escScanner
+			for i, c := range tt.chunks {
+				s.Scan([]byte(c))
+				assert.Equal(t, tt.want[i], s.InGround(), "after chunk %d", i)
+			}
+		})
+	}
+}
+
+func TestScannerInvalidUTF8LeadIsGround(t *testing.T) {
+	for _, b := range []byte{0xC0, 0xC1, 0xF5, 0xF8, 0xFF} {
+		var s escScanner
+		s.Scan([]byte{b})
+		assert.True(t, s.InGround(), "byte %#x is not a valid lead", b)
+	}
+	for _, b := range []byte{0xC2, 0xDF, 0xE0, 0xEF, 0xF0, 0xF4} {
+		var s escScanner
+		s.Scan([]byte{b})
+		assert.False(t, s.InGround(), "byte %#x starts a multi-byte character", b)
+	}
+}

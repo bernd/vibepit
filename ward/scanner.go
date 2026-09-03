@@ -4,8 +4,8 @@ package ward
 // affect ward's protected bar row. It is not a full terminal emulator —
 // its only job is to detect sequences that invalidate the scroll region
 // or erase the bar, and to track whether the byte stream is currently
-// inside an escape sequence (so ward can avoid injecting its own
-// sequences mid-stream).
+// inside an escape sequence or a multi-byte UTF-8 character (so ward can
+// avoid injecting its own sequences mid-stream).
 type escScanner struct {
 	state        int
 	csiHasParams bool
@@ -14,6 +14,10 @@ type escScanner struct {
 	// csiAltScreen is set once a parameter of the CSI being scanned names
 	// an alternate screen mode, so CSI ? 1000 ; 1049 h is not missed.
 	csiAltScreen bool
+	// utf8Pending counts the continuation bytes still owed by a multi-byte
+	// UTF-8 lead seen in ground state. A PTY read can end between the bytes
+	// of one character; injecting there splits the character into garbage.
+	utf8Pending int
 }
 
 // scanResult reports what the scanner found in a chunk of PTY output.
@@ -28,6 +32,7 @@ const (
 	esCsi       // inside CSI sequence, waiting for final byte
 	esString    // inside OSC/DCS/PM/APC string
 	esStringEsc // saw ESC inside string (likely ST)
+	esEscInter  // ESC followed by intermediates (ESC ( B, ESC # 8), waiting for final
 )
 
 const (
@@ -53,8 +58,17 @@ func (s *escScanner) Scan(data []byte) scanResult {
 	for _, b := range data {
 		switch s.state {
 		case esGround:
-			if b == asciiESC {
+			if s.utf8Pending > 0 && isUTF8Continuation(b) {
+				s.utf8Pending--
+				continue
+			}
+			// Any other byte ends a truncated character, as a terminal does.
+			s.utf8Pending = 0
+			switch {
+			case b == asciiESC:
 				s.state = esEsc
+			default:
+				s.utf8Pending = utf8ContinuationCount(b)
 			}
 		case esEsc:
 			switch b {
@@ -69,6 +83,19 @@ func (s *escScanner) Scan(data []byte) scanResult {
 				s.csiAltScreen = false
 			case ']', 'P', '^', '_':
 				s.state = esString
+			default:
+				if b >= csiIntermediateMin && b <= csiIntermediateMax {
+					s.state = esEscInter
+				} else {
+					s.state = esGround
+				}
+			}
+		case esEscInter:
+			switch {
+			case b >= csiIntermediateMin && b <= csiIntermediateMax:
+				// more intermediates
+			case b == asciiESC:
+				s.state = esEsc
 			default:
 				s.state = esGround
 			}
@@ -133,7 +160,28 @@ func (s *escScanner) endPrivateMode() {
 // inside any escape sequence). Ward only injects its own sequences
 // when this returns true to avoid corrupting the child's output.
 func (s *escScanner) InGround() bool {
-	return s.state == esGround
+	return s.state == esGround && s.utf8Pending == 0
+}
+
+func isUTF8Continuation(b byte) bool {
+	return b&0xC0 == 0x80
+}
+
+// utf8ContinuationCount returns how many continuation bytes follow the
+// lead byte b, or 0 for ASCII, stray continuation and invalid bytes.
+// 0xC0, 0xC1 and 0xF5..0xFF never start a valid character; terminals
+// show them as single invalid bytes, so holding a write for them would
+// only delay it.
+func utf8ContinuationCount(b byte) int {
+	switch {
+	case b >= 0xC2 && b <= 0xDF:
+		return 1
+	case b >= 0xE0 && b <= 0xEF:
+		return 2
+	case b >= 0xF0 && b <= 0xF4:
+		return 3
+	}
+	return 0
 }
 
 func isAltScreenMode(param int) bool {
