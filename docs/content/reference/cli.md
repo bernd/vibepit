@@ -42,6 +42,7 @@ vibepit run [flags] [project-path]
 | `-a`, `--allow` | string (repeatable) | | Additional `domain:port` entries to allow through the proxy (e.g. `api.example.com:443`) |
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
+| `--prompt` | bool | auto | Show an allow/deny prompt in a kitty overlay when the proxy blocks a connection. On automatically in kitty with remote control enabled. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 
@@ -56,6 +57,70 @@ vibepit run [flags] [project-path]
   select network presets. Pass `--reconfigure` to re-run this selector later.
 - Entries passed with `--allow` and `--preset` are merged with any entries
   saved in the project configuration file.
+- In kitty, blocked connections open an allow/deny prompt over the terminal.
+  See [Blocked connection prompt](#blocked-connection-prompt).
+
+### Blocked connection prompt
+
+When the proxy blocks a connection, `run` and `connect` can ask you right away
+whether to allow it. The prompt opens in a
+[kitty](https://sw.kovidgoyal.net/kitty/) overlay window that covers the
+terminal running the sandbox. It closes again once you decide.
+
+The prompt switches on automatically when all of these are true:
+
+- The terminal is kitty and remote control is enabled. Add both settings to
+  `kitty.conf`:
+
+    ```
+    allow_remote_control socket-only
+    listen_on unix:@mykitty
+    ```
+
+    The `@` prefix creates an abstract socket, which only exists on Linux. On
+    macOS, point `listen_on` at a file path instead:
+
+    ```
+    allow_remote_control socket-only
+    listen_on unix:/tmp/mykitty
+    ```
+
+    kitty appends its process ID to the path, so each kitty instance gets its
+    own socket.
+
+- The `kitten` binary is in `PATH`.
+
+Pass `--prompt=false` to turn it off. Pass `--prompt` to require it. With the
+flag, `vibepit` exits with an error if kitty remote control or the session's
+control API is unavailable. Without the flag, it prints a warning and
+continues without prompting.
+
+The prompt shows the blocked domain and port for HTTP(S) requests, or the
+domain for DNS queries, together with the reason for the block.
+
+| Key | Action |
+|-----|--------|
+| `a` | Allow for the rest of the session |
+| `A` | Allow and save to the project configuration |
+| `n` | Deny. Other clients stop asking about this target for the rest of the session. |
+| `Esc`, `q` | Dismiss without deciding. Other clients still ask. |
+
+Behavior details:
+
+- The blocked request has already failed when the prompt appears. Retry it
+  after allowing.
+- Each target prompts at most once per client and session, no matter how often
+  the agent retries.
+- Prompts for different targets open one after another, never on top of each
+  other.
+- When several clients are attached to one session, each shows the prompt. As
+  soon as one of them allows or denies, the others close within about a second.
+- Denied targets are held in memory by the proxy. They are forgotten when the
+  session stops. To allow a denied target later, use
+  [`allow-http`](#allow-http), [`allow-dns`](#allow-dns), or
+  [`monitor`](#monitor).
+- IPv6 address targets can be denied or dismissed, but not allowed. The
+  allowlist does not support IPv6 literals.
 
 ### Examples
 
@@ -77,6 +142,9 @@ vibepit run -a api.example.com:443 -a cdn.example.com:443 -p vcs-github
 
 # Re-run the network preset selector
 vibepit run -r
+
+# Start without the blocked connection prompt in kitty
+vibepit run --prompt=false
 ```
 
 ---
@@ -189,6 +257,7 @@ vibepit connect
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `-b`, `--bar` | bool | `false` | Enable status bar [EXPERIMENTAL] |
+| `--prompt` | bool | auto | Show an allow/deny prompt in a kitty overlay when the proxy blocks a connection. On automatically in kitty with remote control enabled. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 
@@ -201,12 +270,17 @@ vibepit connect
   (`SIGWINCH`).
 - When detached sessions exist inside the sandbox, the SSH server presents a
   session selector. You can reattach to a previous session or start a new one.
+- In kitty, blocked connections open an allow/deny prompt over the terminal.
+  See [Blocked connection prompt](#blocked-connection-prompt).
 
 ### Examples
 
 ```bash
 # Open an interactive shell
 vibepit connect
+
+# Connect without the blocked connection prompt in kitty
+vibepit connect --prompt=false
 ```
 
 ---

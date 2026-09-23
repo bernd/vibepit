@@ -225,3 +225,28 @@ func TestControlClient_ServerError(t *testing.T) {
 		assert.ErrorContains(t, err, "400")
 	})
 }
+
+func TestControlClient_CheckAndDeny(t *testing.T) {
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	client := testControlClient(t, proxy.NewControlAPI(proxy.NewLogBuffer(10), nil, httpAL, dnsAL))
+
+	httpEntry := proxy.LogEntry{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}
+	dnsEntry := proxy.LogEntry{Source: proxy.SourceDNS, Domain: "d.com"}
+
+	res, err := client.Check(httpEntry)
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{}, res)
+
+	require.NoError(t, httpAL.Add([]string{"a.com:443"}))
+	res, err = client.Check(httpEntry)
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{Allowed: true}, res)
+
+	require.NoError(t, client.Deny(dnsEntry))
+	res, err = client.Check(dnsEntry)
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{Denied: true}, res)
+}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"image/color"
+	"net"
 	"strings"
 	"time"
 
@@ -73,41 +74,49 @@ type logsPollResultMsg struct {
 
 func allowValueForEntry(entry proxy.LogEntry) string {
 	if entry.Source == proxy.SourceProxy && entry.Port != "" {
-		return entry.Domain + ":" + entry.Port
+		// JoinHostPort brackets IPv6 literals so the value can be split again.
+		return net.JoinHostPort(entry.Domain, entry.Port)
 	}
 	return entry.Domain
 }
 
+// allowEntry adds the entry's target to the running proxy's allowlist and,
+// when save is set, persists it to the project config. Shared by the monitor
+// and approve screens.
+func allowEntry(client *ControlClient, session *SessionInfo, entry proxy.LogEntry, save bool) (allowStatus, error) {
+	value := allowValueForEntry(entry)
+
+	var err error
+	switch entry.Source {
+	case proxy.SourceDNS:
+		_, err = client.AllowDNS([]string{value})
+	default:
+		_, err = client.AllowHTTP([]string{value})
+	}
+	if err != nil {
+		return statusNone, err
+	}
+	if !save {
+		return statusTemp, nil
+	}
+
+	projectPath := config.DefaultProjectPath(session.ProjectDir)
+	switch entry.Source {
+	case proxy.SourceDNS:
+		err = config.AppendAllowDNS(projectPath, []string{value})
+	default:
+		err = config.AppendAllowHTTP(projectPath, []string{value})
+	}
+	if err != nil {
+		return statusNone, err
+	}
+	return statusSaved, nil
+}
+
 func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea.Cmd {
 	return func() tea.Msg {
-		value := allowValueForEntry(entry)
-
-		var err error
-		switch entry.Source {
-		case proxy.SourceDNS:
-			_, err = s.client.AllowDNS([]string{value})
-		default:
-			_, err = s.client.AllowHTTP([]string{value})
-		}
-		if err != nil {
-			return allowResultMsg{index: index, err: err}
-		}
-
-		status := statusTemp
-		if save {
-			status = statusSaved
-			projectPath := config.DefaultProjectPath(s.session.ProjectDir)
-			switch entry.Source {
-			case proxy.SourceDNS:
-				err = config.AppendAllowDNS(projectPath, []string{value})
-			default:
-				err = config.AppendAllowHTTP(projectPath, []string{value})
-			}
-			if err != nil {
-				return allowResultMsg{index: index, err: err}
-			}
-		}
-		return allowResultMsg{index: index, status: status}
+		status, err := allowEntry(s.client, s.session, entry, save)
+		return allowResultMsg{index: index, status: status, err: err}
 	}
 }
 

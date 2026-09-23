@@ -33,6 +33,7 @@ func ConnectCommand() *cli.Command {
 				Usage:   "Enable status bar [EXPERIMENTAL]",
 				Aliases: []string{"b"},
 			},
+			promptCLIFlag,
 		},
 		Action: ConnectAction,
 	}
@@ -81,6 +82,12 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 		}
 		return nil
 	}
+
+	stopPrompter, err := startConnectPrompter(ctx, cmd, sandbox)
+	if err != nil {
+		return err
+	}
+	defer stopPrompter()
 
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
@@ -206,6 +213,20 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 		shutdownFn: func() error {
 			return DownAction(ctx, cmd)
 		},
+	})
+}
+
+// startConnectPrompter wires the block prompter for a daemon-mode session.
+// The container client is only needed to look up the control port, so it is
+// created only when prompting is enabled.
+func startConnectPrompter(ctx context.Context, cmd *cli.Command, sandbox *ctr.RunningSession) (func(), error) {
+	return startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+		client, err := ctr.NewClient(ctr.WithDebug(cmd.Root().Bool(debugFlag)))
+		if err != nil {
+			return nil, err
+		}
+		defer client.Close()
+		return sessionInfoForRunning(ctx, client, sandbox.SessionID, sandbox.ProjectDir)
 	})
 }
 

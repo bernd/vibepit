@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strconv"
+
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
@@ -12,7 +14,7 @@ func RunCommand() *cli.Command {
 	return &cli.Command{
 		Name:   "run",
 		Usage:  "Start the sandbox",
-		Flags:  sandboxFlags(),
+		Flags:  append(sandboxFlags(), promptCLIFlag),
 		Action: RunAction,
 	}
 }
@@ -36,6 +38,13 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
+		stop, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+			return sessionInfoForRunning(ctx, client, existing.SessionID, projectRoot)
+		})
+		if err != nil {
+			return err
+		}
+		defer stop()
 		tui.Status("Attaching", "to running session in %s", projectRoot)
 		return client.ExecSession(ctx, existing.ContainerID)
 	}
@@ -55,6 +64,18 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		tui.Status("Stopping", "sandbox container")
 		client.StopAndRemove(ctx, sandboxContainer)
 	}()
+
+	stop, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+		return &SessionInfo{
+			ControlPort: strconv.Itoa(infra.Merged.ControlAPIPort),
+			SessionID:   infra.SessionID,
+			ProjectDir:  projectRoot,
+		}, nil
+	})
+	if err != nil {
+		return err
+	}
+	defer stop()
 
 	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")

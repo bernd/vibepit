@@ -84,6 +84,28 @@ Vibepit does not defend against timing attacks, cache-based side channels, or ot
 
 Vibepit filters network traffic, not terminal output. A compromised agent can display misleading instructions, fake error messages, or manipulate you into taking actions on its behalf (such as expanding the allowlist or running commands on the host). You remain responsible for reviewing what the agent tells you.
 
+### Blocked connection prompts
+
+In kitty, a blocked request from the sandbox opens an allow/deny prompt on your
+terminal. See the [CLI reference](../reference/cli.md#blocked-connection-prompt).
+This gives the agent a way to put a question in front of you: it can make
+requests on purpose to trigger prompts, and it chooses the domain names they
+show. A domain can be made to look legitimate, for example
+`api-anthropic.example.net`.
+
+The decision stays with you. The prompt runs on the host, and it talks to the
+proxy's control API with the host-only mTLS credentials, which never enter the
+sandbox. The agent cannot answer the prompt, and it cannot allow a destination
+without a key press from you. The domain and reason shown come from the
+sandbox's own request, so control characters and escape sequences are stripped
+before display. The agent therefore cannot draw over the prompt or change what
+it shows.
+
+Each target prompts at most once per session and client, and targets you deny
+stop prompting on every client. An agent can still produce many prompts by
+requesting many different domains. Read the domain in each prompt before
+pressing `a`, and dismiss or deny anything you do not recognize.
+
 ## Residual risks
 
 Even within its scope, Vibepit has known limitations that you should understand.

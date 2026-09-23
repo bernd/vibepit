@@ -15,6 +15,10 @@ type SessionInfo struct {
 	ControlPort string
 	SessionID   string
 	ProjectDir  string
+	// CredDir overrides the credential directory derived from SessionID.
+	// Set when a child process must not re-derive it from its own
+	// environment, e.g. the approve overlay launched by kitty.
+	CredDir string
 }
 
 func MonitorCommand() *cli.Command {

@@ -135,3 +135,21 @@ func TestEntriesAfter(t *testing.T) {
 		assert.Equal(t, "5.com", entries[0].Domain)
 	})
 }
+
+func TestLogBuffer_EntriesSince(t *testing.T) {
+	b := NewLogBuffer(100)
+	for i := range 30 {
+		b.Add(LogEntry{Domain: fmt.Sprintf("d%d.com", i)})
+	}
+
+	// Unlike EntriesAfter(0), ID zero means "everything", not "a tail".
+	all := b.EntriesSince(0)
+	assert.Len(t, all, 30)
+	assert.Equal(t, uint64(1), all[0].ID)
+
+	rest := b.EntriesSince(28)
+	require.Len(t, rest, 2)
+	assert.Equal(t, uint64(29), rest[0].ID)
+
+	assert.Empty(t, b.EntriesSince(30))
+}

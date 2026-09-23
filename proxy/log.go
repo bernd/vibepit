@@ -116,6 +116,22 @@ func (b *LogBuffer) EntriesAfter(afterID uint64) []LogEntry {
 	return result
 }
 
+// EntriesSince returns all entries with ID > afterID in chronological order.
+// Unlike EntriesAfter, afterID 0 means every buffered entry, so a consumer
+// that started on an empty log cannot lose entries to the tail cut-off.
+func (b *LogBuffer) EntriesSince(afterID uint64) []LogEntry {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var result []LogEntry
+	for _, e := range b.entriesLocked() {
+		if e.ID > afterID {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
 // entriesLocked returns all entries in chronological order. Caller must hold b.mu.
 func (b *LogBuffer) entriesLocked() []LogEntry {
 	if !b.full {

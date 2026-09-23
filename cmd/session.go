@@ -131,8 +131,10 @@ func WriteSessionCredentials(sessionID string, creds *proxy.MTLSCredentials) (st
 // LoadSessionTLSConfig reads the PEM files from the session directory and
 // returns a *tls.Config suitable for dialing the filtering proxy as a client.
 func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
-	dir := sessionDir(sessionID)
+	return loadTLSConfigFromDir(sessionDir(sessionID))
+}
 
+func loadTLSConfigFromDir(dir string) (*tls.Config, error) {
 	caCert, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	if err != nil {
 		return nil, fmt.Errorf("read CA cert: %w", err)

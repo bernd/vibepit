@@ -3,7 +3,9 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -16,6 +18,7 @@ type ControlAPI struct {
 	config        any
 	httpAllowlist *HTTPAllowlist
 	dnsAllowlist  *DNSAllowlist
+	denied        DenySet
 }
 
 func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist) *ControlAPI {
@@ -31,6 +34,8 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 	api.mux.HandleFunc("GET /config", api.handleConfig)
 	api.mux.HandleFunc("POST /allow-http", api.handleAllowHTTP)
 	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
+	api.mux.HandleFunc("GET /check", api.handleCheck)
+	api.mux.HandleFunc("POST /deny", api.handleDeny)
 	return api
 }
 
@@ -66,12 +71,22 @@ func (rw *responseState) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// handleLogs serves two cursor styles. "after" keeps its original meaning,
+// where 0 returns a recent tail for display. "since" is strict: every entry
+// with a larger ID, including all of them for 0.
 func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
-	var afterID uint64
+	var q url.Values
 	if r.URL != nil {
-		if s := r.URL.Query().Get("after"); s != "" {
-			afterID, _ = strconv.ParseUint(s, 10, 64)
-		}
+		q = r.URL.Query()
+	}
+	if s := q.Get("since"); s != "" {
+		sinceID, _ := strconv.ParseUint(s, 10, 64)
+		writeJSON(w, a.log.EntriesSince(sinceID))
+		return
+	}
+	var afterID uint64
+	if s := q.Get("after"); s != "" {
+		afterID, _ = strconv.ParseUint(s, 10, 64)
 	}
 	writeJSON(w, a.log.EntriesAfter(afterID))
 }
@@ -121,6 +136,65 @@ func (a *ControlAPI) handleAllowDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"added": entries})
+}
+
+// parseTarget validates a source/target pair as used by /check and /deny.
+// Proxy targets must carry a port; DNS targets are bare domains.
+func parseTarget(source, target string) (src Source, host, port string, err error) {
+	if target == "" {
+		return "", "", "", fmt.Errorf("target required")
+	}
+	switch Source(source) {
+	case SourceProxy:
+		host, port, err := net.SplitHostPort(target)
+		if err != nil {
+			return "", "", "", fmt.Errorf("proxy target must be host:port")
+		}
+		return SourceProxy, host, port, nil
+	case SourceDNS:
+		return SourceDNS, target, "", nil
+	default:
+		return "", "", "", fmt.Errorf("source must be proxy or dns")
+	}
+}
+
+// handleCheck reports whether the live allowlist permits a target and whether
+// a user denied it. Unlike /config it reflects runtime changes, which lets one
+// client notice that another client already decided on a blocked target.
+func (a *ControlAPI) handleCheck(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	target := q.Get("target")
+	src, host, port, err := parseTarget(q.Get("source"), target)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	var allowed bool
+	switch src {
+	case SourceProxy:
+		allowed = a.httpAllowlist.Allows(host, port)
+	case SourceDNS:
+		allowed = a.dnsAllowlist.Allows(host)
+	}
+	writeJSON(w, map[string]bool{"allowed": allowed, "denied": a.denied.Denied(src, target)})
+}
+
+func (a *ControlAPI) handleDeny(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	src, _, _, err := parseTarget(req.Source, req.Target)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	a.denied.Add(src, req.Target)
+	writeJSON(w, map[string]string{"denied": req.Target})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
