@@ -2,13 +2,12 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/kitty"
@@ -29,14 +28,14 @@ var promptCLIFlag = &cli.BoolFlag{
 // even though the agent typically retries a blocked request many times.
 type blockWatcher struct {
 	cursor uint64
-	seen   map[string]bool
+	seen   map[proxy.Target]bool
 }
 
 // Next returns the blocked entries in batch that have not been seen before
 // and advances the cursor past the batch.
 func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 	if bw.seen == nil {
-		bw.seen = make(map[string]bool)
+		bw.seen = make(map[proxy.Target]bool)
 	}
 	var fresh []proxy.LogEntry
 	for _, e := range batch {
@@ -44,7 +43,7 @@ func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 		if e.Action != proxy.ActionBlock {
 			continue
 		}
-		key := string(e.Source) + "/" + allowValueForEntry(e)
+		key := e.Target()
 		if bw.seen[key] {
 			continue
 		}
@@ -54,8 +53,6 @@ func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 	return fresh
 }
 
-func (bw *blockWatcher) Cursor() uint64 { return bw.cursor }
-
 // runBlockPrompter polls the control API for new blocked requests and calls
 // prompt for each unseen target, one at a time, until ctx is done. Errors are
 // dropped: the attach loop owns the terminal, so there is nowhere to print.
@@ -64,14 +61,14 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Skip whatever was blocked before we started watching; LogsAfter(0)
-	// returns a tail of history rather than "nothing yet". Retry until it
-	// succeeds, otherwise the first successful poll would replay that tail.
+	// Skip whatever was blocked before we started watching: start the
+	// cursor at the newest entry. Retry until that succeeds, otherwise the
+	// first poll would replay old blocks.
 	for {
-		entries, err := client.LogsAfter(0)
+		entries, err := client.Logs()
 		if err == nil {
-			for _, e := range entries {
-				bw.cursor = e.ID
+			if len(entries) > 0 {
+				bw.cursor = entries[len(entries)-1].ID
 			}
 			break
 		}
@@ -88,7 +85,7 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 			return
 		case <-ticker.C:
 		}
-		entries, err := client.LogsSince(bw.Cursor())
+		entries, err := client.LogsAfter(bw.cursor)
 		if err != nil {
 			continue
 		}
@@ -103,62 +100,54 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 	}
 }
 
-// resolvePrompter decides whether to run the block prompter. An explicit
-// --prompt demands a working kitty setup and fails loudly otherwise. Without
-// the flag, the prompter turns on when kitty is usable and stays silent when
-// it is not.
-func resolvePrompter(explicit, value bool, getenv func(string) string, lookPath func(string) (string, error)) (kitty.Env, bool, error) {
-	if explicit && !value {
-		return kitty.Env{}, false, nil
-	}
-	env, err := kitty.Detect(getenv, lookPath)
-	if err != nil {
-		if explicit {
-			return kitty.Env{}, false, fmt.Errorf("--prompt: %w", err)
-		}
-		return kitty.Env{}, false, nil
-	}
-	return env, true, nil
-}
-
-// startBlockPrompter resolves whether prompting applies to this invocation
-// and, if so, starts the poller for the session returned by getSession. The
-// session is resolved lazily so that a failing lookup cannot break sessions
-// that do not prompt. Setup failures only abort when --prompt was given
-// explicitly; auto-detected prompting is a convenience and must never stop
-// run or connect from working. The returned stop function is always safe to
-// call.
+// startBlockPrompter starts the kitty prompter for the session returned by
+// getSession. The session is resolved lazily so that a failing lookup cannot
+// break sessions that do not prompt. --prompt=false turns it off. An explicit
+// --prompt makes every setup failure fatal. Otherwise prompting is a
+// convenience that must never stop run or connect: outside kitty it stays
+// quiet, and a failure inside kitty only prints a warning. The returned stop
+// function is always safe to call.
 func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func() (*SessionInfo, error)) (func(), error) {
 	noop := func() {}
 	explicit := cmd.IsSet(promptFlag)
-	kitty, on, err := resolvePrompter(explicit, cmd.Bool(promptFlag), os.Getenv, exec.LookPath)
-	if err != nil || !on {
-		return noop, err
+	if explicit && !cmd.Bool(promptFlag) {
+		return noop, nil
 	}
-	setupFailed := func(err error) (func(), error) {
-		if explicit {
-			return noop, fmt.Errorf("--prompt: %w", err)
-		}
+	stop, err := setupBlockPrompter(ctx, getSession)
+	switch {
+	case err == nil:
+		tui.Status("Watching", "blocked connections via kitty overlay")
+		return stop, nil
+	case explicit:
+		return noop, fmt.Errorf("--prompt: %w", err)
+	case errors.Is(err, kitty.ErrNotKitty), errors.Is(err, kitty.ErrNoKitten):
+		return noop, nil
+	default:
 		tui.Status("Skipping", "kitty prompt for blocked connections: %v", err)
 		return noop, nil
 	}
+}
+
+func setupBlockPrompter(ctx context.Context, getSession func() (*SessionInfo, error)) (func(), error) {
+	env, err := kitty.Detect(os.Getenv, exec.LookPath)
+	if err != nil {
+		return nil, err
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		return setupFailed(err)
+		return nil, err
 	}
 	session, err := getSession()
 	if err != nil {
-		return setupFailed(err)
+		return nil, err
 	}
 	cc, err := NewControlClient(session)
 	if err != nil {
-		return setupFailed(err)
+		return nil, err
 	}
-
 	stopLoop := startPrompterLoop(ctx, cc, pollInterval, prompterStopGrace, func(ctx context.Context, e proxy.LogEntry) error {
-		return kitty.LaunchOverlay(ctx, approveCmdline(exe, session, e))
+		return env.LaunchOverlay(ctx, approveCmdline(exe, session, e))
 	})
-	tui.Status("Watching", "blocked connections via kitty overlay")
 	return func() {
 		stopLoop()
 		cc.Close()
@@ -200,21 +189,5 @@ func sessionInfoForRunning(ctx context.Context, client *ctr.Client, sessionID, p
 	if err != nil {
 		return nil, fmt.Errorf("find control port: %w", err)
 	}
-	return &SessionInfo{
-		ControlPort: strconv.Itoa(port),
-		SessionID:   sessionID,
-		ProjectDir:  projectDir,
-	}, nil
-}
-
-// sanitizeText strips C0, C1, DEL, and invalid UTF-8. Domain and reason
-// strings originate from the sandbox's own requests and must not be able to
-// inject escape sequences into the prompt.
-func sanitizeText(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == utf8.RuneError {
-			return -1
-		}
-		return r
-	}, s)
+	return newSessionInfo(strconv.Itoa(port), sessionID, projectDir), nil
 }

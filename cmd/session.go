@@ -86,13 +86,20 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 	return selectSession(sessions)
 }
 
+// newSessionInfo builds a SessionInfo with the credential directory resolved
+// once, so every consumer (control client, approve overlay) uses the same one.
+func newSessionInfo(controlPort, sessionID, projectDir string) *SessionInfo {
+	return &SessionInfo{
+		ControlPort: controlPort,
+		SessionID:   sessionID,
+		ProjectDir:  projectDir,
+		CredDir:     sessionDir(sessionID),
+	}
+}
+
 // sessionInfoFromProxy converts a container.ProxySession to a SessionInfo.
 func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
-	return &SessionInfo{
-		ControlPort: ps.ControlPort,
-		SessionID:   ps.SessionID,
-		ProjectDir:  ps.ProjectDir,
-	}
+	return newSessionInfo(ps.ControlPort, ps.SessionID, ps.ProjectDir)
 }
 
 // ensureSessionDir resolves the session directory, creates it if needed.

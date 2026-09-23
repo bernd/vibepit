@@ -260,7 +260,7 @@ func TestControlAPI_Check(t *testing.T) {
 	})
 }
 
-func TestControlAPI_LogsSince(t *testing.T) {
+func TestControlAPI_LogsCursor(t *testing.T) {
 	log := NewLogBuffer(100)
 	for range 30 {
 		log.Add(LogEntry{Domain: "x.com"})
@@ -277,9 +277,9 @@ func TestControlAPI_LogsSince(t *testing.T) {
 		return entries
 	}
 
-	assert.Len(t, get("after=0"), 25, "after=0 keeps its tail semantics")
-	assert.Len(t, get("since=0"), 30)
-	assert.Len(t, get("since=27"), 3)
+	assert.Len(t, get(""), 25, "no cursor returns a recent tail")
+	assert.Len(t, get("after=0"), 30, "after=0 is strict")
+	assert.Len(t, get("after=27"), 3)
 }
 
 func TestControlAPI_Deny(t *testing.T) {
@@ -307,6 +307,9 @@ func TestControlAPI_Deny(t *testing.T) {
 
 	w = do(http.MethodGet, "/check?source=proxy&target=a.com:80", "")
 	assert.JSONEq(t, `{"allowed":false,"denied":false}`, w.Body.String())
+
+	w = do(http.MethodGet, "/check?source=proxy&target=A.COM:443", "")
+	assert.JSONEq(t, `{"allowed":false,"denied":true}`, w.Body.String(), "equivalent spelling matches")
 
 	for name, body := range map[string]string{
 		"invalid json":       `{`,

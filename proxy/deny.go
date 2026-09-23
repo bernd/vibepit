@@ -8,24 +8,20 @@ import "sync"
 // prompting. Safe for concurrent use; the zero value is ready.
 type DenySet struct {
 	mu      sync.Mutex
-	targets map[string]bool
+	targets map[Target]bool
 }
 
-func denyKey(source Source, target string) string {
-	return string(source) + "/" + target
-}
-
-func (d *DenySet) Add(source Source, target string) {
+func (d *DenySet) Add(t Target) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.targets == nil {
-		d.targets = make(map[string]bool)
+		d.targets = make(map[Target]bool)
 	}
-	d.targets[denyKey(source, target)] = true
+	d.targets[t] = true
 }
 
-func (d *DenySet) Denied(source Source, target string) bool {
+func (d *DenySet) Denied(t Target) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.targets[denyKey(source, target)]
+	return d.targets[t]
 }

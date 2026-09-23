@@ -77,25 +77,6 @@ func TestApproveCmdline_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestAllowValueForEntry(t *testing.T) {
-	tests := []struct {
-		name  string
-		entry proxy.LogEntry
-		want  string
-	}{
-		{name: "proxy domain", entry: proxy.LogEntry{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}, want: "a.com:443"},
-		{name: "proxy ipv4", entry: proxy.LogEntry{Source: proxy.SourceProxy, Domain: "192.0.2.1", Port: "80"}, want: "192.0.2.1:80"},
-		{name: "proxy ipv6 gets brackets", entry: proxy.LogEntry{Source: proxy.SourceProxy, Domain: "2001:db8::1", Port: "443"}, want: "[2001:db8::1]:443"},
-		{name: "proxy without port", entry: proxy.LogEntry{Source: proxy.SourceProxy, Domain: "a.com"}, want: "a.com"},
-		{name: "dns", entry: proxy.LogEntry{Source: proxy.SourceDNS, Domain: "a.com"}, want: "a.com"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, allowValueForEntry(tt.entry))
-		})
-	}
-}
-
 func TestApproveCmdline_RoundTripIPv6(t *testing.T) {
 	e := proxy.LogEntry{Source: proxy.SourceProxy, Domain: "2001:db8::1", Port: "443", Action: proxy.ActionBlock}
 	args := approveCmdline("/usr/bin/vibepit", &SessionInfo{SessionID: "s"}, e)

@@ -15,9 +15,9 @@ type SessionInfo struct {
 	ControlPort string
 	SessionID   string
 	ProjectDir  string
-	// CredDir overrides the credential directory derived from SessionID.
-	// Set when a child process must not re-derive it from its own
-	// environment, e.g. the approve overlay launched by kitty.
+	// CredDir holds the session's mTLS credentials. It is resolved once by
+	// newSessionInfo and passed on as-is, because a child process such as
+	// the approve overlay may see a different XDG environment.
 	CredDir string
 }
 

@@ -334,7 +334,7 @@ func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				requests++
 				assert.Equal(t, "/logs", req.URL.Path)
-				assert.Equal(t, "after=0", req.URL.RawQuery)
+				assert.Empty(t, req.URL.RawQuery, "first poll asks for the recent tail")
 				body := `[{"id":11,"domain":"api.openai.com","port":"443","action":"block","source":"proxy"}]`
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -369,6 +369,34 @@ func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
 	require.Len(t, s.items, 1)
 	assert.Equal(t, uint64(11), s.pollCursor)
 	assert.Equal(t, 1, requests)
+	assert.True(t, s.loaded)
+}
+
+func TestMonitorScreen_PollUsesStrictCursorAfterFirstLoad(t *testing.T) {
+	var queries []string
+	client := &ControlClient{
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				queries = append(queries, req.URL.RawQuery)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader("[]")),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+		baseURL: "https://proxy.local",
+	}
+	s := newMonitorScreen(&SessionInfo{SessionID: "test123456"}, client, nil)
+	w := tui.NewWindow(&tui.HeaderInfo{SessionID: "test123456"}, s)
+	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	// First load on an empty log, then a later poll: the cursor stays 0 but
+	// the second request must be strict, not another tail.
+	s.Update(s.pollLogsCmd()(), w)
+	s.pollLogsCmd()()
+	assert.Equal(t, []string{"", "after=0"}, queries)
 }
 
 func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {

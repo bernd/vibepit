@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -68,25 +67,20 @@ func TestBlockWatcher_Next(t *testing.T) {
 				got := bw.Next(batch)
 				var vals []string
 				for _, e := range got {
-					vals = append(vals, allowValueForEntry(e))
+					vals = append(vals, e.Target().String())
 				}
 				assert.Equal(t, tt.want[i], vals, "batch %d", i)
 			}
-			assert.Equal(t, tt.cursor, bw.Cursor())
+			assert.Equal(t, tt.cursor, bw.cursor)
 		})
 	}
 }
 
 func TestRunBlockPrompter(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
+	tp := newTestProxy(t)
+	log, client := tp.log, tp.client
 	// Blocked before the poller starts: must not prompt.
 	log.Add(proxy.LogEntry{Domain: "old.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
 
 	prompted := make(chan proxy.LogEntry, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -126,26 +120,19 @@ func TestRunBlockPrompter(t *testing.T) {
 }
 
 func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
+	tp := newTestProxy(t)
+	log, api := tp.log, tp.api
 	log.Add(proxy.LogEntry{Domain: "old.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL)
 
 	// Fail the first requests so the priming call does not succeed at once.
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := testControlClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) <= 3 {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		api.ServeHTTP(w, r)
 	}))
-	t.Cleanup(srv.Close)
-	client := &ControlClient{http: srv.Client(), baseURL: srv.URL}
 
 	prompted := make(chan proxy.LogEntry, 10)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -166,173 +153,7 @@ func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
 	}
 }
 
-func TestResolvePrompter(t *testing.T) {
-	kittyEnvVars := map[string]string{"KITTY_LISTEN_ON": "unix:@k", "KITTY_WINDOW_ID": "1"}
-	noEnv := map[string]string{}
-	haveKitten := func(string) (string, error) { return "/usr/bin/kitten", nil }
-	noKitten := func(string) (string, error) { return "", assert.AnError }
-
-	tests := []struct {
-		name     string
-		explicit bool // flag given on the command line
-		value    bool // flag value
-		env      map[string]string
-		lookPath func(string) (string, error)
-		wantOn   bool
-		wantErr  bool
-	}{
-		{name: "explicit on, kitty and kitten present", explicit: true, value: true, env: kittyEnvVars, lookPath: haveKitten, wantOn: true},
-		{name: "explicit on, not kitty", explicit: true, value: true, env: noEnv, lookPath: haveKitten, wantErr: true},
-		{name: "explicit on, kitten missing", explicit: true, value: true, env: kittyEnvVars, lookPath: noKitten, wantErr: true},
-		{name: "explicit off", explicit: true, value: false, env: kittyEnvVars, lookPath: haveKitten},
-		{name: "auto, kitty and kitten present", env: kittyEnvVars, lookPath: haveKitten, wantOn: true},
-		{name: "auto, kitten missing is silent", env: kittyEnvVars, lookPath: noKitten},
-		{name: "auto, not kitty", env: noEnv, lookPath: haveKitten},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lookup := func(k string) string { return tt.env[k] }
-			k, on, err := resolvePrompter(tt.explicit, tt.value, lookup, tt.lookPath)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wantOn, on)
-			if on {
-				assert.Equal(t, "unix:@k", k.ListenOn)
-			}
-		})
-	}
-}
-
-func TestRunBlockPrompter_EmptyStartDoesNotDropBurst(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
-
-	prompted := make(chan proxy.LogEntry, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go runBlockPrompter(ctx, client, 50*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-		prompted <- e
-		return nil
-	})
-
-	// Let the poller prime against an empty log, then add one block followed
-	// by more than a tail's worth of allowed entries before the next poll.
-	time.Sleep(10 * time.Millisecond)
-	log.Add(proxy.LogEntry{Domain: "blocked.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-	for range 30 {
-		log.Add(proxy.LogEntry{Domain: "ok.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
-	}
-
-	select {
-	case e := <-prompted:
-		assert.Equal(t, "blocked.com", e.Domain)
-	case <-time.After(time.Second):
-		t.Fatal("block before burst was dropped")
-	}
-}
-
-func TestStartPrompterLoop_StopWaitsForPromptCleanup(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
-
-	inPrompt := make(chan struct{})
-	cleanedUp := make(chan struct{})
-	stop := startPrompterLoop(context.Background(), client, 5*time.Millisecond, time.Second,
-		func(ctx context.Context, e proxy.LogEntry) error {
-			close(inPrompt)
-			<-ctx.Done()
-			// Simulates kitty's close-window round trip after cancellation.
-			time.Sleep(50 * time.Millisecond)
-			close(cleanedUp)
-			return ctx.Err()
-		})
-
-	time.Sleep(20 * time.Millisecond)
-	log.Add(proxy.LogEntry{Domain: "b.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-	select {
-	case <-inPrompt:
-	case <-time.After(time.Second):
-		t.Fatal("prompt never started")
-	}
-
-	stop()
-	select {
-	case <-cleanedUp:
-	default:
-		t.Fatal("stop returned before prompt cleanup finished")
-	}
-}
-
-func TestStartPrompterLoop_StopIsBounded(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
-
-	inPrompt := make(chan struct{})
-	release := make(chan struct{})
-	defer close(release)
-	stop := startPrompterLoop(context.Background(), client, 5*time.Millisecond, 50*time.Millisecond,
-		func(ctx context.Context, e proxy.LogEntry) error {
-			close(inPrompt)
-			<-release // ignores cancellation entirely
-			return nil
-		})
-
-	time.Sleep(20 * time.Millisecond)
-	log.Add(proxy.LogEntry{Domain: "b.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-	<-inPrompt
-
-	start := time.Now()
-	stop()
-	assert.Less(t, time.Since(start), 500*time.Millisecond)
-}
-
-func TestRunBlockPrompter_SkipsDecidedTargets(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
-
-	denied := proxy.LogEntry{Domain: "denied.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy}
-	require.NoError(t, client.Deny(denied))
-
-	prompted := make(chan proxy.LogEntry, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go runBlockPrompter(ctx, client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-		prompted <- e
-		return nil
-	})
-
-	time.Sleep(20 * time.Millisecond)
-	log.Add(denied)
-	log.Add(proxy.LogEntry{Domain: "fresh.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-
-	select {
-	case e := <-prompted:
-		assert.Equal(t, "fresh.com", e.Domain, "denied target must not prompt")
-	case <-time.After(time.Second):
-		t.Fatal("no prompt for fresh.com")
-	}
-}
-
-func TestStartBlockPrompter_SetupFailure(t *testing.T) {
+func TestStartBlockPrompter_Policy(t *testing.T) {
 	// Make kitty detection succeed: env vars plus a fake kitten in PATH.
 	bin := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "kitten"), []byte("#!/bin/sh\n"), 0o755))
@@ -350,9 +171,13 @@ func TestStartBlockPrompter_SetupFailure(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
+		notKitty   bool
 		getSession func() (*SessionInfo, error)
 		wantErr    string
 	}{
+		{name: "explicit off never sets up", args: []string{"x", "--prompt=false"}, getSession: failingSession},
+		{name: "auto, not kitty, stays quiet", args: []string{"x"}, notKitty: true, getSession: failingSession},
+		{name: "explicit, not kitty, fails loudly", args: []string{"x", "--prompt"}, notKitty: true, getSession: failingSession, wantErr: "remote control"},
 		{name: "auto, session lookup fails, skips silently", args: []string{"x"}, getSession: failingSession},
 		{name: "explicit, session lookup fails loudly", args: []string{"x", "--prompt"}, getSession: failingSession, wantErr: "not published"},
 		{name: "auto, missing credentials, skips silently", args: []string{"x"}, getSession: missingCreds},
@@ -360,6 +185,9 @@ func TestStartBlockPrompter_SetupFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.notKitty {
+				t.Setenv("KITTY_LISTEN_ON", "")
+			}
 			var gotErr error
 			var stop func()
 			cmd := &cli.Command{

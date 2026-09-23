@@ -66,11 +66,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}()
 
 	stop, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
-		return &SessionInfo{
-			ControlPort: strconv.Itoa(infra.Merged.ControlAPIPort),
-			SessionID:   infra.SessionID,
-			ProjectDir:  projectRoot,
-		}, nil
+		return newSessionInfo(strconv.Itoa(infra.Merged.ControlAPIPort), infra.SessionID, projectRoot), nil
 	})
 	if err != nil {
 		return err

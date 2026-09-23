@@ -16,10 +16,8 @@ type approveScreen struct {
 	session       *SessionInfo
 	client        *ControlClient
 	entry         proxy.LogEntry
-	busy          bool
-	failed        bool // an allow attempt errored; keep the prompt until the user acts
+	busy          bool // a decision is being applied
 	checkInFlight bool
-	firstTickSeen bool
 }
 
 // checkResultMsg carries the result of polling whether the target has been
@@ -29,8 +27,8 @@ type checkResultMsg struct {
 	err error
 }
 
-// denyResultMsg is returned once the deny was recorded in the proxy.
-type denyResultMsg struct {
+// decisionResultMsg reports whether the user's allow or deny was applied.
+type decisionResultMsg struct {
 	err error
 }
 
@@ -40,8 +38,14 @@ func newApproveScreen(session *SessionInfo, client *ControlClient, entry proxy.L
 
 func (s *approveScreen) allowCmd(save bool) tea.Cmd {
 	return func() tea.Msg {
-		status, err := allowEntry(s.client, s.session, s.entry, save)
-		return allowResultMsg{index: -1, status: status, err: err}
+		_, err := allowEntry(s.client, s.session, s.entry, save)
+		return decisionResultMsg{err: err}
+	}
+}
+
+func (s *approveScreen) denyCmd() tea.Cmd {
+	return func() tea.Msg {
+		return decisionResultMsg{err: s.client.Deny(s.entry)}
 	}
 }
 
@@ -53,12 +57,15 @@ func (s *approveScreen) checkCmd() tea.Cmd {
 	}
 }
 
-func (s *approveScreen) denyCmd() tea.Cmd {
-	return func() tea.Msg {
-		return denyResultMsg{err: s.client.Deny(s.entry)}
-	}
+func (s *approveScreen) decide(w *tui.Window, cmd tea.Cmd) (tui.Screen, tea.Cmd) {
+	s.busy = true
+	w.ClearError()
+	return s, cmd
 }
 
+// Update keeps the prompt open while an error from the user's own decision
+// is shown. A failed allow+save leaves the target in the live allowlist, so
+// the decided-elsewhere poll would otherwise close the prompt and hide it.
 func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -67,53 +74,34 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 		switch msg.String() {
 		case "a", "A":
-			s.busy = true
-			s.failed = false
-			w.ClearError()
-			return s, s.allowCmd(msg.String() == "A")
+			return s.decide(w, s.allowCmd(msg.String() == "A"))
 		case "n":
-			s.busy = true
-			s.failed = false
-			w.ClearError()
-			return s, s.denyCmd()
+			return s.decide(w, s.denyCmd())
 		case "esc", "q", "ctrl+c":
 			// Dismiss only: no decision is recorded, other clients keep asking.
 			return s, tea.Quit
 		}
 
 	case tui.TickMsg:
-		first := !s.firstTickSeen
-		s.firstTickSeen = true
-		if s.busy || s.failed || s.checkInFlight || s.client == nil {
+		if s.busy || w.Err() != nil || s.checkInFlight || s.client == nil {
 			return s, nil
 		}
-		if first || w.IntervalElapsed(pollInterval) {
+		// Check right away on open, then once per poll interval.
+		if w.TickFrame() <= 1 || w.IntervalElapsed(pollInterval) {
 			return s, s.checkCmd()
 		}
 
 	case checkResultMsg:
 		s.checkInFlight = false
 		// Errors are ignored: an older proxy without /check, or a transient
-		// failure, must not take the prompt away from the user. A failed
-		// allow+save leaves the target in the live allowlist, so a pending
-		// error must also block auto-close or it would vanish unseen.
-		if msg.err == nil && msg.res.Decided() && !s.busy && !s.failed {
+		// failure, must not take the prompt away from the user.
+		if msg.err == nil && msg.res.Decided() && !s.busy && w.Err() == nil {
 			return s, tea.Quit
 		}
 
-	case denyResultMsg:
+	case decisionResultMsg:
 		s.busy = false
 		if msg.err != nil {
-			s.failed = true
-			w.SetError(msg.err)
-			return s, nil
-		}
-		return s, tea.Quit
-
-	case allowResultMsg:
-		s.busy = false
-		if msg.err != nil {
-			s.failed = true
 			w.SetError(msg.err)
 			return s, nil
 		}
@@ -123,8 +111,8 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 }
 
 func (s *approveScreen) View(w *tui.Window) string {
-	target := sanitizeText(allowValueForEntry(s.entry))
-	reason := sanitizeText(s.entry.Reason)
+	target := tui.SanitizeText(s.entry.Target().String())
+	reason := tui.SanitizeText(s.entry.Reason)
 	label := lipgloss.NewStyle().Foreground(tui.ColorField)
 	value := lipgloss.NewStyle().Bold(true)
 	blocked := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render("blocked")

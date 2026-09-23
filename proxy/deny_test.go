@@ -8,13 +8,14 @@ import (
 
 func TestDenySet(t *testing.T) {
 	var d DenySet
-	assert.False(t, d.Denied(SourceProxy, "a.com:443"))
+	a443 := Target{Source: SourceProxy, Host: "a.com", Port: "443"}
+	assert.False(t, d.Denied(a443))
 
-	d.Add(SourceProxy, "a.com:443")
-	assert.True(t, d.Denied(SourceProxy, "a.com:443"))
-	assert.False(t, d.Denied(SourceProxy, "a.com:80"), "port is part of the target")
-	assert.False(t, d.Denied(SourceDNS, "a.com:443"), "sources are separate")
+	d.Add(a443)
+	assert.True(t, d.Denied(a443))
+	assert.False(t, d.Denied(Target{Source: SourceProxy, Host: "a.com", Port: "80"}), "port is part of the target")
+	assert.False(t, d.Denied(Target{Source: SourceDNS, Host: "a.com"}), "sources are separate")
 
-	d.Add(SourceDNS, "b.com")
-	assert.True(t, d.Denied(SourceDNS, "b.com"))
+	d.Add(Target{Source: SourceDNS, Host: "b.com"})
+	assert.True(t, d.Denied(Target{Source: SourceDNS, Host: "b.com"}))
 }

@@ -60,28 +60,60 @@ func TestLogBuffer(t *testing.T) {
 	})
 }
 
+func TestTail(t *testing.T) {
+	t.Run("returns last n entries", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for range 30 {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.Tail(25)
+		require.Len(t, entries, 25)
+		assert.Equal(t, uint64(6), entries[0].ID)
+		assert.Equal(t, uint64(30), entries[24].ID)
+	})
+
+	t.Run("fewer entries than n returns all", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for range 5 {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.Tail(25)
+		require.Len(t, entries, 5)
+		assert.Equal(t, uint64(1), entries[0].ID)
+	})
+
+	t.Run("empty buffer returns nil", func(t *testing.T) {
+		assert.Nil(t, NewLogBuffer(10).Tail(25))
+	})
+
+	t.Run("works after buffer wraps", func(t *testing.T) {
+		buf := NewLogBuffer(3)
+		for i := range 5 {
+			buf.Add(LogEntry{Domain: fmt.Sprintf("%d.com", i+1)})
+		}
+		entries := buf.Tail(2)
+		require.Len(t, entries, 2)
+		assert.Equal(t, "4.com", entries[0].Domain)
+		assert.Equal(t, "5.com", entries[1].Domain)
+	})
+}
+
 func TestEntriesAfter(t *testing.T) {
-	t.Run("zero afterID returns last 25 entries", func(t *testing.T) {
+	t.Run("zero afterID returns every buffered entry", func(t *testing.T) {
 		buf := NewLogBuffer(100)
 		for range 30 {
 			buf.Add(LogEntry{Domain: "a.com"})
 		}
 
 		entries := buf.EntriesAfter(0)
-		require.Len(t, entries, 25)
-		assert.Equal(t, uint64(6), entries[0].ID)
-		assert.Equal(t, uint64(30), entries[24].ID)
+		require.Len(t, entries, 30)
+		assert.Equal(t, uint64(1), entries[0].ID)
 	})
 
-	t.Run("zero afterID with fewer than 25 entries returns all", func(t *testing.T) {
-		buf := NewLogBuffer(100)
-		for range 5 {
-			buf.Add(LogEntry{Domain: "a.com"})
-		}
-
-		entries := buf.EntriesAfter(0)
-		require.Len(t, entries, 5)
-		assert.Equal(t, uint64(1), entries[0].ID)
+	t.Run("zero afterID on empty buffer returns nil", func(t *testing.T) {
+		assert.Nil(t, NewLogBuffer(10).EntriesAfter(0))
 	})
 
 	t.Run("returns entries after given ID", func(t *testing.T) {
@@ -134,22 +166,4 @@ func TestEntriesAfter(t *testing.T) {
 		assert.Equal(t, uint64(5), entries[0].ID)
 		assert.Equal(t, "5.com", entries[0].Domain)
 	})
-}
-
-func TestLogBuffer_EntriesSince(t *testing.T) {
-	b := NewLogBuffer(100)
-	for i := range 30 {
-		b.Add(LogEntry{Domain: fmt.Sprintf("d%d.com", i)})
-	}
-
-	// Unlike EntriesAfter(0), ID zero means "everything", not "a tail".
-	all := b.EntriesSince(0)
-	assert.Len(t, all, 30)
-	assert.Equal(t, uint64(1), all[0].ID)
-
-	rest := b.EntriesSince(28)
-	require.Len(t, rest, 2)
-	assert.Equal(t, uint64(29), rest[0].ID)
-
-	assert.Empty(t, b.EntriesSince(30))
 }

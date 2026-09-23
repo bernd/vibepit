@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"time"
 
@@ -80,43 +79,24 @@ func approveSession(ctx context.Context, cmd *cli.Command) (*SessionInfo, error)
 }
 
 func parseApproveTarget(source, target string) (proxy.LogEntry, error) {
-	if target == "" {
-		return proxy.LogEntry{}, fmt.Errorf("missing target")
+	t, err := proxy.ParseTarget(source, target)
+	if err != nil {
+		return proxy.LogEntry{}, err
 	}
-	entry := proxy.LogEntry{Action: proxy.ActionBlock}
-	switch proxy.Source(source) {
-	case proxy.SourceDNS:
-		entry.Source = proxy.SourceDNS
-		entry.Domain = target
-	case proxy.SourceProxy:
-		host, port, err := net.SplitHostPort(target)
-		if err != nil {
-			return proxy.LogEntry{}, fmt.Errorf("proxy target must be domain:port: %w", err)
-		}
-		entry.Source = proxy.SourceProxy
-		entry.Domain = host
-		entry.Port = port
-	default:
-		return proxy.LogEntry{}, fmt.Errorf("unknown source %q", source)
-	}
-	return entry, nil
+	return proxy.LogEntry{Action: proxy.ActionBlock, Source: t.Source, Domain: t.Host, Port: t.Port}, nil
 }
 
 // approveCmdline builds the argv that runs the approve prompt for entry in
-// the given session. parseApproveTarget must accept what this produces.
+// the given session.
 func approveCmdline(exe string, session *SessionInfo, entry proxy.LogEntry) []string {
-	credDir := session.CredDir
-	if credDir == "" {
-		credDir = sessionDir(session.SessionID)
-	}
 	return []string{
 		exe, "approve",
 		"--session", session.SessionID,
 		"--control-port", session.ControlPort,
-		"--cred-dir", credDir,
+		"--cred-dir", session.CredDir,
 		"--project-dir", session.ProjectDir,
 		"--source", string(entry.Source),
 		"--reason", entry.Reason,
-		"--", allowValueForEntry(entry),
+		"--", entry.Target().String(),
 	}
 }
