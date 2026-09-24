@@ -53,6 +53,7 @@ make test              # run unit tests
 make test-integration  # run integration tests (60s timeout)
 make test-bats         # run BATS tests for image/entrypoint scripts
 make clean             # remove binary and dist/ artifacts
+make ghostty-wasm      # rebuild libghostty-vt .wasm and its Go translation (needs Zig 0.16)
 ```
 
 ## CLI Command Reference
@@ -151,6 +152,18 @@ Ed25519 SSH keypair generation. Produces PEM-encoded private keys and
 OpenSSH-format authorized keys. Used by `up` to create ephemeral per-session
 keypairs.
 
+### Terminal emulator (`vt/`)
+
+Shadow terminal emulator: parses a byte stream, reports terminal state, and
+serializes it back to VT sequences. Backed by libghostty-vt compiled to
+WebAssembly and translated to Go by wasm2go, so builds stay
+`CGO_ENABLED=0` and need no WebAssembly runtime.
+`vt/internal/ghostty/internal/wasmvt` holds the `.wasm` and the generated
+`ghostty_vt.go` (never edit it); `vt/internal/ghostty` holds the C-ABI
+bindings and the feature tests that pin libghostty behaviour; only `vt` may
+import it. See `vt/internal/ghostty/README.md` before upgrading the module
+or wasm2go.
+
 ### Embedded proxy binary (`embed/`)
 
 Used during release builds to embed the Linux arm64 proxy binary for macOS
@@ -211,7 +224,7 @@ Run the smallest set that proves correctness for your change:
 
 ## CI and Release Notes
 
-Three CI workflows under `.github/workflows/`:
+Five CI workflows under `.github/workflows/`:
 
 - `docker-publish.yml` -- publishes multi-arch images (`amd64`, `arm64`) to
   `ghcr.io/bernd/vibepit` when files under `image/` change on `main`. Images
@@ -222,6 +235,14 @@ Three CI workflows under `.github/workflows/`:
   and on tags: `make release-archive release-publish`.
 - `pages.yml` -- deploys MkDocs documentation to GitHub Pages when docs content
   or config changes on `main`.
+- `ghostty-wasm.yml` -- weekly and on demand: rebuilds the libghostty-vt
+  `.wasm` at a newer ghostty commit, regenerates its Go translation, runs
+  the feature tests, and opens or updates a PR on `ghostty-wasm-update`.
+  Never pushes to `main`.
+- `release-metadata.yml` -- runs when a release is published: downloads the
+  release's `checksums.txt`, generates release metadata under
+  `docs/content/releases/` with `.github/scripts/generate-release-metadata.py`,
+  and commits/pushes it to `main`.
 
 Releases are driven by Make targets:
 - `make release-build` builds Linux and macOS artifacts and embeds the Linux

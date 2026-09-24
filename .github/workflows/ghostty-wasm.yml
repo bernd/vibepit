@@ -1,0 +1,215 @@
+name: "ghostty-wasm"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ghostty_commit:
+        description: "ghostty commit to build (default: head of main)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "17 4 * * 1"
+
+# The build job runs code nobody reviewed: upstream's build.zig, the Zig
+# packages it fetches, and the freshly generated Go under go test. It gets
+# a read-only token that isn't kept in .git. Only the pr job, which runs
+# nothing from the build, can write.
+permissions:
+  contents: "read"
+
+concurrency:
+  group: "ghostty-wasm"
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: "bash"
+
+jobs:
+  build:
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 60
+
+    permissions:
+      contents: "read"
+
+    outputs:
+      skip: "${{ steps.resolve.outputs.skip }}"
+      want: "${{ steps.resolve.outputs.want }}"
+      commit: "${{ steps.build.outputs.commit }}"
+      status: "${{ steps.build.outputs.status }}"
+      category: "${{ steps.build.outputs.category }}"
+
+    steps:
+      # ref: a manual run from another branch must not put that branch's
+      # commits into the PR.
+      - name: "Checkout repository"
+        uses: "actions/checkout@v7"
+        with:
+          ref: "main"
+          persist-credentials: false
+
+      - name: "Setup Golang"
+        uses: "actions/setup-go@v7"
+        with:
+          go-version-file: "go.mod"
+
+      - name: "Setup Zig"
+        uses: "mlugg/setup-zig@v2"
+        with:
+          version: "0.16.0"
+
+      - name: "Resolve ghostty commit"
+        id: "resolve"
+        env:
+          WANT: "${{ inputs.ghostty_commit }}"
+        run: |
+          want="$WANT"
+          if [ -z "$want" ]; then
+            want="$(git ls-remote https://github.com/ghostty-org/ghostty.git refs/heads/main | cut -f1)"
+          fi
+          # The value ends up in a git checkout and in the PR title.
+          if [[ ! "$want" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::ghostty commit must be 7 to 40 lowercase hex digits, got '$want'"
+            exit 1
+          fi
+          current="$(sed -n 's/^commit=//p' vt/internal/ghostty/internal/wasmvt/GHOSTTY_COMMIT)"
+          {
+            echo "want=$want"
+            if [[ "$current" == "$want"* ]]; then
+              echo "skip=true"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      # 100 iterations: with a handful, the first cold run dominates and
+      # the spread hides real changes.
+      - name: "Benchmark current module"
+        if: "steps.resolve.outputs.skip != 'true'"
+        run: |
+          go test -run '^$' -bench BenchmarkVTWrite -benchtime 100x -count 5 ./vt/internal/ghostty | tee bench-old.txt
+
+      # One step decides status and category. The build log is replaced
+      # by the test log once the build passes.
+      - name: "Build and test module"
+        id: "build"
+        if: "steps.resolve.outputs.skip != 'true'"
+        env:
+          WANT: "${{ steps.resolve.outputs.want }}"
+        run: |
+          set +e
+          # Invoke the script directly, not via make: make turns any
+          # recipe failure into exit 2, so the exit-3 (patch does not
+          # apply) case below could never match.
+          vt/internal/ghostty/build-wasm.sh "$WANT" 2>&1 | tee test-output.txt
+          code="${PIPESTATUS[0]}"
+          category=""
+          case "$code" in
+            0)
+              # The script records the full sha even for a short input.
+              echo "commit=$(sed -n 's/^commit=//p' vt/internal/ghostty/internal/wasmvt/GHOSTTY_COMMIT)" >> "$GITHUB_OUTPUT"
+              {
+                go test ./... &&
+                go test -run '^$' -fuzz FuzzVTWrite -fuzztime 2m ./vt/internal/ghostty
+              } 2>&1 | tee test-output.txt
+              [ "${PIPESTATUS[0]}" = "0" ] || category="feature tests failed"
+              ;;
+            3) category="patch does not apply" ;;
+            *) category="build failed" ;;
+          esac
+          set -e
+          if [ -z "$category" ]; then
+            echo "status=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=fail" >> "$GITHUB_OUTPUT"
+            echo "category=$category" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Benchmark new module"
+        if: "steps.build.outputs.status == 'pass'"
+        run: |
+          go test -run '^$' -bench BenchmarkVTWrite -benchtime 100x -count 5 ./vt/internal/ghostty | tee bench-new.txt
+
+      # Runs on failure too: the PR reports failures, and a fuzz crasher
+      # under testdata/fuzz is only kept here, not in the PR.
+      - name: "Upload results"
+        if: "always() && steps.resolve.outcome == 'success' && steps.resolve.outputs.skip != 'true'"
+        uses: "actions/upload-artifact@v7"
+        with:
+          name: "ghostty-wasm"
+          if-no-files-found: "ignore"
+          path: |
+            vt/internal/ghostty/internal/wasmvt/ghostty-vt.wasm
+            vt/internal/ghostty/internal/wasmvt/GHOSTTY_COMMIT
+            vt/internal/ghostty/internal/wasmvt/ghostty_vt.go
+            vt/internal/ghostty/testdata/fuzz/
+            test-output.txt
+            bench-old.txt
+            bench-new.txt
+
+  pr:
+    needs: "build"
+    if: "needs.build.outputs.skip != 'true'"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 15
+
+    permissions:
+      contents: "write"
+      pull-requests: "write"
+
+    steps:
+      # Full history: the PR script compares the update branch with main.
+      - name: "Checkout repository"
+        uses: "actions/checkout@v7"
+        with:
+          ref: "main"
+          fetch-depth: 0
+
+      # The artifact is untrusted: code in the build job can control what
+      # it holds. It lands outside the checkout, so it can't replace this
+      # job's scripts or plant .git/hooks, and the next step copies only
+      # the files below.
+      - name: "Download results"
+        uses: "actions/download-artifact@v8"
+        with:
+          name: "ghostty-wasm"
+          path: "${{ runner.temp }}/results"
+
+      # Only regular files at these paths, never directories. They are
+      # data here: the module files are committed to the PR branch and the
+      # reports quoted in its body; nothing from the artifact runs in this
+      # job. A symlink anywhere in a path would let the artifact copy files
+      # from outside it, such as .git/config with this job's token.
+      - name: "Copy results into place"
+        env:
+          RESULTS: "${{ runner.temp }}/results"
+        run: |
+          root="$(realpath -e -- "$RESULTS")"
+          take() {
+            local src="$root/$1"
+            if [ -f "$src" ] && [ ! -L "$src" ] && [ "$(realpath -e -- "$src")" = "$src" ]; then
+              cp -- "$src" "$1"
+            elif [ "$2" = "required" ]; then
+              echo "::error::the artifact has no regular file at $1"
+              exit 1
+            fi
+          }
+          dir="vt/internal/ghostty/internal/wasmvt"
+          take "$dir/ghostty-vt.wasm" required
+          take "$dir/GHOSTTY_COMMIT" required
+          take "$dir/ghostty_vt.go" required
+          # Absent on some failure paths; the PR script copes.
+          take test-output.txt optional
+          take bench-old.txt optional
+          take bench-new.txt optional
+
+      - name: "Open or update pull request"
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          GHOSTTY_NEW: "${{ needs.build.outputs.commit || needs.build.outputs.want }}"
+          STATUS: "${{ needs.build.outputs.status }}"
+          CATEGORY: "${{ needs.build.outputs.category }}"
+        run: ".github/scripts/ghostty-wasm-pr.sh"
+
+      - name: "Fail on build or test failure"
+        if: "needs.build.outputs.status != 'pass'"
+        run: "exit 1"
