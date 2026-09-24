@@ -1,6 +1,6 @@
 module github.com/bernd/vibepit
 
-go 1.27
+go 1.27.1
 
 require (
 	charm.land/bubbletea/v2 v2.0.10
