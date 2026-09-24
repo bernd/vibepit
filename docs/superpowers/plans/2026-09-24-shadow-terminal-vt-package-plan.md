@@ -26,7 +26,7 @@
 - `vt` always sets `SCROLLBACK_MAX_LINES`, `SCROLLBACK_MAX_BYTES` and `CONTINUATION_MAX_BYTES` explicitly. Defaults: 1000 lines, 32 MiB, 64 KiB.
 - A trap (a panic inside the translated module, including one from the `write_pty` callback) marks the `vt.Terminal` failed; later calls return an error wrapping `vt.ErrFailed`, never panic. Runaway recursion is a fatal Go stack overflow and can't be caught; the spec records the risk.
 - Go style: `gofmt`, comments explain why, `any` not `interface{}`, table-driven tests with subtests, testify `assert`/`require`.
-- The `ghostty-wasm.yml` workflow never pushes to `main`. Permissions: `contents: write`, `pull-requests: write`. No `id-token`.
+- The `ghostty-wasm.yml` workflow never pushes to `main`. The `build` job runs upstream's build and the generated code, so it gets `contents: read` and no persisted credentials. Only the `pr` job has `contents: write` and `pull-requests: write`, and it runs nothing from the build: it copies the six expected files out of the artifact. No `id-token`.
 
 ## Findings From Plan Research (deviations from the spec)
 
@@ -35,7 +35,7 @@ Probed against the pinned commit before writing this plan. Every item is covered
 1. **Cursor shape has no terminal getter.** `GHOSTTY_TERMINAL_DATA_CURSOR_STYLE` is the SGR pen, not DECSCUSR. `vt.CursorStyle` reads shape and blinking through a render state (`ghostty_render_state_*`, `CURSOR_VISUAL_STYLE`, `CURSOR_BLINKING`).
 2. **`DATA_MOUSE_TRACKING` is a bool.** `vt.MouseTracking` derives the level from modes 1003, 1002, 1000 and 9.
 3. **The mode table has 43 entries**, not 48. `TestModeTableComplete` scans every mode number and fails when upstream adds or removes one.
-4. **The formatter emits a wrong cursor position under origin mode (DECOM).** It writes an absolute CUP, which the terminal reads relative to the scroll region. A second patch, `0002-formatter-origin-mode.patch`, makes the cursor extra relative to the region's top-left when DECOM is on. Propose it upstream with `content_none`.
+4. **The formatter emits a wrong cursor position under origin mode (DECOM).** It writes an absolute CUP, which the terminal reads relative to the scroll region. A second patch, `0002-formatter-origin-mode.patch`, makes the cursor extra relative to the region's top-left when DECOM is on. Both patches stay local for now; proposing them upstream is deferred.
 5. **A snapshot restore into a dirty terminal needs a pen reset first.** The formatter only emits the scroll region, charsets, kitty keyboard flags and the open hyperlink when they differ from the default, and content is drawn with whatever SGR is active. The restore harness writes `CSI r`, `CSI 0m`, OSC 8 close, `ESC ( B ESC ) B ESC * B ESC + B SI` and `CSI =0;1u` before `CSI 2J CSI H`. Leaving the alt screen must use the mode that entered it (`?1049l` after `?1049h`), or the mode bit stays set. The overlay plan must copy `snapshotLeave` from `vt/internal/ghostty/restore_test.go`.
 6. **The `pwd` extra emits OSC 7 with a stray NUL**, and the `tabstops` extra moves the cursor. `vt.Extras` offers neither.
 7. **`vt_write_until_ground` consumes nothing when the parser is already at ground.** `vt.WriteUntilGround` documents it.
@@ -4487,5 +4487,5 @@ git commit -m "Add ghostty-wasm upgrade workflow and document the vt package"
 
 ## Manual follow-ups (not tasks; need the user)
 
-- Propose `0001-formatter-content-none.patch` and `0002-formatter-origin-mode.patch` upstream (ghostty-org/ghostty). Opening PRs on another project is the user's call.
+- Proposing `0001-formatter-content-none.patch` and `0002-formatter-origin-mode.patch` upstream (ghostty-org/ghostty) is deferred: the patches stay local and `build-wasm.sh` keeps applying them. Opening PRs on another project is the user's call.
 - Plan 2 (overlay, `--prompt`, selective port from `add/kitty-prompt`) starts from `vt` and copies `snapshotLeave`'s order.

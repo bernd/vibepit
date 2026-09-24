@@ -406,8 +406,8 @@ callbacks. `vt.WithWritePty` is the only public trace of this mechanism.
     the scroll region, so the cursor landed in the wrong row. The patch
     emits the cursor relative to the region's top-left corner.
 
-  Each patch is proposed
-  upstream and deleted once an upstream commit includes it. The
+  The patches stay local for now; proposing them upstream is deferred.
+  A patch is deleted once an upstream commit includes it. The
   `ghostty-wasm.yml` workflow fails with the category "patch does not
   apply" if a new upstream commit conflicts. ghostty-web carries WASM API
   patches in the same way.
@@ -810,8 +810,8 @@ carries every later change in the app's own bytes.
 **Formatter support.** The C API always formats content: a NULL selection
 means the whole screen. The Zig formatter already supports extras without
 content (`Content.none`). vibepit carries a six-line patch that exposes it
-as `content_none` in `GhosttyFormatterTerminalOptions`, and proposes it
-upstream (see Building the module). Verified with a patched build.
+as `content_none` in `GhosttyFormatterTerminalOptions`, kept local for
+now (see Building the module). Verified with a patched build.
 
 #### Screen Buffers
 
@@ -1400,7 +1400,8 @@ by the dirty-terminal round trip and by Screen Buffers.
    translation, the internal bindings and the callback, the public API,
    the feature tests, `make ghostty-wasm` with the formatter patches, the
    `ghostty-wasm.yml` workflow, and the provenance and generated-code
-   checks in `make test`. Open the upstream PR for `content_none`.
+   checks in `make test`. The upstream PRs for the formatter patches are
+   deferred; the patches stay local.
 2. `overlay` with the shadow and `InputMux`, and `--prompt` in `run`.
    Remove the kitty PoC (`kittyPrompter`, `kitty.go`, `approve.go`) in the
    same change.
