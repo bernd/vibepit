@@ -490,6 +490,44 @@ func (in *Instance) RenderStateCursor() (CursorVisualStyle, bool, error) {
 	return CursorVisualStyle(int32(style)), blink&0xff != 0, err
 }
 
+// ContinuationAlloc is ghostty_terminal_continuation_alloc: the bytes that
+// recreate an unfinished escape sequence or UTF-8 character in another
+// terminal. It is InvalidValue while tracking is off or when the sequence
+// outgrew the limit.
+func (in *Instance) ContinuationAlloc() ([]byte, error) {
+	out := in.scratch + scrOutPtr
+	if err := in.writeMem(out, zero8[:]); err != nil {
+		return nil, err
+	}
+	if err := in.invoke("ghostty_terminal_continuation_alloc", func() int32 {
+		return in.mod.Xghostty_terminal_continuation_alloc(int32(in.term), 0, int32(out), int32(in.scratch+scrOutLen))
+	}); err != nil {
+		return nil, err
+	}
+	return in.takeAlloc(out)
+}
+
+// takeAlloc copies the (ptr, len) out-pair at out and releases the buffer
+// with ghostty_free. Empty output is (NULL, 0).
+func (in *Instance) takeAlloc(out uint32) ([]byte, error) {
+	b, err := in.read(out, 8)
+	if err != nil {
+		return nil, err
+	}
+	ptr, n := le.Uint32(b[scrOutPtr:]), le.Uint32(b[scrOutLen:])
+	if ptr == 0 {
+		return nil, nil
+	}
+	data, err := in.read(ptr, n)
+	if err != nil {
+		return nil, err
+	}
+	if err := in.guard("ghostty_free", func() { in.mod.Xghostty_free(0, int32(ptr), int32(n)) }); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 // TypeJSON is ghostty_type_json.
 func (in *Instance) TypeJSON() (string, error) {
 	p, err := in.call("ghostty_type_json", func() int32 { return in.mod.Xghostty_type_json() })
