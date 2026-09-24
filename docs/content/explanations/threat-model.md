@@ -86,8 +86,8 @@ Vibepit filters network traffic, not terminal output. A compromised agent can di
 
 ### Blocked connection prompts
 
-In kitty, a blocked request from the sandbox opens an allow/deny prompt on your
-terminal. See the [CLI reference](../reference/cli.md#blocked-connection-prompt).
+In kitty, or in any terminal with `--prompt inline`, a blocked request from the
+sandbox opens an allow/deny prompt on your terminal. See the [CLI reference](../reference/cli.md#blocked-connection-prompt).
 This gives the agent a way to put a question in front of you: it can make
 requests on purpose to trigger prompts, and it chooses the domain names they
 show. A domain can be made to look legitimate, for example

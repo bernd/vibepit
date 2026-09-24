@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,7 +18,38 @@ type approveScreen struct {
 	client        *ControlClient
 	entry         proxy.LogEntry
 	busy          bool // a decision is being applied
+	confirmSave   bool // A was pressed, waiting for y to save for good
 	checkInFlight bool
+}
+
+// approveQuiet and approveSettle define a deliberate key press, the only
+// input the prompt takes: a single key with no other key approveQuiet before
+// and approveSettle after it. The sandbox decides when a prompt appears, and
+// the user may be typing into the agent at that moment: a stray a would
+// allow, a stray A would even save the rule. approveSettle exceeds common
+// key repeat delays (X11 defaults to 660ms), so a held key repeats before
+// it settles.
+const (
+	approveQuiet  = 400 * time.Millisecond
+	approveSettle = 700 * time.Millisecond
+)
+
+// newApproveModel builds the prompt program model for entry, behind the
+// key gate. Both the inline and the kitty prompter show it.
+func newApproveModel(session *SessionInfo, client *ControlClient, entry proxy.LogEntry) tea.Model {
+	header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
+	window := tui.NewWindow(header, newApproveScreen(session, client, entry))
+	return tui.NewKeyGate(window, isApproveKey, approveQuiet, approveSettle)
+}
+
+// isApproveKey reports whether k answers the prompt: allow, allow and save,
+// deny, or dismiss.
+func isApproveKey(k tea.KeyPressMsg) bool {
+	switch k.String() {
+	case "a", "A", "n", "q", "esc", "ctrl+c":
+		return true
+	}
+	return false
 }
 
 // checkResultMsg carries the result of polling whether the target has been
@@ -72,9 +104,26 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		if s.busy {
 			return s, nil
 		}
+		if s.confirmSave {
+			switch msg.String() {
+			case "y":
+				s.confirmSave = false
+				return s.decide(w, s.allowCmd(true))
+			case "q", "ctrl+c":
+				return s, tea.Quit
+			default:
+				// Anything else backs out to the question.
+				s.confirmSave = false
+			}
+			return s, nil
+		}
 		switch msg.String() {
-		case "a", "A":
-			return s.decide(w, s.allowCmd(msg.String() == "A"))
+		case "a":
+			return s.decide(w, s.allowCmd(false))
+		case "A":
+			// Saving outlives the session: ask once more.
+			s.confirmSave = true
+			return s, nil
 		case "n":
 			return s.decide(w, s.denyCmd())
 		case "esc", "q", "ctrl+c":
@@ -127,6 +176,9 @@ func (s *approveScreen) View(w *tui.Window) string {
 		"",
 		"  Allow this connection?",
 	}
+	if s.confirmSave {
+		lines[len(lines)-1] = fmt.Sprintf("  Allow and save %s to the project config?", value.Render(target))
+	}
 	if s.busy {
 		lines = append(lines, "", "  applying...")
 	}
@@ -136,6 +188,12 @@ func (s *approveScreen) View(w *tui.Window) string {
 func (s *approveScreen) FooterStatus(w *tui.Window) string { return "" }
 
 func (s *approveScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
+	if s.confirmSave {
+		return []tui.FooterKey{
+			{Key: "y", Desc: "save"},
+			{Key: "any", Desc: "back"},
+		}
+	}
 	return []tui.FooterKey{
 		{Key: "a", Desc: "allow"},
 		{Key: "A", Desc: "allow+save"},

@@ -42,7 +42,7 @@ vibepit run [flags] [project-path]
 | `-a`, `--allow` | string (repeatable) | | Additional `domain:port` entries to allow through the proxy (e.g. `api.example.com:443`) |
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
-| `--prompt` | bool | auto | Show an allow/deny prompt in a kitty overlay when the proxy blocks a connection. On automatically in kitty with remote control enabled. See [Blocked connection prompt](#blocked-connection-prompt). |
+| `-P`, `--prompt` | string | auto | Show an allow/deny prompt when the proxy blocks a connection: `inline`, `kitty`, or `off`. By default, a kitty overlay in kitty with remote control enabled, off otherwise. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 
@@ -58,16 +58,23 @@ vibepit run [flags] [project-path]
 - Entries passed with `--allow` and `--preset` are merged with any entries
   saved in the project configuration file.
 - In kitty, blocked connections open an allow/deny prompt over the terminal.
+  With `--prompt inline`, they do in any terminal.
   See [Blocked connection prompt](#blocked-connection-prompt).
 
 ### Blocked connection prompt
 
 When the proxy blocks a connection, `run` and `connect` can ask you right away
-whether to allow it. The prompt opens in a
-[kitty](https://sw.kovidgoyal.net/kitty/) overlay window that covers the
-terminal running the sandbox. It closes again once you decide.
+whether to allow it. The prompt closes again once you decide. `--prompt`
+selects how it is shown:
 
-The prompt switches on automatically when all of these are true:
+| Mode | Description |
+|------|-------------|
+| `inline` | `vibepit` draws the prompt itself, over the running agent, in the terminal running the sandbox. Works in any terminal. `run` only. [EXPERIMENTAL] |
+| `kitty` | The prompt opens in a [kitty](https://sw.kovidgoyal.net/kitty/) overlay window that covers the terminal running the sandbox. `run` falls back to `inline` when kitty remote control is unavailable. |
+| `off` | No prompt. |
+
+Without `--prompt`, the kitty overlay switches on automatically when all of
+these are true:
 
 - The terminal is kitty and remote control is enabled. Add both settings to
   `kitty.conf`:
@@ -90,10 +97,27 @@ The prompt switches on automatically when all of these are true:
 
 - The `kitten` binary is in `PATH`.
 
-Pass `--prompt=false` to turn it off. Pass `--prompt` to require it. With the
-flag, `vibepit` exits with an error if kitty remote control or the session's
-control API is unavailable. Without the flag, it prints a warning and
-continues without prompting.
+Pass `--prompt off` to turn it off. With an explicit mode, `vibepit` exits
+with an error if the prompt cannot be set up, for example because the session's
+control API is unavailable. Without the flag, it prints a warning and continues
+without prompting.
+
+Without `--prompt`, `vibepit` never picks `inline` on its own. Pass
+`--prompt inline` to use it.
+
+When the agent is in the middle
+of writing a control sequence, the prompt waits for it to finish, up to one
+second. Problems with the prompt are logged to `vibepit/prompt-logs/<session>.log`
+in your state directory: `$XDG_STATE_HOME` if set, otherwise
+`~/.local/state` on Linux and `~/Library/Application Support` on macOS. Each
+log holds up to 1 MiB, and is removed 7 days after its last line.
+
+The inline prompt pauses the agent's output while it is shown and replays it
+afterwards. The agent is not stopped: output beyond 1 MiB makes its writes wait
+until the prompt closes. Keys go to the prompt while it is shown, and to the
+agent again afterwards. For an agent on the terminal's normal screen, like a
+shell, the screen is restored exactly. A full-screen agent, like an editor, is
+asked to redraw by a brief resize.
 
 The prompt shows the blocked domain and port for HTTP(S) requests, or the
 domain for DNS queries, together with the reason for the block.
@@ -101,12 +125,18 @@ domain for DNS queries, together with the reason for the block.
 | Key | Action |
 |-----|--------|
 | `a` | Allow for the rest of the session |
-| `A` | Allow and save to the project configuration |
+| `A` | Allow and save to the project configuration. Asks again: `y` saves, `q` dismisses, any other key goes back. |
 | `n` | Deny. Other clients stop asking about this target for the rest of the session. |
 | `Esc`, `q` | Dismiss without deciding. Other clients still ask. |
 
 Behavior details:
 
+- The prompt ignores keys until you press an answer key (`a`, `A`, `n`,
+  `q`, `Esc`) on its own: after a short pause, and not followed by more
+  typing. It takes effect after a moment, so holding a key does not count
+  either. Other keys, like `Enter`, never unlock the prompt. Typing and
+  pasting meant for the agent cannot answer it, and do not reach the agent
+  either. After that first key, the prompt takes keys as usual.
 - The blocked request has already failed when the prompt appears. Retry it
   after allowing.
 - Each target prompts at most once per client and session, no matter how often
@@ -144,7 +174,10 @@ vibepit run -a api.example.com:443 -a cdn.example.com:443 -p vcs-github
 vibepit run -r
 
 # Start without the blocked connection prompt in kitty
-vibepit run --prompt=false
+vibepit run --prompt off
+
+# Prompt for blocked connections in any terminal
+vibepit run -P inline
 ```
 
 ---
@@ -257,7 +290,7 @@ vibepit connect
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `-b`, `--bar` | bool | `false` | Enable status bar [EXPERIMENTAL] |
-| `--prompt` | bool | auto | Show an allow/deny prompt in a kitty overlay when the proxy blocks a connection. On automatically in kitty with remote control enabled. See [Blocked connection prompt](#blocked-connection-prompt). |
+| `-P`, `--prompt` | string | auto | Show an allow/deny prompt when the proxy blocks a connection: `kitty` or `off`. By default, a kitty overlay in kitty with remote control enabled, off otherwise. `inline` is not supported by `connect` yet. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 

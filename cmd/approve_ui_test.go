@@ -76,11 +76,11 @@ func TestApproveScreen_FooterKeys(t *testing.T) {
 func TestApproveScreen_Allow(t *testing.T) {
 	tests := []struct {
 		name      string
-		key       string
+		keys      string
 		wantSaved bool
 	}{
-		{name: "a allows for session", key: "a"},
-		{name: "A allows and saves", key: "A", wantSaved: true},
+		{name: "a allows for session", keys: "a"},
+		{name: "A then y allows and saves", keys: "Ay", wantSaved: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -89,7 +89,10 @@ func TestApproveScreen_Allow(t *testing.T) {
 			httpAL := f.proxy.http
 			projectPath := f.projectPath
 
-			_, cmd := s.Update(tea.KeyPressMsg{Code: rune(tt.key[0]), Text: tt.key}, w)
+			var cmd tea.Cmd
+			for _, k := range tt.keys {
+				_, cmd = s.Update(tea.KeyPressMsg{Code: k, Text: string(k)}, w)
+			}
 			require.NotNil(t, cmd)
 			msg := cmd()
 			res, ok := msg.(decisionResultMsg)
@@ -106,6 +109,33 @@ func TestApproveScreen_Allow(t *testing.T) {
 			require.NotNil(t, cmd)
 			assert.IsType(t, tea.QuitMsg{}, cmd())
 		})
+	}
+}
+
+func TestApproveScreen_SaveNeedsConfirmation(t *testing.T) {
+	f := makeApproveSetup(t, blockedEntry)
+	s, w := f.s, f.w
+
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'A', Text: "A"}, w)
+	assert.Nil(t, cmd, "A alone does nothing yet")
+	assert.Contains(t, s.View(w), "save", "asks to confirm")
+	assert.Equal(t, []string{"save", "back"}, footerKeyDescs(s.FooterKeys(w)))
+
+	// q quits, as the footer says.
+	_, cmd = s.Update(tea.KeyPressMsg{Code: 'q', Text: "q"}, w)
+	require.NotNil(t, cmd)
+	assert.IsType(t, tea.QuitMsg{}, cmd())
+	s.confirmSave = true
+
+	// A stray key, even another A, backs out instead of saving.
+	_, cmd = s.Update(tea.KeyPressMsg{Code: 'A', Text: "A"}, w)
+	assert.Nil(t, cmd)
+	assert.Equal(t, []string{"allow", "allow+save", "deny", "dismiss"}, footerKeyDescs(s.FooterKeys(w)))
+	assert.False(t, f.proxy.http.Allows("api.example.com", "443"))
+	_, err := os.Stat(f.projectPath)
+	if err == nil {
+		data, _ := os.ReadFile(f.projectPath)
+		assert.NotContains(t, string(data), "api.example.com:443")
 	}
 }
 

@@ -218,16 +218,18 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 
 // startConnectPrompter wires the block prompter for a daemon-mode session.
 // The container client is only needed to look up the control port, so it is
-// created only when prompting is enabled.
+// created only when prompting is enabled. The inline prompt needs the
+// session streams, which connect does not route through an overlay yet.
 func startConnectPrompter(ctx context.Context, cmd *cli.Command, sandbox *ctr.RunningSession) (func(), error) {
-	return startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+	bp, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
 		client, err := ctr.NewClient(ctr.WithDebug(cmd.Root().Bool(debugFlag)))
 		if err != nil {
 			return nil, err
 		}
 		defer client.Close()
 		return sessionInfoForRunning(ctx, client, sandbox.SessionID, sandbox.ProjectDir)
-	})
+	}, false)
+	return bp.Stop, err
 }
 
 type sessionCountTransport interface {

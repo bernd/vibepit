@@ -70,7 +70,8 @@ Current root commands are defined in `cmd/root.go` and include:
 - `proxy` -- internal command used inside the proxy container.
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
 - `approve` -- internal allow/deny prompt for a blocked target, launched in a
-  kitty overlay by `run` and `connect` (hidden).
+  kitty overlay by `run` and `connect` (hidden). `run --prompt inline` shows
+  the same screen in-process instead.
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
 - `update` -- update binary and pull latest runtime images.
 
@@ -99,7 +100,8 @@ Built with `urfave/cli/v3`.
 - `vibed` runs the SSH daemon inside the sandbox container (internal).
 - `approve` renders the allow/deny prompt for a blocked target (internal).
   `run` and `connect` poll the control API for blocks and launch it in a kitty
-  overlay when kitty remote control is available.
+  overlay when kitty remote control is available. With `run --prompt inline`
+  the approve screen is drawn over the session through `overlay.Terminal`.
 - `monitor` provides interactive control.
 - `update` refreshes local runtime images.
 
@@ -155,6 +157,22 @@ buffers, and enforces concurrent session limits.
 Ed25519 SSH keypair generation. Produces PEM-encoded private keys and
 OpenSSH-format authorized keys. Used by `up` to create ephemeral per-session
 keypairs.
+
+### Inline overlay (`overlay/`)
+
+Draws a Bubble Tea program over a running terminal session and restores the
+session's screen afterwards. Its API is `overlay.New`, `overlay.Config`,
+`overlay.Terminal` (`Run`, `Show`, `SetLogf`), and `overlay.ErrClosed`.
+Inside, an input mux owns stdin (while an overlay shows, the overlay gets the
+user's input and the session still gets terminal replies and focus reports),
+an output mux owns the session output, a mode tracker parses that output for
+safe cut points and the few settings the overlay changes, and an allowlist
+filter limits what the overlay program may send. `Terminal.Show` pauses,
+draws, and restores. The approve prompt guards itself against stray input
+with `tui.KeyGate`. Screen contents are never
+copied: the terminal restores the main screen, alt-screen apps redraw. `container.runTTYSession` routes
+every attached session through an `overlay.Terminal`, exposed to callers via
+`container.WithTerminal`.
 
 ### Kitty integration (`kitty/`)
 

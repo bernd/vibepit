@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/proxy"
-	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
 )
 
@@ -58,8 +58,10 @@ func runApprove(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer client.Close()
 
-	header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
-	return runTUI(header, newApproveScreen(session, client, entry))
+	if _, err := tea.NewProgram(newApproveModel(session, client, entry)).Run(); err != nil {
+		return fmt.Errorf("approve UI: %w", err)
+	}
+	return nil
 }
 
 // approveSession prefers the session details passed by the parent. kitty

@@ -27,12 +27,11 @@ package container
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	"sync"
 	"time"
 
+	"github.com/bernd/vibepit/overlay"
 	"github.com/docker/docker/api/types"
 	"golang.org/x/term"
 )
@@ -58,31 +57,54 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
+// AttachOption configures an interactive session started by
+// AttachAndStartSession or ExecSession.
+type AttachOption func(*attachOptions)
+
+type attachOptions struct {
+	onTerminal func(*overlay.Terminal)
+}
+
+// WithTerminal passes the session's overlay terminal to fn before any data
+// flows, so the caller can show prompts over the session. The terminal is
+// closed when the session ends.
+func WithTerminal(fn func(*overlay.Terminal)) AttachOption {
+	return func(o *attachOptions) { o.onTerminal = fn }
+}
+
+func buildAttachOptions(opts []AttachOption) attachOptions {
+	var o attachOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
 // runTTYSession puts the host terminal into raw mode, forwards stdio to/from
 // the hijacked Docker connection, and handles SIGWINCH for terminal resizing.
 // The resizeFn is called with (height, width) whenever the terminal changes
 // size. The function blocks until the container-side stream ends, then
 // returns any error.
-func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint)) error {
+func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint), opts attachOptions) error {
 	fd := int(os.Stdin.Fd())
 
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		return err
 	}
-	// Use sync.Once so whichever goroutine finishes first restores the
-	// terminal immediately, rather than waiting for defer on return.
-	restoreOnce := sync.OnceFunc(func() {
-		term.Restore(fd, oldState)
-	})
-	defer restoreOnce()
+	defer term.Restore(fd, oldState)
+
+	size := func() (rows, cols int, err error) {
+		w, h, err := term.GetSize(fd)
+		return h, w, err
+	}
 
 	// Set initial terminal size with retry. The container/exec process may
 	// not be ready to accept a resize immediately after attach.
 	go func() {
 		for attempt := range 5 {
-			if w, h, err := term.GetSize(fd); err == nil {
-				resizeFn(uint(h), uint(w))
+			if rows, cols, err := size(); err == nil {
+				resizeFn(uint(rows), uint(cols))
 				return
 			}
 			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
@@ -99,44 +121,27 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 	defer close(done)
 	go func() {
 		watchResizeSignals(sigCh, done, func() {
-			if w, h, err := term.GetSize(fd); err == nil {
-				resizeFn(uint(h), uint(w))
+			if rows, cols, err := size(); err == nil {
+				resizeFn(uint(rows), uint(cols))
 			}
 		})
 	}()
 
-	outputDone := make(chan error, 1)
-	inputDone := make(chan error, 1)
-
-	// Copy container output to stdout.
-	go func() {
-		_, err := io.Copy(os.Stdout, resp.Reader)
-		restoreOnce()
-		outputDone <- err
-	}()
-
-	// Copy stdin to the container.
-	go func() {
-		_, err := io.Copy(resp.Conn, os.Stdin)
-		resp.CloseWrite()
-		inputDone <- err
-	}()
-
-	select {
-	case err := <-outputDone:
-		return err
-	case <-inputDone:
-		// Stdin finished (e.g. Ctrl-D). Wait for output to drain or
-		// context to cancel.
-		select {
-		case err := <-outputDone:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	case <-ctx.Done():
-		return ctx.Err()
+	t := overlay.New(overlay.Config{
+		Stdin:        os.Stdin,
+		Stdout:       os.Stdout,
+		ContainerIn:  resp.Conn,
+		ContainerOut: resp.Reader,
+		CloseInput:   resp.CloseWrite,
+		Resize: func(rows, cols int) {
+			resizeFn(uint(rows), uint(cols))
+		},
+		Size: size,
+	})
+	if opts.onTerminal != nil {
+		opts.onTerminal(t)
 	}
+	return t.Run(ctx)
 }
 
 // terminalSize returns the current terminal dimensions, or nil if

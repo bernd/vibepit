@@ -38,15 +38,15 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
-		stop, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+		prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
 			return sessionInfoForRunning(ctx, client, existing.SessionID, projectRoot)
-		})
+		}, true)
 		if err != nil {
 			return err
 		}
-		defer stop()
+		defer prompter.Stop()
 		tui.Status("Attaching", "to running session in %s", projectRoot)
-		return client.ExecSession(ctx, existing.ContainerID)
+		return client.ExecSession(ctx, existing.ContainerID, prompter.AttachOptions()...)
 	}
 
 	infra, cleanups, err := startSessionInfra(ctx, cmd, client, projectRoot, u, infraOptions{})
@@ -65,16 +65,16 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		client.StopAndRemove(ctx, sandboxContainer)
 	}()
 
-	stop, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
 		return newSessionInfo(strconv.Itoa(infra.Merged.ControlAPIPort), infra.SessionID, projectRoot), nil
-	})
+	}, true)
 	if err != nil {
 		return err
 	}
-	defer stop()
+	defer prompter.Stop()
 
 	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	return client.AttachAndStartSession(ctx, sandboxContainer)
+	return client.AttachAndStartSession(ctx, sandboxContainer, prompter.AttachOptions()...)
 }
