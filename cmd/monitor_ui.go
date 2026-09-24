@@ -8,7 +8,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 )
@@ -42,6 +41,7 @@ type monitorScreen struct {
 	onBack         func() tui.Screen
 	cursor         tui.Cursor
 	pollCursor     uint64
+	loaded         bool // first poll done; later polls use the strict cursor
 	pollInFlight   bool
 	items          []logItem
 	newCount       int
@@ -71,43 +71,10 @@ type logsPollResultMsg struct {
 	err     error
 }
 
-func allowValueForEntry(entry proxy.LogEntry) string {
-	if entry.Source == proxy.SourceProxy && entry.Port != "" {
-		return entry.Domain + ":" + entry.Port
-	}
-	return entry.Domain
-}
-
 func (s *monitorScreen) allowCmd(index int, entry proxy.LogEntry, save bool) tea.Cmd {
 	return func() tea.Msg {
-		value := allowValueForEntry(entry)
-
-		var err error
-		switch entry.Source {
-		case proxy.SourceDNS:
-			_, err = s.client.AllowDNS([]string{value})
-		default:
-			_, err = s.client.AllowHTTP([]string{value})
-		}
-		if err != nil {
-			return allowResultMsg{index: index, err: err}
-		}
-
-		status := statusTemp
-		if save {
-			status = statusSaved
-			projectPath := config.DefaultProjectPath(s.session.ProjectDir)
-			switch entry.Source {
-			case proxy.SourceDNS:
-				err = config.AppendAllowDNS(projectPath, []string{value})
-			default:
-				err = config.AppendAllowHTTP(projectPath, []string{value})
-			}
-			if err != nil {
-				return allowResultMsg{index: index, err: err}
-			}
-		}
-		return allowResultMsg{index: index, status: status}
+		status, err := allowEntry(s.client, s.session, entry, save)
+		return allowResultMsg{index: index, status: status, err: err}
 	}
 }
 
@@ -119,9 +86,18 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 	return s.onBack()
 }
 
-func (s *monitorScreen) pollLogsCmd(afterID uint64) tea.Cmd {
+// pollLogsCmd fetches a recent tail on first load and every newer entry
+// afterwards, so a burst between polls cannot be cut off.
+func (s *monitorScreen) pollLogsCmd() tea.Cmd {
+	loaded, cursor := s.loaded, s.pollCursor
 	return func() tea.Msg {
-		entries, err := s.client.LogsAfter(afterID)
+		var entries []proxy.LogEntry
+		var err error
+		if loaded {
+			entries, err = s.client.LogsAfter(cursor)
+		} else {
+			entries, err = s.client.Logs()
+		}
 		return logsPollResultMsg{entries: entries, err: err}
 	}
 }
@@ -191,6 +167,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			break
 		}
 		s.disconnectTick = -1
+		s.loaded = true
 		w.ClearError()
 
 		wasAtEnd := len(s.items) == 0 || s.cursor.AtEnd()
@@ -224,7 +201,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 				break
 			}
 			s.pollInFlight = true
-			return s, s.pollLogsCmd(s.pollCursor)
+			return s, s.pollLogsCmd()
 		}
 		s.firstTickSeen = true
 	}
@@ -310,14 +287,11 @@ func renderLogLine(item logItem, highlighted bool) string {
 		symbol = base.Foreground(tui.ColorCyan).Render("+")
 		sourceColor = tui.ColorCyan
 	}
-	host := e.Domain
-	if e.Port != "" {
-		host = e.Domain + ":" + e.Port
-	}
+	host := tui.SanitizeText(e.Target().String())
 	ts := base.Foreground(tui.ColorField).Render(e.Time.Format("15:04:05"))
 	src := base.Foreground(sourceColor).Render(fmt.Sprintf("%-5s", string(e.Source)))
 	hostStr := base.Render(host)
-	reasonStr := base.Render(e.Reason)
+	reasonStr := base.Render(tui.SanitizeText(e.Reason))
 	sp := base.Render(" ")
 	return marker + base.Render("[") + ts + base.Render("]") + sp + symbol + sp + src + sp + hostStr + sp + reasonStr
 }

@@ -15,6 +15,10 @@ type SessionInfo struct {
 	ControlPort string
 	SessionID   string
 	ProjectDir  string
+	// CredDir holds the session's mTLS credentials. It is resolved once by
+	// newSessionInfo and passed on as-is, because a child process such as
+	// the approve overlay may see a different XDG environment.
+	CredDir string
 }
 
 func MonitorCommand() *cli.Command {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -16,6 +17,7 @@ type ControlAPI struct {
 	config        any
 	httpAllowlist *HTTPAllowlist
 	dnsAllowlist  *DNSAllowlist
+	denied        DenySet
 }
 
 func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist) *ControlAPI {
@@ -31,6 +33,8 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 	api.mux.HandleFunc("GET /config", api.handleConfig)
 	api.mux.HandleFunc("POST /allow-http", api.handleAllowHTTP)
 	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
+	api.mux.HandleFunc("GET /check", api.handleCheck)
+	api.mux.HandleFunc("POST /deny", api.handleDeny)
 	return api
 }
 
@@ -66,13 +70,18 @@ func (rw *responseState) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// handleLogs returns a recent tail when called without a cursor, and every
+// entry with a larger ID for "after=N", including N=0.
 func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
-	var afterID uint64
+	var q url.Values
 	if r.URL != nil {
-		if s := r.URL.Query().Get("after"); s != "" {
-			afterID, _ = strconv.ParseUint(s, 10, 64)
-		}
+		q = r.URL.Query()
 	}
+	if !q.Has("after") {
+		writeJSON(w, a.log.Tail(TailSize))
+		return
+	}
+	afterID, _ := strconv.ParseUint(q.Get("after"), 10, 64)
 	writeJSON(w, a.log.EntriesAfter(afterID))
 }
 
@@ -121,6 +130,44 @@ func (a *ControlAPI) handleAllowDNS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"added": entries})
+}
+
+// handleCheck reports whether the live allowlist permits a target and whether
+// a user denied it. Unlike /config it reflects runtime changes, which lets one
+// client notice that another client already decided on a blocked target.
+func (a *ControlAPI) handleCheck(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	t, err := ParseTarget(q.Get("source"), q.Get("target"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	var allowed bool
+	switch t.Source {
+	case SourceProxy:
+		allowed = a.httpAllowlist.Allows(t.Host, t.Port)
+	case SourceDNS:
+		allowed = a.dnsAllowlist.Allows(t.Host)
+	}
+	writeJSON(w, map[string]bool{"allowed": allowed, "denied": a.denied.Denied(t)})
+}
+
+func (a *ControlAPI) handleDeny(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	t, err := ParseTarget(req.Source, req.Target)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	a.denied.Add(t)
+	writeJSON(w, map[string]string{"denied": t.String()})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

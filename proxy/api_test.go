@@ -211,3 +211,114 @@ func TestControlAPIPanicRecovery(t *testing.T) {
 		assert.Equal(t, "partial", string(body), "body should not have error JSON appended")
 	})
 }
+
+func TestControlAPI_Check(t *testing.T) {
+	httpAL, err := NewHTTPAllowlist([]string{"a.com:443"})
+	require.NoError(t, err)
+	dnsAL, err := NewDNSAllowlist([]string{"c.com"})
+	require.NoError(t, err)
+	api := NewControlAPI(NewLogBuffer(10), nil, httpAL, dnsAL)
+
+	tests := []struct {
+		name        string
+		query       string
+		wantCode    int
+		wantAllowed bool
+	}{
+		{name: "proxy allowed", query: "source=proxy&target=a.com:443", wantCode: http.StatusOK, wantAllowed: true},
+		{name: "proxy other port", query: "source=proxy&target=a.com:80", wantCode: http.StatusOK},
+		{name: "proxy unknown host", query: "source=proxy&target=b.com:443", wantCode: http.StatusOK},
+		{name: "dns allowed", query: "source=dns&target=c.com", wantCode: http.StatusOK, wantAllowed: true},
+		{name: "dns not allowed", query: "source=dns&target=a.com", wantCode: http.StatusOK},
+		{name: "proxy target without port", query: "source=proxy&target=a.com", wantCode: http.StatusBadRequest},
+		{name: "unknown source", query: "source=smtp&target=a.com:25", wantCode: http.StatusBadRequest},
+		{name: "missing target", query: "source=dns", wantCode: http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/check?"+tt.query, nil)
+			w := httptest.NewRecorder()
+			api.ServeHTTP(w, req)
+			require.Equal(t, tt.wantCode, w.Code)
+			if tt.wantCode != http.StatusOK {
+				return
+			}
+			var res struct {
+				Allowed bool `json:"allowed"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+			assert.Equal(t, tt.wantAllowed, res.Allowed)
+		})
+	}
+
+	t.Run("reflects runtime additions", func(t *testing.T) {
+		require.NoError(t, httpAL.Add([]string{"late.com:443"}))
+		req := httptest.NewRequest(http.MethodGet, "/check?source=proxy&target=late.com:443", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		assert.JSONEq(t, `{"allowed":true,"denied":false}`, w.Body.String())
+	})
+}
+
+func TestControlAPI_LogsCursor(t *testing.T) {
+	log := NewLogBuffer(100)
+	for range 30 {
+		log.Add(LogEntry{Domain: "x.com"})
+	}
+	api := NewControlAPI(log, nil, nil, nil)
+
+	get := func(q string) []LogEntry {
+		req := httptest.NewRequest(http.MethodGet, "/logs?"+q, nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		var entries []LogEntry
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+		return entries
+	}
+
+	assert.Len(t, get(""), 25, "no cursor returns a recent tail")
+	assert.Len(t, get("after=0"), 30, "after=0 is strict")
+	assert.Len(t, get("after=27"), 3)
+}
+
+func TestControlAPI_Deny(t *testing.T) {
+	httpAL, err := NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	api := NewControlAPI(NewLogBuffer(10), nil, httpAL, dnsAL)
+
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+		return w
+	}
+
+	w := do(http.MethodGet, "/check?source=proxy&target=a.com:443", "")
+	assert.JSONEq(t, `{"allowed":false,"denied":false}`, w.Body.String())
+
+	w = do(http.MethodPost, "/deny", `{"source":"proxy","target":"a.com:443"}`)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	w = do(http.MethodGet, "/check?source=proxy&target=a.com:443", "")
+	assert.JSONEq(t, `{"allowed":false,"denied":true}`, w.Body.String())
+
+	w = do(http.MethodGet, "/check?source=proxy&target=a.com:80", "")
+	assert.JSONEq(t, `{"allowed":false,"denied":false}`, w.Body.String())
+
+	w = do(http.MethodGet, "/check?source=proxy&target=A.COM:443", "")
+	assert.JSONEq(t, `{"allowed":false,"denied":true}`, w.Body.String(), "equivalent spelling matches")
+
+	for name, body := range map[string]string{
+		"invalid json":       `{`,
+		"unknown source":     `{"source":"smtp","target":"a.com:25"}`,
+		"proxy without port": `{"source":"proxy","target":"a.com"}`,
+		"missing target":     `{"source":"dns"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, do(http.MethodPost, "/deny", body).Code)
+		})
+	}
+}

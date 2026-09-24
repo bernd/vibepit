@@ -86,13 +86,20 @@ func discoverSession(ctx context.Context, filter string) (*SessionInfo, error) {
 	return selectSession(sessions)
 }
 
+// newSessionInfo builds a SessionInfo with the credential directory resolved
+// once, so every consumer (control client, approve overlay) uses the same one.
+func newSessionInfo(controlPort, sessionID, projectDir string) *SessionInfo {
+	return &SessionInfo{
+		ControlPort: controlPort,
+		SessionID:   sessionID,
+		ProjectDir:  projectDir,
+		CredDir:     sessionDir(sessionID),
+	}
+}
+
 // sessionInfoFromProxy converts a container.ProxySession to a SessionInfo.
 func sessionInfoFromProxy(ps ctr.ProxySession) *SessionInfo {
-	return &SessionInfo{
-		ControlPort: ps.ControlPort,
-		SessionID:   ps.SessionID,
-		ProjectDir:  ps.ProjectDir,
-	}
+	return newSessionInfo(ps.ControlPort, ps.SessionID, ps.ProjectDir)
 }
 
 // ensureSessionDir resolves the session directory, creates it if needed.
@@ -131,8 +138,10 @@ func WriteSessionCredentials(sessionID string, creds *proxy.MTLSCredentials) (st
 // LoadSessionTLSConfig reads the PEM files from the session directory and
 // returns a *tls.Config suitable for dialing the filtering proxy as a client.
 func LoadSessionTLSConfig(sessionID string) (*tls.Config, error) {
-	dir := sessionDir(sessionID)
+	return loadTLSConfigFromDir(sessionDir(sessionID))
+}
 
+func loadTLSConfigFromDir(dir string) (*tls.Config, error) {
 	caCert, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	if err != nil {
 		return nil, fmt.Errorf("read CA cert: %w", err)

@@ -69,6 +69,8 @@ Current root commands are defined in `cmd/root.go` and include:
 - `allow-dns` -- add DNS allowlist entries at runtime.
 - `proxy` -- internal command used inside the proxy container.
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
+- `approve` -- internal allow/deny prompt for a blocked target, launched in a
+  kitty overlay by `run` and `connect` (hidden).
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
 - `update` -- update binary and pull latest runtime images.
 
@@ -95,6 +97,9 @@ Built with `urfave/cli/v3`.
   config.
 - `proxy` runs the proxy server inside the proxy container.
 - `vibed` runs the SSH daemon inside the sandbox container (internal).
+- `approve` renders the allow/deny prompt for a blocked target (internal).
+  `run` and `connect` poll the control API for blocks and launch it in a kitty
+  overlay when kitty remote control is available.
 - `monitor` provides interactive control.
 - `update` refreshes local runtime images.
 
@@ -150,6 +155,12 @@ buffers, and enforces concurrent session limits.
 Ed25519 SSH keypair generation. Produces PEM-encoded private keys and
 OpenSSH-format authorized keys. Used by `up` to create ephemeral per-session
 keypairs.
+
+### Kitty integration (`kitty/`)
+
+Detects a kitty terminal with remote control enabled and launches overlay
+windows via `kitten @ launch`. Used by `run` and `connect` to show the
+`approve` prompt for blocked connections.
 
 ### Embedded proxy binary (`embed/`)
 

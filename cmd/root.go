@@ -53,6 +53,7 @@ func RootCommand() *cli.Command {
 			ProxyCommand(),
 			VibedCommand(),
 			MonitorCommand(),
+			ApproveCommand(),
 			UpdateCommand(),
 		},
 	}
