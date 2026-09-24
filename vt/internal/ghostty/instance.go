@@ -418,6 +418,78 @@ func (in *Instance) stage(p []byte) (int, error) {
 	return n, in.writeMem(in.input, p[:n])
 }
 
+// VTWriteUntilGround feeds p only up to the byte at which the parser
+// reaches ground. It returns how many bytes it consumed and whether the
+// parser is at ground. A parser already at ground consumes nothing.
+func (in *Instance) VTWriteUntilGround(p []byte) (int, bool, error) {
+	const name = "ghostty_terminal_vt_write_until_ground"
+	consumed := 0
+	for {
+		n, err := in.stage(p)
+		if err != nil {
+			return consumed, false, err
+		}
+		out := in.scratch + scrOut
+		r, err := in.callResult(name, func() int32 {
+			return in.mod.Xghostty_terminal_vt_write_until_ground(int32(in.term), int32(in.input), int32(n), int32(out))
+		})
+		if err != nil {
+			return consumed, false, err
+		}
+		switch r {
+		case Success:
+			c, err := in.readU32(out)
+			return consumed + int(c), true, err
+		case NoValue:
+			consumed += n
+			p = p[n:]
+			if len(p) == 0 {
+				return consumed, false, nil
+			}
+		default:
+			return consumed, false, &CallError{Func: name, Result: r}
+		}
+	}
+}
+
+// RenderStateCursor reads the cursor's DECSCUSR shape and blinking state.
+// GhosttyTerminalData has no getter for them (its CURSOR_STYLE is the SGR
+// pen), so this goes through a render state.
+func (in *Instance) RenderStateCursor() (CursorVisualStyle, bool, error) {
+	if in.render == 0 {
+		if err := in.invoke("ghostty_render_state_new", func() int32 {
+			return in.mod.Xghostty_render_state_new(0, int32(in.slot))
+		}); err != nil {
+			return 0, false, err
+		}
+		h, err := in.takeOpaque()
+		if err != nil {
+			return 0, false, err
+		}
+		in.render = h
+	}
+	if err := in.invoke("ghostty_render_state_update", func() int32 {
+		return in.mod.Xghostty_render_state_update(int32(in.render), int32(in.term))
+	}); err != nil {
+		return 0, false, err
+	}
+	renderGet := func(d RenderStateData) (uint32, error) {
+		p, err := in.getOut("ghostty_render_state_get", func(out int32) int32 {
+			return in.mod.Xghostty_render_state_get(int32(in.render), int32(d), out)
+		})
+		if err != nil {
+			return 0, err
+		}
+		return in.readU32(p)
+	}
+	style, err := renderGet(RenderDataCursorVisualStyle)
+	if err != nil {
+		return 0, false, err
+	}
+	blink, err := renderGet(RenderDataCursorBlinking)
+	return CursorVisualStyle(int32(style)), blink&0xff != 0, err
+}
+
 // TypeJSON is ghostty_type_json.
 func (in *Instance) TypeJSON() (string, error) {
 	p, err := in.call("ghostty_type_json", func() int32 { return in.mod.Xghostty_type_json() })
