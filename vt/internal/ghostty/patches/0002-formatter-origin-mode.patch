@@ -1,0 +1,57 @@
+With origin mode (DECOM) on, CUP is relative to the scrolling region, but
+the cursor extra emitted absolute coordinates. Emit them relative to the
+region's top-left corner instead.
+
+Upstream: not yet proposed.
+
+diff --git a/src/terminal/formatter.zig b/src/terminal/formatter.zig
+index 4feedda50..0396149c5 100644
+--- a/src/terminal/formatter.zig
++++ b/src/terminal/formatter.zig
+@@ -548,6 +548,10 @@ pub const TerminalFormatter = struct {
+         // cursor last.
+         screen_formatter.content = .none;
+         screen_formatter.extra = self.extra.screen;
++        if (self.terminal.modes.get(.origin)) {
++            const region = &self.terminal.scrolling_region;
++            screen_formatter.cursor_origin = .{ .x = region.left, .y = region.top };
++        }
+         try screen_formatter.format(writer);
+     }
+ };
+@@ -567,6 +571,11 @@ pub const ScreenFormatter = struct {
+     /// This information is ONLY emitted when the format is "vt".
+     extra: Extra,
+
++    /// Cursor positions are emitted relative to this cell. With origin
++    /// mode on, CUP is relative to the scrolling region, so
++    /// TerminalFormatter sets this to the region's top-left corner.
++    cursor_origin: struct { x: usize = 0, y: usize = 0 } = .{},
++
+     /// If non-null, then `map` will contain the Pin of every byte
+     /// byte written to the writer offset by the byte index. It is the
+     /// caller's responsibility to free the map.
+@@ -704,7 +713,10 @@ pub const ScreenFormatter = struct {
+
+             // If we don't have pending wrap, then we can just use CUP.
+             if (!cursor.pending_wrap or cursor.x != self.screen.pages.cols - 1) {
+-                try writer.print("\x1b[{d};{d}H", .{ cursor.y + 1, cursor.x + 1 });
++                try writer.print("\x1b[{d};{d}H", .{
++                    cursor.y -| self.cursor_origin.y + 1,
++                    cursor.x -| self.cursor_origin.x + 1,
++                });
+                 break :cursor;
+             }
+
+@@ -717,7 +729,10 @@ pub const ScreenFormatter = struct {
+             // Move cursor to the edge.
+             try writer.print(
+                 "\x1b[{d};{d}H",
+-                .{ cursor.y + 1, start_x + 1 },
++                .{
++                    cursor.y -| self.cursor_origin.y + 1,
++                    start_x -| self.cursor_origin.x + 1,
++                },
+             );
+
+             // Reformat the cell which sets the proper pending wrap state.

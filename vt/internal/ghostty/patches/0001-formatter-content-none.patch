@@ -1,0 +1,41 @@
+Expose ScreenFormatter.Content.none in the C API as content_none, so the
+formatter can emit extras without cell content.
+
+Upstream: not yet proposed.
+
+diff --git a/include/ghostty/vt/formatter.h b/include/ghostty/vt/formatter.h
+index fd593b139..f5709b5ee 100644
+--- a/include/ghostty/vt/formatter.h
++++ b/include/ghostty/vt/formatter.h
+@@ -116,6 +116,9 @@ typedef struct {
+   /** Optional selection to restrict output to a range.
+    *  If NULL, the entire screen is formatted. */
+   const GhosttySelection *selection;
++
++  /** Emit no content, only the requested extras. Overrides selection. */
++  bool content_none;
+ } GhosttyFormatterTerminalOptions;
+
+ /**
+diff --git a/src/terminal/c/formatter.zig b/src/terminal/c/formatter.zig
+index 4ab41cd47..89ba58e38 100644
+--- a/src/terminal/c/formatter.zig
++++ b/src/terminal/c/formatter.zig
+@@ -72,6 +72,9 @@ pub const TerminalOptions = extern struct {
+     /// If null, the entire screen is formatted.
+     selection: ?*const CSelection = null,
+
++    /// Emit no content, only the requested extras. Overrides selection.
++    content_none: bool = false,
++
+     /// C: GhosttyFormatterTerminalExtra
+     pub const Extra = extern struct {
+         size: usize = @sizeOf(Extra),
+@@ -152,6 +155,7 @@ fn terminal_new_(
+         .selection = sel.toZig() orelse
+             return error.InvalidValue,
+     };
++    if (opts.content_none) formatter.content = .none;
+
+     ptr.* = .{
+         .kind = .{ .terminal = formatter },

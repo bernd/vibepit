@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve
+.PHONY: build test test-race test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve ghostty-wasm
 
 BINARY := vibepit
 VERSION ?= $(shell git describe --tags 2>/dev/null | sed 's/^v//')
@@ -23,13 +23,22 @@ test:
 # field (SafeEmulator doesn't lock Close()). Run locally to audit your own
 # changes; tolerate the upstream race until the fix lands.
 test-race:
-	CGO_ENABLED=1 go test -race ./session ./sshd ./cmd
+	CGO_ENABLED=1 go test -race ./session ./sshd ./cmd ./vt/...
 
 test-integration:
 	go test -tags=integration -timeout 60s ./...
 
 test-bats:
 	bats image/tests
+
+# Rebuilds vt/internal/ghostty/internal/wasmvt/ghostty-vt.wasm and its Go
+# translation. Needs Zig 0.16 and network access to github.com,
+# deps.files.ghostty.org and codeberg.org.
+GHOSTTY_COMMIT ?= $(shell sed -n 's/^commit=//p' vt/internal/ghostty/internal/wasmvt/GHOSTTY_COMMIT 2>/dev/null)
+
+ghostty-wasm:
+	@[ -n "$(GHOSTTY_COMMIT)" ] || { echo "GHOSTTY_COMMIT is required"; exit 1; }
+	vt/internal/ghostty/build-wasm.sh $(GHOSTTY_COMMIT)
 
 release-build:
 	@# Build linux/arm64 proxy binary for darwin embed
