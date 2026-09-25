@@ -1447,3 +1447,88 @@ getters, and the out-of-memory behaviour.
   set explicitly), `CursorStyle.DECSCUSR`, and `ErrOutOfMemory`.
 - PRs opened by `ghostty-wasm.yml` with `GITHUB_TOKEN` don't trigger
   `build.yml`. The reviewer closes and reopens the PR to run CI.
+
+## Implementation Notes: step 2 (2026-09-25)
+
+Found while planning and building rollout step 2 (the `overlay` package
+and `run --prompt`). Each has a test in `overlay` or `cmd`. Already folded
+into the sections above: the renderer sequences and the CR before a bare
+LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
+
+- **Enter clears the screen in both cases.** Bubble Tea's renderer
+  assumes a clear screen. On an alternate-screen cut the app's content
+  would otherwise show around the prompt. That content is overwritten
+  anyway and never restored by replay.
+- **The snapshot formats without the Modes extra.** That extra re-emits
+  every non-default mode, so it would enable 1004 and 2048 a second time
+  after the reconciliation skipped them, and the terminal would send
+  reports.
+- **The snapshot enters the alternate screen itself**, before the clear.
+  The formatter would enter it only after `CSI 2J`, which clears the
+  primary screen on the real terminal. Before `?1049h` it restores the
+  cut's modes, pen and cursor (the raw leave with nothing entered and an
+  empty log): `1049` saves the cursor and pen, and libghostty, like
+  xterm, keeps one cursor for both screens, so it would save the
+  prompt's. Known consequence: the real DECSC slot then holds the cut
+  position, not where the app was when it entered the alternate screen
+  while detached. It matters only when the app leaves that screen again
+  and printed on the primary screen between the cut and its `?1049h`.
+- **The snapshot's reset also resets modifyOtherKeys** (`CSI >4;0m`),
+  for the same reason as `CSI =0;1u`: the Keyboard extra emits it only
+  when set.
+- **The raw leave writes the pen reset, without its kitty part, before
+  `cut.extras`.** The formatter emits the scroll region, SGR, hyperlink
+  and charsets only when they differ from the default, and the prompt may
+  leave them dirty. The kitty part stays out: the pop already restored
+  the app's flags.
+- **An app DSR 5n in flight at T1.** `InputMux` consumes the first
+  `CSI 0n` as the barrier reply, but that one was the app's. So while the
+  prompt owns stdin, `InputMux` forwards any `CSI 0n` to the container.
+  The prompt's queries are filtered, so a `CSI 0n` then can only answer
+  the app, and the bytes are the same either way.
+- **The barrier reply is matched across reads only while draining.**
+  Elsewhere, including the late-reply strip, matching is per read, so a
+  held `ESC` never delays the Escape key.
+- **`InputMux.Drain` runs before the barrier query is written.** A local
+  terminal can answer before the next statement. With the query first,
+  the reply went to the container and the prompt timed out.
+- **Shadow failure while detached:** Error Handling wins over the row in
+  the raw-path table. The leave takes raw replay if it's allowed, else
+  `ESC c` and a SIGWINCH nudge. Raw replay doesn't need the shadow.
+- **`CAN` doesn't abort an OSC in libghostty, and so in ghostty:**
+  `ESC ]2;stall CAN` sets the title to `stall`. After a forced cut the
+  real terminal's title and working directory are unknown, so the
+  snapshot writes both unconditionally.
+- **Bubble Tea sees no TTY.** Its input is a pipe and its output is the
+  filter, so the program gets `WithWindowSize`, `WithColorProfile`
+  (detected on the real stdout), `WithEnvironment` (for `TERM`) and
+  `WithoutSignalHandler`. A resize while prompting is sent to it as
+  `tea.WindowSizeMsg`. Its input reader for a non-file `io.Reader` can't
+  be cancelled, so the leave closes the prompt's pipe to end it.
+- **A barrier timeout re-arms the target.** Nothing was shown, so the
+  poller forgets the target and prompts on its next block.
+- **Sessions without `--prompt` skip the emulator**
+  (`overlay.Config.NoShadow`), but use the same I/O path.
+- **`--prompt` defaults to off** until the manual terminal matrix
+  (rollout step 3) passes.
+- **`prompt.log`** lives at
+  `$XDG_STATE_HOME/vibepit/prompt-logs/<session>.log`, beside the session
+  directories, because those are removed when the session stops. It's
+  capped at 1 MiB, and logs untouched for 7 days are removed.
+- **The container's input goes through an ordered queue** with one
+  writer goroutine, fed by the stdin pump and the shadow's answers. Both
+  write while holding a lock, so a container that stopped reading its
+  input would otherwise stall the output pump, the detach and the leave.
+  Stdin waits for room outside the lock once 64 KiB is queued; input for
+  the prompt never waits. The queue is capped at 4 MiB, which only the
+  shadow's answers can reach. After stdin ends, the half-close comes
+  after the last queued key.
+- **Resizes and the repaint nudge are serialized.** Two callers resize
+  (the initial size and SIGWINCH), and the container's resize runs
+  outside the terminal lock. Without the order, the shadow and the
+  container could end at different sizes, or the nudge could put back an
+  old size.
+- **A `Show` that races the end of the session returns `ErrClosed`.**
+  `Run` closes its done channel before it waits for a running `Show`, so
+  the detach checks it too, and nothing reaches the terminal after the
+  session output ended.
