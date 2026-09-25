@@ -752,7 +752,7 @@ screen content on the prompt's screen.
 | Active screen | `CSI <u` pop, then `CSI ?1047l` | pop, `?1047l` if entered, then switch to the shadow's active screen |
 | Primary content + scrollback | untouched by the prompt; the log carries the app's changes | visible screen from the formatter; lines that scrolled off during the prompt are lost (known) |
 | Modes in D | `cut.modes`, written explicitly | the shadow's current values, written explicitly |
-| Modes outside D | untouched by the prompt; the log carries changes | every mode in the table is written explicitly from the shadow (full reconciliation, see below) |
+| Modes outside D | untouched by the prompt; the log carries changes | written explicitly from the shadow where they differ from `cut.modes` (see below) |
 | Kitty keyboard stack | balanced push/pop; the log carries changes | balanced push/pop, then the formatter's current flags (`CSI =flags;1u`). Stack depth changes made while detached are lost (known). |
 | Scroll region, margins | `cut.extras` | formatter extras |
 | Cursor position, pending wrap | `cut.extras`. The formatter reprints the right-edge cell to restore pending wrap. Tested. | formatter extras |
@@ -775,21 +775,25 @@ screen content on the prompt's screen.
   then replaying the log, the real terminal and the shadow produced the
   same formatter output.
 
-**Full reconciliation on the snapshot path.** The formatter only emits
+**Mode reconciliation on the snapshot path.** The formatter only emits
 modes that differ from their defaults, and never turns a mode back off.
 Tested: formatter-only restore left the real terminal on the alt screen,
 with insert on and wrapping off. So the snapshot path writes the shadow's
-current value of every mode in the table explicitly, except:
+current value of modes explicitly:
 
-- Modes with side effects that aren't state: DECCOLM (3), which clears the
-  screen, and 1048 (save cursor).
-- The screen modes 47, 1047 and 1049, handled by the screen switch.
-- **Report-triggering modes**, such as 2048 (in-band resize) and 1004
-  (focus). Enabling them makes some terminals send a report right away.
-  They are written only when they differ from the real terminal's known
-  value (the cut value, since the prompt doesn't touch them). The shadow
-  has no size or focus callbacks installed, so the app gets the report
-  exactly once, from the real terminal.
+- Modes in D always, because the prompt changed them.
+- Modes outside D only when they differ from `cut.modes`. The prompt
+  can't touch them, so the real terminal still has its cut value. For a
+  mode the app never set, the shadow holds libghostty's default, not the
+  real terminal's: libghostty defaults autorepeat (DECARM, 8) and cursor
+  blinking (12) to off, and 1007, 1035 and 1036 follow xterm resources.
+  Writing them all (full reconciliation, as first specified) turned off
+  key auto-repeat after a prompt. It also enabled report-triggering modes
+  such as 2048 (in-band resize) and 1004 (focus) a second time, which
+  makes some terminals send a report right away.
+- Never: modes with side effects that aren't state, DECCOLM (3), which
+  clears the screen, and 1048 (save cursor); and the screen modes 47,
+  1047 and 1049, handled by the screen switch.
 
 Then comes the **pen reset**, then `CSI 2J CSI H`, and then the formatter
 output with content and extras. The formatter also emits the scroll
@@ -1198,7 +1202,7 @@ them):
   replay.
 - Raw replay order: pop, leave the screen, `cut.modes` without IRM,
   `cut.extras`, IRM, log.
-- Snapshot order: pop, leave the screen, match the screen, full mode
+- Snapshot order: pop, leave the screen, match the screen, mode
   reconciliation, pen reset, clear, formatter output, getter-based extras,
   continuation.
 - Restore into a dirty terminal: the app leaves the alt screen and resets
@@ -1229,7 +1233,8 @@ them):
   - Leave order: DECOM and DECSTBM before the cursor, IRM after it.
   - The app's DECSC slot survives a prompt.
   - The kitty keyboard stack depth survives a prompt on both screens.
-  - Report-triggering modes are written only when they changed.
+  - Modes outside D, report-triggering ones included, are written only
+    when they changed since the cut.
   - Raw replay into the stand-in terminal matches the shadow's formatter
     output (the tested scenario, generalized).
 - When the continuation is unavailable, the pump resyncs. Forwarding
