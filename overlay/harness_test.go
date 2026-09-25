@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/vt"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/stretchr/testify/require"
@@ -173,6 +174,13 @@ func (h *harness) waitScreen(s string) {
 	h.t.Helper()
 	require.Eventually(h.t, func() bool { return strings.Contains(screenText(h.real), s) }, 10*time.Second, 5*time.Millisecond,
 		"the screen never showed %q", s)
+}
+
+// show runs Show in the background.
+func (h *harness) show(ctx context.Context, model tea.Model) <-chan error {
+	ch := make(chan error, 1)
+	go func() { ch <- h.term.Show(ctx, model) }()
+	return ch
 }
 
 // result waits for a background call's error.
