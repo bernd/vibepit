@@ -27,6 +27,7 @@ type HTTPProxy struct {
 // filterResult captures the outcome of a proxy filter check.
 type filterResult struct {
 	action  Action
+	cause   Cause
 	reason  string
 	rewrite string // non-empty when host.vibepit should be rewritten to gateway
 }
@@ -36,29 +37,25 @@ type filterResult struct {
 func (p *HTTPProxy) checkRequest(hostname, port string) filterResult {
 	if hostname == "host.vibepit" && p.hostGateway != "" {
 		if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {
-			p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
-			return filterResult{action: ActionBlock, reason: "domain not in allowlist"}
+			return p.block(hostname, port, CauseAllowlist, "domain not in allowlist")
 		}
 		rewritten := net.JoinHostPort(p.hostGateway, port)
-		p.logEntry(hostname, port, ActionAllow, "host.vibepit")
+		p.logEntry(hostname, port, ActionAllow, "", "host.vibepit")
 		return filterResult{action: ActionAllow, rewrite: rewritten}
 	}
 
 	if !p.allowlist.Allows(hostname, port) {
-		p.logEntry(hostname, port, ActionBlock, "domain not in allowlist")
-		return filterResult{action: ActionBlock, reason: "domain not in allowlist"}
+		return p.block(hostname, port, CauseAllowlist, "domain not in allowlist")
 	}
 
 	if blocked, ip := p.resolveAndCheckCIDR(hostname); blocked {
-		reason := fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip)
 		if ip == nil {
-			reason = "DNS resolution failed during CIDR check"
+			return p.block(hostname, port, CauseResolveFailed, "DNS resolution failed during CIDR check")
 		}
-		p.logEntry(hostname, port, ActionBlock, reason)
-		return filterResult{action: ActionBlock, reason: reason}
+		return p.block(hostname, port, CauseBlockedIP, fmt.Sprintf("resolved IP %s is in blocked CIDR range", ip))
 	}
 
-	p.logEntry(hostname, port, ActionAllow, "")
+	p.logEntry(hostname, port, ActionAllow, "", "")
 	return filterResult{action: ActionAllow}
 }
 
@@ -110,9 +107,10 @@ func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, u
 			result := p.checkRequest(hostname, port)
 			if result.action == ActionBlock {
 				msg := fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname)
-				if strings.Contains(result.reason, "blocked CIDR") {
+				switch result.cause {
+				case CauseBlockedIP:
 					msg = fmt.Sprintf("domain %q resolves to a blocked IP\n", hostname)
-				} else if strings.Contains(result.reason, "resolution failed") {
+				case CauseResolveFailed:
 					msg = fmt.Sprintf("domain %q could not be resolved safely\n", hostname)
 				}
 				return req, goproxy.NewResponse(req,
@@ -135,7 +133,7 @@ func (p *HTTPProxy) Handler() http.Handler {
 	return p.proxy
 }
 
-func (p *HTTPProxy) logEntry(hostname, port string, action Action, reason string) {
+func (p *HTTPProxy) logEntry(hostname, port string, action Action, cause Cause, reason string) {
 	p.log.Add(LogEntry{
 		Time:   time.Now(),
 		Domain: hostname,
@@ -143,7 +141,14 @@ func (p *HTTPProxy) logEntry(hostname, port string, action Action, reason string
 		Action: action,
 		Source: SourceProxy,
 		Reason: reason,
+		Cause:  cause,
 	})
+}
+
+// block logs and returns a block with its cause.
+func (p *HTTPProxy) block(hostname, port string, cause Cause, reason string) filterResult {
+	p.logEntry(hostname, port, ActionBlock, cause, reason)
+	return filterResult{action: ActionBlock, cause: cause, reason: reason}
 }
 
 // resolveAndCheckCIDR resolves the hostname to IPs and checks whether any

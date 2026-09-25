@@ -148,6 +148,67 @@ func TestHTTPProxy(t *testing.T) {
 	})
 }
 
+func TestCheckRequestCause(t *testing.T) {
+	failingResolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("resolver down")
+		},
+	}
+	tests := []struct {
+		name     string
+		host     string
+		resolver *net.Resolver
+		want     Cause
+	}{
+		{name: "not in allowlist", host: "evil.com", want: CauseAllowlist},
+		{name: "blocked IP", host: "10.0.0.1", want: CauseBlockedIP},
+		{name: "resolution failed", host: "example.com", resolver: failingResolver, want: CauseResolveFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			al, err := NewHTTPAllowlist([]string{"10.0.0.1:443", "example.com:443"})
+			require.NoError(t, err)
+			log := NewLogBuffer(10)
+			p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), log, DefaultUpstreamDNS)
+			if tt.resolver != nil {
+				p.resolver = tt.resolver
+			}
+
+			result := p.checkRequest(tt.host, "443")
+			assert.Equal(t, ActionBlock, result.action)
+			assert.Equal(t, tt.want, result.cause)
+			entries := log.Entries()
+			require.Len(t, entries, 1)
+			assert.Equal(t, tt.want, entries[0].Cause)
+		})
+	}
+}
+
+func TestHTTPProxyBlockMessage(t *testing.T) {
+	al, err := NewHTTPAllowlist([]string{"10.0.0.1:80"})
+	require.NoError(t, err)
+	p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), NewLogBuffer(10), DefaultUpstreamDNS)
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	proxyURL, _ := url.Parse(srv.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+	for _, tt := range []struct{ url, want string }{
+		{"http://evil.com/", "not in the allowlist"},
+		{"http://10.0.0.1/", "resolves to a blocked IP"},
+	} {
+		t.Run(tt.url, func(t *testing.T) {
+			resp, err := client.Get(tt.url)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+			assert.Contains(t, string(body), tt.want)
+		})
+	}
+}
+
 func TestHTTPProxyHostVibepit(t *testing.T) {
 	// Backend server that returns "host-service".
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

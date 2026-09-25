@@ -35,8 +35,8 @@ type blockWatcher struct {
 	seen   map[proxy.Target]bool
 }
 
-// Next returns the blocked entries in batch that have not been seen before
-// and advances the cursor past the batch.
+// Next returns the entries in batch that allowing would unblock and that
+// have not been seen before, and advances the cursor past the batch.
 func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 	if bw.seen == nil {
 		bw.seen = make(map[proxy.Target]bool)
@@ -44,7 +44,7 @@ func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 	var fresh []proxy.LogEntry
 	for _, e := range batch {
 		bw.cursor = e.ID
-		if e.Action != proxy.ActionBlock {
+		if !e.Allowable() {
 			continue
 		}
 		key := e.Target()

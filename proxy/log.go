@@ -19,6 +19,22 @@ const (
 	SourceDNS   Source = "dns"
 )
 
+// Cause is why a request was blocked. Reason stays the text for people;
+// code decides on Cause.
+type Cause string
+
+const (
+	// CauseAllowlist: the target isn't on the allowlist. Allowing it
+	// unblocks it.
+	CauseAllowlist Cause = "allowlist"
+	// CauseBlockedIP: the target resolves to a blocked CIDR range, which
+	// the allowlist can't override.
+	CauseBlockedIP Cause = "blocked-ip"
+	// CauseResolveFailed: the CIDR check couldn't resolve the target, so
+	// the proxy failed closed.
+	CauseResolveFailed Cause = "resolve-failed"
+)
+
 type LogEntry struct {
 	ID     uint64    `json:"id"`
 	Time   time.Time `json:"time"`
@@ -27,6 +43,13 @@ type LogEntry struct {
 	Action Action    `json:"action"`
 	Source Source    `json:"source"`
 	Reason string    `json:"reason,omitempty"`
+	Cause  Cause     `json:"cause,omitempty"`
+}
+
+// Allowable reports whether allowing the entry's target would unblock it.
+// A proxy from before causes were logged sends none; its blocks may be.
+func (e LogEntry) Allowable() bool {
+	return e.Action == ActionBlock && (e.Cause == CauseAllowlist || e.Cause == "")
 }
 
 type DomainStats struct {

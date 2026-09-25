@@ -109,10 +109,14 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		case "a", "A":
 			if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
 				item := s.items[s.cursor.Pos]
-				if item.entry.Action == proxy.ActionBlock && item.status == statusNone {
+				switch {
+				case item.entry.Allowable() && item.status == statusNone:
 					return s, s.allowCmd(s.cursor.Pos, item.entry, msg.String() == "A")
+				case item.entry.Action == proxy.ActionBlock && item.status == statusNone:
+					w.SetFlash("allowing can't unblock this")
+				default:
+					w.SetFlash("already allowed")
 				}
-				w.SetFlash("already allowed")
 			}
 		case "esc":
 			if s.onBack != nil {
@@ -247,7 +251,7 @@ func (s *monitorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
 	if s.cursor.Pos >= 0 && s.cursor.Pos < len(s.items) {
 		item := s.items[s.cursor.Pos]
 		switch {
-		case item.entry.Action == proxy.ActionBlock && item.status == statusNone:
+		case item.entry.Allowable() && item.status == statusNone:
 			keys = append(keys,
 				tui.FooterKey{Key: "a", Desc: "allow"},
 				tui.FooterKey{Key: "A", Desc: "allow+save"},

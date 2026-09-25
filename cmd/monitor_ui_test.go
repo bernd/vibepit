@@ -228,6 +228,26 @@ func TestMonitorScreen_CursorNavigation(t *testing.T) {
 	})
 }
 
+func TestMonitorScreen_NotAllowable(t *testing.T) {
+	for _, cause := range []proxy.Cause{proxy.CauseBlockedIP, proxy.CauseResolveFailed} {
+		t.Run(string(cause), func(t *testing.T) {
+			s, w := makeTestSetup(5)
+			s.items[2].entry.Cause = cause
+			s.cursor.Pos = 2
+
+			descs := footerKeyDescs(s.FooterKeys(w))
+			assert.NotContains(t, descs, "allow")
+			assert.NotContains(t, descs, "allow+save")
+
+			for _, key := range []string{"a", "A"} {
+				_, cmd := s.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key}, w)
+				assert.Nil(t, cmd, "key %s", key)
+				assert.Equal(t, "allowing can't unblock this", w.Flash())
+			}
+		})
+	}
+}
+
 func TestMonitorScreen_Footer(t *testing.T) {
 	t.Run("shows base keybindings", func(t *testing.T) {
 		s, w := makeTestSetup(5)

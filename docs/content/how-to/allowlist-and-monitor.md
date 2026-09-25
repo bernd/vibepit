@@ -34,6 +34,10 @@ You can add allowlist entries directly from the monitor without leaving the TUI:
 After allowing, the entry marker changes to reflect its new status, and the
 footer confirms the action.
 
+Entries blocked because the domain resolves to a private IP range, or
+because the proxy could not resolve it for that check, can't be allowed:
+the IP range block applies regardless of the allowlist.
+
 ## Add HTTP(S) allowlist entries
 
 Grant the sandbox access to an HTTP or HTTPS endpoint with `allow-http`. Each

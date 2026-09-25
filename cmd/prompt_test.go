@@ -22,6 +22,10 @@ func TestBlockWatcher_Next(t *testing.T) {
 	block := func(id uint64, src proxy.Source, domain, port string) proxy.LogEntry {
 		return proxy.LogEntry{ID: id, Source: src, Domain: domain, Port: port, Action: proxy.ActionBlock}
 	}
+	withCause := func(e proxy.LogEntry, c proxy.Cause) proxy.LogEntry {
+		e.Cause = c
+		return e
+	}
 	allow := func(id uint64, domain string) proxy.LogEntry {
 		return proxy.LogEntry{ID: id, Source: proxy.SourceProxy, Domain: domain, Port: "443", Action: proxy.ActionAllow}
 	}
@@ -54,6 +58,24 @@ func TestBlockWatcher_Next(t *testing.T) {
 			},
 			want:   [][]string{{"b.com", "b.com:443"}},
 			cursor: 2,
+		},
+		{
+			name: "skips blocks allowing can't undo",
+			batches: [][]proxy.LogEntry{{
+				withCause(block(1, proxy.SourceProxy, "a.com", "443"), proxy.CauseBlockedIP),
+				withCause(block(2, proxy.SourceProxy, "b.com", "443"), proxy.CauseResolveFailed),
+				withCause(block(3, proxy.SourceProxy, "c.com", "443"), proxy.CauseAllowlist),
+				withCause(block(4, proxy.SourceDNS, "d.com", ""), proxy.CauseBlockedIP),
+			}},
+			want:   [][]string{{"c.com:443"}},
+			cursor: 4,
+		},
+		{
+			// A proxy from before causes were logged sends none.
+			name:    "keeps blocks without a cause",
+			batches: [][]proxy.LogEntry{{block(1, proxy.SourceProxy, "a.com", "443")}},
+			want:    [][]string{{"a.com:443"}},
+			cursor:  1,
 		},
 		{
 			name:    "empty batch keeps cursor",

@@ -83,6 +83,9 @@ Behavior details:
   the prompt closes.
 - Each target prompts at most once per session, no matter how often the
   agent retries.
+- Only targets missing from the allowlist prompt. A target that resolves
+  to a blocked IP range, or that the proxy couldn't resolve for that
+  check, stays blocked whatever you allow, so it doesn't prompt.
 - Prompts for different targets open one after another, never on top of
   each other.
 - When several clients are attached to one session, each shows the prompt.

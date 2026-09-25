@@ -61,12 +61,50 @@ func TestDNSServer(t *testing.T) {
 		found := false
 		for _, e := range entries {
 			if e.Domain == "evil.com" && e.Action == ActionBlock && e.Source == SourceDNS {
+				assert.Equal(t, CauseAllowlist, e.Cause)
 				found = true
 				break
 			}
 		}
 		assert.True(t, found, "blocked DNS query not found in log")
 	})
+}
+
+func TestDNSServerBlockedIPCause(t *testing.T) {
+	// The upstream answers with a private address, which the CIDR check
+	// must block.
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	up := &dns.Server{PacketConn: pc, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Answer = append(m.Answer, &dns.A{
+			Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("10.0.0.1"),
+		})
+		w.WriteMsg(m)
+	})}
+	go up.ActivateAndServe()
+	defer up.Shutdown()
+
+	al, err := NewDNSAllowlist([]string{"rebind.example.com"})
+	require.NoError(t, err)
+	log := NewLogBuffer(10)
+	srv := NewDNSServer(al, NewCIDRBlocker(nil, nil), log, pc.LocalAddr().String())
+	addr, cleanup := srv.ListenAndServeTest()
+	defer cleanup()
+	time.Sleep(50 * time.Millisecond)
+
+	m := new(dns.Msg)
+	m.SetQuestion("rebind.example.com.", dns.TypeA)
+	r, _, err := new(dns.Client).Exchange(m, addr)
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeNameError, r.Rcode)
+
+	entries := log.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, ActionBlock, entries[0].Action)
+	assert.Equal(t, CauseBlockedIP, entries[0].Cause)
 }
 
 func TestDNSHostVibepit(t *testing.T) {

@@ -167,3 +167,24 @@ func TestEntriesAfter(t *testing.T) {
 		assert.Equal(t, "5.com", entries[0].Domain)
 	})
 }
+
+func TestLogEntryAllowable(t *testing.T) {
+	tests := []struct {
+		name   string
+		action Action
+		cause  Cause
+		want   bool
+	}{
+		{"allowlist miss", ActionBlock, CauseAllowlist, true},
+		{"block without cause", ActionBlock, "", true},
+		{"blocked IP", ActionBlock, CauseBlockedIP, false},
+		{"resolve failed", ActionBlock, CauseResolveFailed, false},
+		{"allowed", ActionAllow, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := LogEntry{Action: tt.action, Cause: tt.cause}
+			assert.Equal(t, tt.want, e.Allowable())
+		})
+	}
+}

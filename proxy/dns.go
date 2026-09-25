@@ -77,6 +77,7 @@ func (s *DNSServer) handler() mdns.Handler {
 				Action: ActionBlock,
 				Source: SourceDNS,
 				Reason: "domain not in allowlist",
+				Cause:  CauseAllowlist,
 			})
 			m := new(mdns.Msg)
 			m.SetRcode(r, mdns.RcodeNameError)
@@ -100,6 +101,7 @@ func (s *DNSServer) handler() mdns.Handler {
 				Action: ActionBlock,
 				Source: SourceDNS,
 				Reason: "resolved IP in blocked CIDR range",
+				Cause:  CauseBlockedIP,
 			})
 			m := new(mdns.Msg)
 			m.SetRcode(r, mdns.RcodeNameError)
