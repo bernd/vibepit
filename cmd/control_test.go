@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -10,11 +11,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testControlClient(t *testing.T, api *proxy.ControlAPI) *ControlClient {
+func testControlClient(t *testing.T, h http.Handler) *ControlClient {
 	t.Helper()
-	srv := httptest.NewServer(api)
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return &ControlClient{http: srv.Client(), baseURL: srv.URL}
+}
+
+// testProxy is a real control API with empty allowlists, served over
+// httptest, plus a client for it.
+type testProxy struct {
+	log    *proxy.LogBuffer
+	http   *proxy.HTTPAllowlist
+	dns    *proxy.DNSAllowlist
+	api    *proxy.ControlAPI
+	client *ControlClient
+}
+
+func newTestProxy(t *testing.T) *testProxy {
+	t.Helper()
+	tp := &testProxy{log: proxy.NewLogBuffer(100)}
+	var err error
+	tp.http, err = proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	tp.dns, err = proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	tp.api = proxy.NewControlAPI(tp.log, nil, tp.http, tp.dns)
+	tp.client = testControlClient(t, tp.api)
+	return tp
 }
 
 func TestControlClient_Logs(t *testing.T) {
@@ -66,12 +90,18 @@ func TestControlClient_LogsAfter(t *testing.T) {
 	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL)
 	client := testControlClient(t, api)
 
-	t.Run("returns last 25 entries for initial request", func(t *testing.T) {
-		entries, err := client.LogsAfter(0)
+	t.Run("Logs returns last 25 entries for initial request", func(t *testing.T) {
+		entries, err := client.Logs()
 		require.NoError(t, err)
 		require.Len(t, entries, 25)
 		assert.Equal(t, uint64(6), entries[0].ID)
 		assert.Equal(t, uint64(30), entries[24].ID)
+	})
+
+	t.Run("zero cursor returns every entry", func(t *testing.T) {
+		entries, err := client.LogsAfter(0)
+		require.NoError(t, err)
+		require.Len(t, entries, 30)
 	})
 
 	t.Run("returns only new entries after cursor", func(t *testing.T) {
@@ -224,4 +254,26 @@ func TestControlClient_ServerError(t *testing.T) {
 		assert.Error(t, err)
 		assert.ErrorContains(t, err, "400")
 	})
+}
+
+func TestControlClient_CheckAndDeny(t *testing.T) {
+	tp := newTestProxy(t)
+	client, httpAL := tp.client, tp.http
+
+	httpEntry := proxy.LogEntry{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}
+	dnsEntry := proxy.LogEntry{Source: proxy.SourceDNS, Domain: "d.com"}
+
+	res, err := client.Check(httpEntry)
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{}, res)
+
+	require.NoError(t, httpAL.Add([]string{"a.com:443"}))
+	res, err = client.Check(httpEntry)
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{Allowed: true}, res)
+
+	require.NoError(t, client.Deny(dnsEntry))
+	res, err = client.Check(dnsEntry)
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{Denied: true}, res)
 }
