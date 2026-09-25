@@ -873,11 +873,12 @@ the raw replay path.
   APCs.
 - `write_pty` installed.
 
-### `connect` (follow-up)
+### `connect`
 
 The same `overlay.Terminal` wraps the SSH session's stdin and stdout, with
 `Resize` mapped to the SSH window-change request. The overlay runs on the
 host. Prompts don't need `vibed`'s replay, so history is never duplicated.
+`connect --prompt` turns prompting on, off by default as in `run`.
 
 ## Phase 2: Replace vt-go in `vibed`
 
@@ -1432,7 +1433,7 @@ by the dirty-terminal round trip and by Screen Buffers.
    Remove the kitty PoC (`kittyPrompter`, `kitty.go`, `approve.go`) in the
    same change.
 3. The manual terminal matrix.
-4. `connect` support.
+4. `connect` support. Remove `connect --bar` (ward) in the same change.
 5. Phase 2: the `session/` swap, rewritten replay tests, and removal of the
    vt-go dependency.
 
@@ -1557,3 +1558,28 @@ LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
   Without a reply, every leave restores from the shadow. The lines above
   the session stay blank in the shadow, so a snapshot leave blanks them
   on the screen (known).
+
+## Implementation Notes: step 4 (2026-09-25)
+
+- The manual terminal matrix (rollout step 3) passed. `--prompt` stays
+  off by default for now.
+- **`connect --bar` is gone.** The overlay replaces ward's status bar.
+  The `ward` package stays in the tree, unused.
+- **Stderr goes through the overlay.** `vibed` writes its own diagnostics
+  (for example `create session: ...`) to the SSH stderr stream even with a
+  PTY. Stdout and stderr share one pipe into `ContainerOut`, so neither
+  lands on a prompt. The pipe closes after `session.Wait`, which ends
+  `Run`.
+- **Stdin hand-off.** One goroutine reads `os.Stdin` for the whole
+  command, because the shutdown prompt after the session needs stdin too.
+  `stdinHandoff` gives it to the overlay until `session.Wait` returns,
+  then to the prompt. A chunk the overlay holds unread at that point goes
+  to the prompt. Input forwarded before the server reported the exit
+  stays with the session, as before.
+- **Prompting starts after `Shell` succeeds**, so a failed start never
+  shows a prompt on a terminal whose `Run` never ran. The prompter stops
+  before the shutdown prompt, which may take the proxy down.
+- **The control port comes from `newSSHClient`**, only with `--prompt`,
+  through the same Docker client and proxy lookup as the SSH port.
+- **No initial resize.** The PTY request already carries the size, unlike
+  a container attach.
