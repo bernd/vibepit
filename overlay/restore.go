@@ -168,7 +168,7 @@ var snapshotExtras = func() vt.Extras {
 // title, working directory and cursor style, which the formatter doesn't
 // emit, and the continuation of an unfinished sequence. resync reports that the continuation was
 // unavailable, so the caller must drop output up to the next ground.
-func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) (out []byte, resync bool, err error) {
+func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error) {
 	// Synchronized output off, so the real terminal draws the snapshot.
 	if err := sh.SetMode(2026, false, false); err != nil {
 		return nil, false, err
@@ -198,6 +198,7 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) (out []byte, resync 
 		return nil, false, err
 	}
 	cont, err := sh.Continuation()
+	resync := false
 	switch {
 	case errors.Is(err, vt.ErrContinuationUnavailable):
 		resync = true

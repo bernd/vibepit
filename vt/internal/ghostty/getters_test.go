@@ -12,6 +12,7 @@ func TestStateGetters(t *testing.T) {
 	type check func(t *testing.T, in *Instance)
 	screen := func(want int32) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			v, err := in.GetU32(DataActiveScreen)
 			require.NoError(t, err)
 			assert.Equal(t, want, int32(v))
@@ -19,6 +20,7 @@ func TestStateGetters(t *testing.T) {
 	}
 	mode := func(value uint16, want bool) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			v, err := in.GetMode(EncodeMode(value, false))
 			require.NoError(t, err)
 			assert.Equal(t, want, v)
@@ -26,6 +28,7 @@ func TestStateGetters(t *testing.T) {
 	}
 	kitty := func(want uint8) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			v, err := in.GetU8(DataKittyKeyboardFlags)
 			require.NoError(t, err)
 			assert.Equal(t, want, v)
@@ -33,6 +36,7 @@ func TestStateGetters(t *testing.T) {
 	}
 	boolean := func(d TerminalData, want bool) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			v, err := in.GetBool(d)
 			require.NoError(t, err)
 			assert.Equal(t, want, v)
@@ -40,6 +44,7 @@ func TestStateGetters(t *testing.T) {
 	}
 	str := func(d TerminalData, want string) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			v, err := in.GetString(d)
 			require.NoError(t, err)
 			assert.Equal(t, want, v)
@@ -47,6 +52,7 @@ func TestStateGetters(t *testing.T) {
 	}
 	cursorAt := func(x, y uint16) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			gx, err := in.GetU16(DataCursorX)
 			require.NoError(t, err)
 			gy, err := in.GetU16(DataCursorY)
@@ -56,6 +62,7 @@ func TestStateGetters(t *testing.T) {
 	}
 	cursorStyle := func(style CursorVisualStyle, blinking bool) check {
 		return func(t *testing.T, in *Instance) {
+			t.Helper()
 			s, b, err := in.RenderStateCursor()
 			require.NoError(t, err)
 			assert.Equal(t, style, s, "style")

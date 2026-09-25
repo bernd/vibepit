@@ -315,7 +315,7 @@ func (m *InputMux) ExpectPosition() {
 // the 1-based cursor position. It fails with errPositionTimeout after
 // timeout; a reply that arrives within strip after that is dropped, so it
 // can't reach the app.
-func (m *InputMux) AwaitPosition(ctx context.Context, timeout, strip time.Duration) (row, col int, err error) {
+func (m *InputMux) AwaitPosition(ctx context.Context, timeout, strip time.Duration) (int, int, error) {
 	m.mu.Lock()
 	w := m.pos
 	m.mu.Unlock()
@@ -324,6 +324,7 @@ func (m *InputMux) AwaitPosition(ctx context.Context, timeout, strip time.Durati
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	var err error
 	select {
 	case <-w.reply:
 	case <-timer.C:
@@ -404,8 +405,9 @@ const (
 // maxPositionDigits bounds each number in a position reply.
 const maxPositionDigits = 5
 
-// matchPosition matches b against CSI row ; col R.
-func matchPosition(b []byte) (state, row, col int) {
+// matchPosition matches b against CSI row ; col R and returns the match
+// state, row and col.
+func matchPosition(b []byte) (int, int, int) {
 	if b[0] != 0x1b {
 		return posNone, 0, 0
 	}
@@ -438,11 +440,11 @@ func matchPosition(b []byte) (state, row, col int) {
 // focus is the final byte of the last focus report, 'I' or 'O', or 0.
 // Anything unrecognized, a report split across reads included, counts as
 // input.
-func reports(p []byte) (only bool, focus byte) {
+func reports(p []byte) (bool, byte) {
 	if bytes.IndexByte(p, 0x1b) < 0 {
 		return len(p) == 0, 0
 	}
-	only = true
+	only, focus := true, byte(0)
 	for i := 0; i < len(p); {
 		n, f := reportAt(p[i:])
 		if n == 0 {
@@ -460,7 +462,7 @@ func reports(p []byte) (only bool, focus byte) {
 
 // reportAt returns the length of the mouse or focus report at the start of
 // p, or 0, and the final byte of a focus report.
-func reportAt(p []byte) (n int, focus byte) {
+func reportAt(p []byte) (int, byte) {
 	if len(p) < 3 || p[0] != 0x1b || p[1] != '[' {
 		return 0, 0
 	}

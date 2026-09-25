@@ -38,28 +38,28 @@ func scenarioInput(t *testing.T, name string) string {
 	return ""
 }
 
-func activeArea(t testing.TB, in *Instance) *Selection {
-	t.Helper()
+func activeArea(tb testing.TB, in *Instance) *Selection {
+	tb.Helper()
 	cols, err := in.GetU16(DataCols)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	rows, err := in.GetU16(DataRows)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return &Selection{
 		Start: Point{Tag: PointActive},
 		End:   Point{Tag: PointActive, X: cols - 1, Y: uint32(rows) - 1},
 	}
 }
 
-func format(t testing.TB, in *Instance, opts FormatterOptions) string {
-	t.Helper()
+func format(tb testing.TB, in *Instance, opts FormatterOptions) string {
+	tb.Helper()
 	out, err := in.FormatAlloc(opts)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return string(out)
 }
 
-func plainScreen(t testing.TB, in *Instance) string {
-	t.Helper()
-	return format(t, in, FormatterOptions{Emit: FormatPlain, Trim: true, Selection: activeArea(t, in)})
+func plainScreen(tb testing.TB, in *Instance) string {
+	tb.Helper()
+	return format(tb, in, FormatterOptions{Emit: FormatPlain, Trim: true, Selection: activeArea(tb, in)})
 }
 
 // restoreExtras is every extra a restore uses. Palette, tab stops and pwd
@@ -70,9 +70,9 @@ var restoreExtras = TerminalExtra{
 }
 
 // snapshot is the visible screen with every restore extra.
-func snapshot(t testing.TB, in *Instance) string {
-	t.Helper()
-	return format(t, in, FormatterOptions{Emit: FormatVT, Unwrap: true, Extra: restoreExtras, Selection: activeArea(t, in)})
+func snapshot(tb testing.TB, in *Instance) string {
+	tb.Helper()
+	return format(tb, in, FormatterOptions{Emit: FormatVT, Unwrap: true, Extra: restoreExtras, Selection: activeArea(tb, in)})
 }
 
 // state is what a restore must reproduce.
@@ -86,28 +86,28 @@ type state struct {
 	Modes       []bool // indexed like Modes
 }
 
-func capture(t testing.TB, in *Instance) state {
-	t.Helper()
+func capture(tb testing.TB, in *Instance) state {
+	tb.Helper()
 	extra := restoreExtras
 	// libghostty's default designation is UTF-8, which ESC ( B (ASCII)
 	// doesn't restore, while real terminals treat ESC ( B as the default.
 	// probeSuffix checks charsets by printing through them instead.
 	extra.Screen.Charsets = false
-	s := state{Screen: format(t, in, FormatterOptions{Emit: FormatVT, Unwrap: true, Extra: extra, Selection: activeArea(t, in)})}
+	s := state{Screen: format(tb, in, FormatterOptions{Emit: FormatVT, Unwrap: true, Extra: extra, Selection: activeArea(tb, in)})}
 	screen, err := in.GetU32(DataActiveScreen)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	s.Alt = int32(screen) == ScreenAlternate
 	s.CursorX, err = in.GetU16(DataCursorX)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	s.CursorY, err = in.GetU16(DataCursorY)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	s.PendingWrap, err = in.GetBool(DataCursorPendingWrap)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	s.Kitty, err = in.GetU8(DataKittyKeyboardFlags)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	for _, m := range Modes {
 		v, err := in.GetMode(m.Mode())
-		require.NoError(t, err)
+		require.NoError(tb, err)
 		s.Modes = append(s.Modes, v)
 	}
 	return s
@@ -136,6 +136,7 @@ func TestFormatRoundTrip(t *testing.T) {
 // The state must not depend on how the input was chunked.
 func TestChunkingInvariance(t *testing.T) {
 	forEachSplit(t, func(t *testing.T, input string, k int, want state) {
+		t.Helper()
 		withTerm(t, scenarioCols, scenarioRows, func(in *Instance) {
 			feed(t, in, input[:k])
 			feed(t, in, input[k:])
@@ -147,6 +148,7 @@ func TestChunkingInvariance(t *testing.T) {
 // forEachSplit runs fn for every scenario and every split point k inside
 // its input, with the state the whole input produces.
 func forEachSplit(t *testing.T, fn func(t *testing.T, input string, k int, want state)) {
+	t.Helper()
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
 			var want state
@@ -237,6 +239,7 @@ func TestFormatOSC133(t *testing.T) {
 
 func TestFormatExtrasOnly(t *testing.T) {
 	extrasOnly := func(t *testing.T, in *Instance) string {
+		t.Helper()
 		return format(t, in, FormatterOptions{Emit: FormatVT, Extra: restoreExtras, ContentNone: true})
 	}
 
@@ -308,6 +311,7 @@ func TestContinuationReplay(t *testing.T) {
 // uncut stream at every split point. This is vibed's attach path.
 func TestContinuationReplayEverySplit(t *testing.T) {
 	forEachSplit(t, func(t *testing.T, input string, k int, want state) {
+		t.Helper()
 		withTerm(t, scenarioCols, scenarioRows, func(cut *Instance) {
 			require.NoError(t, cut.TerminalSetSize(OptContinuationMaxBytes, 64<<10))
 			feed(t, cut, input[:k])

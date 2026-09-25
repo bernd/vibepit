@@ -364,8 +364,8 @@ func (t *Terminal) Resize() {
 }
 
 // size is the local terminal's size, or 80x24 when unknown.
-func (t *Terminal) size() (cols, rows int) {
-	cols, rows = 80, 24
+func (t *Terminal) size() (int, int) {
+	cols, rows := 80, 24
 	if t.cfg.Size != nil {
 		if c, r, err := t.cfg.Size(); err == nil && c > 0 && r > 0 {
 			cols, rows = c, r

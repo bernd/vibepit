@@ -195,8 +195,10 @@ func (t *Terminal) leave(drawn bool) {
 }
 
 // leaveBytesLocked picks the leave: raw replay when the log reproduces the
-// screen exactly, else a snapshot from the shadow, else a reset.
-func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) (out []byte, resync, reset bool) {
+// screen exactly, else a snapshot from the shadow, else a reset. It returns
+// the bytes, whether output up to the next ground must be dropped, and
+// whether it reset the terminal.
+func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte, bool, bool) {
 	raw := !c.forced && // the real terminal may show a replacement character
 		!t.log.overflow && // bytes are missing
 		!t.resized && // the log was written for another geometry

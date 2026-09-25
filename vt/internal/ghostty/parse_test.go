@@ -112,6 +112,7 @@ func TestModeTableComplete(t *testing.T) {
 		known[m.Mode()] = m
 	}
 	scan := func(t *testing.T, in *Instance) {
+		t.Helper()
 		found := map[uint16]bool{}
 		for _, ansi := range []bool{true, false} {
 			for v := range uint16(10000) {

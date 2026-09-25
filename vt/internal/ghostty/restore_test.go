@@ -34,17 +34,17 @@ const penReset = "\x1b[r\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x1b*B\x1b+B\x0f\x1b[=0
 // they changed since the cut. Here b is a shadow with the same defaults
 // that sends no reports, so writing every mode is harmless and keeps the
 // test simple.
-func snapshotLeave(t testing.TB, a, b *Instance) string {
-	t.Helper()
+func snapshotLeave(tb testing.TB, a, b *Instance) string {
+	tb.Helper()
 	var s strings.Builder
 	isAlt := func(in *Instance) bool {
 		v, err := in.GetU32(DataActiveScreen)
-		require.NoError(t, err)
+		require.NoError(tb, err)
 		return int32(v) == ScreenAlternate
 	}
 	decMode := func(in *Instance, v uint16) bool {
 		on, err := in.GetMode(EncodeMode(v, false))
-		require.NoError(t, err)
+		require.NoError(tb, err)
 		return on
 	}
 	if isAlt(b) && !isAlt(a) {
@@ -63,12 +63,12 @@ func snapshotLeave(t testing.TB, a, b *Instance) string {
 			continue
 		}
 		on, err := a.GetMode(m.Mode())
-		require.NoError(t, err)
+		require.NoError(tb, err)
 		s.WriteString(modeSeq(m, on))
 	}
 	s.WriteString(penReset)
 	s.WriteString("\x1b[2J\x1b[H")
-	s.WriteString(snapshot(t, a))
+	s.WriteString(snapshot(tb, a))
 	return s.String()
 }
 

@@ -188,8 +188,10 @@ func (t *Terminal) Write(p []byte) (int, error) {
 // ground: outside any escape sequence and UTF-8 character. n is the number
 // of bytes consumed and ground whether the parser is at ground after
 // them. A parser already at ground consumes nothing.
-func (t *Terminal) WriteUntilGround(p []byte) (n int, ground bool, err error) {
-	err = t.do(func(in *ghostty.Instance) error {
+func (t *Terminal) WriteUntilGround(p []byte) (int, bool, error) {
+	var n int
+	var ground bool
+	err := t.do(func(in *ghostty.Instance) error {
 		var err error
 		n, ground, err = in.VTWriteUntilGround(p)
 		return err

@@ -51,7 +51,7 @@ func newStalledInput(t *testing.T) (*containerInput, *stallWriter) {
 
 // blocked reports whether f is still running after a short wait, then lets
 // it finish once release is called.
-func blocked(f func()) (stillRunning func() bool, finished <-chan struct{}) {
+func blocked(f func()) (func() bool, <-chan struct{}) {
 	done := make(chan struct{})
 	go func() {
 		f()

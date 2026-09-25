@@ -43,6 +43,7 @@ linters:
     - "dogsled"
     - "embeddedstructfieldcheck"
     - "exhaustruct"
+    - "exhaustruct_v5"
     - "funcorder"
     - "funlen"
     - "gocyclo"

@@ -12,6 +12,7 @@ import (
 // emission of that state so it isn't emitted twice.
 func TestKnownGaps(t *testing.T) {
 	full := func(t *testing.T, in *Instance, extra TerminalExtra) string {
+		t.Helper()
 		return format(t, in, FormatterOptions{Emit: FormatVT, Extra: extra})
 	}
 
