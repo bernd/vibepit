@@ -283,3 +283,51 @@ func TestShowFloodPastLogCap(t *testing.T) {
 	assert.True(t, h.snapshotted())
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
+
+func TestShowReplaysBelowHostOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		app  string
+		want string
+	}{
+		{
+			name: "session below the host lines",
+			host: "host1\r\nhost2\r\n",
+			app:  "$ ls\r\nfile\r\n$ ",
+			want: "host1\nhost2\n$ ls\nfile\n$ date\nnow\n$",
+		},
+		{
+			name: "session scrolled the host lines",
+			host: "host1\r\nhost2\r\nhost3\r\nhost4\r\n",
+			app:  "$ ls\r\nfile\r\n$ ",
+			want: "host3\nhost4\n$ ls\nfile\n$ date\nnow\n$",
+		},
+		{
+			name: "session starts mid-line",
+			host: "host1\r\nhost> ",
+			app:  "x\r\n$ ",
+			want: "host1\nhost> x\n$ date\nnow\n$",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, 20, 7, hostOutput(tt.host))
+			h.app(tt.app)
+			h.prompt(nil)
+			assert.False(t, h.snapshotted(), "raw replay")
+			h.app("date\r\nnow\r\n$ ")
+			assert.Equal(t, tt.want, screenText(h.real))
+			assert.Empty(t, h.toCont.String(), "the position reply isn't the app's input")
+		})
+	}
+}
+
+func TestShowWithoutAPositionRestoresFromTheShadow(t *testing.T) {
+	h := newHarness(t, 20, 6, hostOutput("host1\r\nhost2\r\n"), silentTerminal(),
+		withTiming(func(tm *timing) { tm.barrierWait = time.Millisecond }))
+	h.app("$ ")
+	require.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrBarrierTimeout)
+	assert.True(t, h.snapshotted(), "the cut's cursor may be on another row")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}

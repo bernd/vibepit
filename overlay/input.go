@@ -14,6 +14,8 @@ const (
 	// every reply owed to the app has arrived.
 	barrierQuery = "\x1b[5n"
 	barrierReply = "\x1b[0n"
+	// positionQuery is DSR 6n. Terminals answer it with CSI row ; col R.
+	positionQuery = "\x1b[6n"
 	// promptInputMax bounds what the prompt's input buffers.
 	promptInputMax = 64 << 10
 )
@@ -41,7 +43,21 @@ type InputMux struct {
 	barrier    chan struct{} // closed at the barrier reply
 	stripUntil time.Time     // until then, drop one barrier reply
 	lastInput  time.Time
+	pos        *posWait // the latest cursor position query
 }
+
+// posWait watches stdin for the reply to a cursor position query.
+type posWait struct {
+	active   bool          // stdin is scanned for the reply
+	held     []byte        // a possible reply prefix
+	reply    chan struct{} // closed at the reply
+	row, col int
+	until    time.Time // after a timeout: drop a late reply until then
+}
+
+// errPositionTimeout means the terminal didn't answer the cursor position
+// query in time.
+var errPositionTimeout = errors.New("overlay: terminal did not answer the cursor position query")
 
 // NewInputMux routes src to container until a prompt takes the input.
 func NewInputMux(src io.Reader, container io.Writer) *InputMux {
@@ -61,6 +77,10 @@ func (m *InputMux) Run() error {
 		}
 		if err != nil {
 			m.mu.Lock()
+			if m.pos != nil && m.pos.active {
+				m.write(m.pos.held)
+				m.pos.active = false
+			}
 			m.flushHeldLocked()
 			if m.prompt != nil {
 				_ = m.prompt.Close()
@@ -82,6 +102,9 @@ func (m *InputMux) route(p []byte) bool {
 	defer m.mu.Unlock()
 	now := time.Now()
 	m.lastInput = now
+	if m.pos != nil && m.pos.active {
+		p = m.scanPosition(p, now)
+	}
 	if m.mode == toContainer && !now.Before(m.stripUntil) {
 		m.write(p)
 		return true
@@ -256,4 +279,134 @@ func (m *InputMux) Release(strip time.Duration, leave func()) {
 	if strip > 0 && pending {
 		m.stripUntil = time.Now().Add(strip)
 	}
+}
+
+// ExpectPosition starts watching stdin for the reply to a cursor position
+// query. Call it before the query goes out.
+func (m *InputMux) ExpectPosition() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pos = &posWait{active: true, reply: make(chan struct{})}
+}
+
+// AwaitPosition waits for the reply ExpectPosition watches for and returns
+// the 1-based cursor position. It fails with errPositionTimeout after
+// timeout; a reply that arrives within strip after that is dropped, so it
+// can't reach the app.
+func (m *InputMux) AwaitPosition(ctx context.Context, timeout, strip time.Duration) (row, col int, err error) {
+	m.mu.Lock()
+	w := m.pos
+	m.mu.Unlock()
+	if w == nil {
+		return 0, 0, errPositionTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-w.reply:
+	case <-timer.C:
+		err = errPositionTimeout
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-m.done:
+		err = ErrClosed
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case <-w.reply:
+		// The reply won the race.
+		return w.row, w.col, nil
+	default:
+	}
+	if w.active {
+		m.write(w.held)
+		w.held = nil
+		if errors.Is(err, errPositionTimeout) && strip > 0 {
+			w.until = time.Now().Add(strip)
+		} else {
+			w.active = false
+		}
+	}
+	return 0, 0, err
+}
+
+// scanPosition removes the cursor position reply from p and stops
+// watching after it. A possible reply prefix waits across reads only until
+// AwaitPosition gives up. A late reply must arrive in one read, so a held
+// ESC can't delay the Escape key.
+func (m *InputMux) scanPosition(p []byte, now time.Time) []byte {
+	w := m.pos
+	late := !w.until.IsZero()
+	if late && !now.Before(w.until) {
+		w.active = false
+		return p
+	}
+	var out []byte
+	for i, b := range p {
+		w.held = append(w.held, b)
+		switch st, row, col := matchPosition(w.held); st {
+		case posPrefix:
+		case posComplete:
+			w.active = false
+			if !late {
+				w.row, w.col = row, col
+				close(w.reply)
+			}
+			return append(out, p[i+1:]...)
+		default:
+			// Not the reply: the held prefix is ordinary input, and b may
+			// start the next one.
+			out = append(out, w.held[:len(w.held)-1]...)
+			w.held = w.held[:0]
+			if b == 0x1b {
+				w.held = append(w.held, b)
+			} else {
+				out = append(out, b)
+			}
+		}
+	}
+	if late {
+		out = append(out, w.held...)
+		w.held = w.held[:0]
+	}
+	return out
+}
+
+const (
+	posNone = iota
+	posPrefix
+	posComplete
+)
+
+// maxPositionDigits bounds each number in a position reply.
+const maxPositionDigits = 5
+
+// matchPosition matches b against CSI row ; col R.
+func matchPosition(b []byte) (state, row, col int) {
+	if b[0] != 0x1b {
+		return posNone, 0, 0
+	}
+	if len(b) == 1 {
+		return posPrefix, 0, 0
+	}
+	if b[1] != '[' {
+		return posNone, 0, 0
+	}
+	nums := [2]int{}
+	digits, n := 0, 0
+	for _, c := range b[2:] {
+		switch {
+		case c >= '0' && c <= '9' && digits < maxPositionDigits:
+			nums[n] = nums[n]*10 + int(c-'0')
+			digits++
+		case c == ';' && n == 0 && digits > 0:
+			n, digits = 1, 0
+		case c == 'R' && n == 1 && digits > 0:
+			return posComplete, nums[0], nums[1]
+		default:
+			return posNone, 0, 0
+		}
+	}
+	return posPrefix, 0, 0
 }

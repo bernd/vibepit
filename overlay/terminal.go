@@ -3,6 +3,7 @@ package overlay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -50,23 +51,25 @@ type Config struct {
 
 // timing holds the spec's budgets; tests shorten them.
 type timing struct {
-	groundWait  time.Duration // T1: longest wait for ground before a forced cut
-	groundBytes int           // T1: most bytes forwarded while waiting for ground
-	barrierWait time.Duration // T2: wait for the barrier reply
-	silence     time.Duration // T2 without barrier support: input quiet time
-	lateStrip   time.Duration // after a barrier timeout: drop a late reply
-	nudgeGap    time.Duration // between the two resizes of a repaint nudge
-	logMax      int           // raw log cap
+	positionWait time.Duration // Run: wait for the cursor position reply
+	groundWait   time.Duration // T1: longest wait for ground before a forced cut
+	groundBytes  int           // T1: most bytes forwarded while waiting for ground
+	barrierWait  time.Duration // T2: wait for the barrier reply
+	silence      time.Duration // T2 without barrier support: input quiet time
+	lateStrip    time.Duration // after a barrier or position timeout: drop a late reply
+	nudgeGap     time.Duration // between the two resizes of a repaint nudge
+	logMax       int           // raw log cap
 }
 
 var defaultTiming = timing{
-	groundWait:  250 * time.Millisecond,
-	groundBytes: 64 << 10,
-	barrierWait: 500 * time.Millisecond,
-	silence:     100 * time.Millisecond,
-	lateStrip:   10 * time.Second,
-	nudgeGap:    100 * time.Millisecond,
-	logMax:      4 << 20,
+	positionWait: 500 * time.Millisecond,
+	groundWait:   250 * time.Millisecond,
+	groundBytes:  64 << 10,
+	barrierWait:  500 * time.Millisecond,
+	silence:      100 * time.Millisecond,
+	lateStrip:    10 * time.Second,
+	nudgeGap:     100 * time.Millisecond,
+	logMax:       4 << 20,
 }
 
 var errNoShadow = errors.New("no shadow terminal")
@@ -101,6 +104,7 @@ type Terminal struct {
 	answered           bool       // the shadow answered a query while detached
 	resized            bool       // resized while detached
 	resyncing          bool       // drop output up to the next ground
+	misaligned         bool       // the shadow's cursor may not be the real one's
 	prog               *tea.Program
 	closed             bool
 	barrierTimeouts    int
@@ -195,7 +199,10 @@ func (t *Terminal) Run(ctx context.Context) error {
 		}
 	}()
 	outDone := make(chan error, 1)
-	go func() { outDone <- t.pump() }()
+	go func() {
+		t.align(ctx)
+		outDone <- t.pump()
+	}()
 	select {
 	case err := <-outDone:
 		return err
@@ -224,6 +231,29 @@ func (t *Terminal) finish() {
 	if t.shadow != nil {
 		_ = t.shadow.Close()
 	}
+}
+
+// align moves the shadow's cursor to the real terminal's before any
+// output: the session starts wherever the host left the cursor, the shadow
+// at its top left, and the raw leave restores the cursor by absolute
+// position. Lines above the session stay blank in the shadow. Without a
+// reply the leave restores from the shadow instead. It holds t.mu while
+// waiting, so a Show can't cut before the shadow is aligned.
+func (t *Terminal) align(ctx context.Context) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.shadowErr != nil {
+		return
+	}
+	t.in.ExpectPosition()
+	_, _ = io.WriteString(t.cfg.Stdout, positionQuery)
+	row, col, err := t.in.AwaitPosition(ctx, t.timing.positionWait, t.timing.lateStrip)
+	if err != nil {
+		t.misaligned = true
+		t.logf("overlay: no cursor position from the terminal, prompts restore the screen from the shadow: %v", err)
+		return
+	}
+	t.shadowWriteLocked(fmt.Appendf(nil, "\x1b[%d;%dH", row, col))
 }
 
 func (t *Terminal) pump() error {

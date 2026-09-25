@@ -2,13 +2,15 @@
 // the user's terminal, in any terminal emulator.
 //
 // A shadow terminal emulator (package vt) sees every byte the container
-// writes but never sits between the container and the screen. Showing a
-// prompt is a detach inside this process: output stops being forwarded at
-// a byte where the shadow's parser is at ground (T1), stdin moves to the
-// prompt at the terminal's reply to a barrier query (T2), and afterwards
-// the screen is restored, by replaying the output logged meanwhile or from
-// the shadow, while output and input switch back atomically (T3). See
-// docs/superpowers/specs/2026-09-24-ghostty-shadow-terminal-design.md.
+// writes but never sits between the container and the screen. Before the
+// first byte, its cursor moves to the real terminal's, which the terminal
+// reports to a DSR 6n query, so both put the output on the same rows.
+// Showing a prompt is a detach inside this process: output stops being
+// forwarded at a byte where the shadow's parser is at ground (T1), stdin
+// moves to the prompt at the terminal's reply to a barrier query (T2), and
+// afterwards the screen is restored, by replaying the output logged
+// meanwhile or from the shadow, while output and input switch back
+// atomically (T3). See docs/superpowers/specs/2026-09-24-ghostty-shadow-terminal-design.md.
 package overlay
 
 import "errors"

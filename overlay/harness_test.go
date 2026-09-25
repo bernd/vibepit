@@ -18,13 +18,14 @@ import (
 // testTiming keeps budgets long where a test must not hit them. A test
 // that waits for a budget shortens it with withTiming.
 var testTiming = timing{
-	groundWait:  5 * time.Second,
-	groundBytes: 64 << 10,
-	barrierWait: 5 * time.Second,
-	silence:     30 * time.Millisecond,
-	lateStrip:   5 * time.Second,
-	nudgeGap:    time.Millisecond,
-	logMax:      4 << 20,
+	positionWait: 5 * time.Second,
+	groundWait:   5 * time.Second,
+	groundBytes:  64 << 10,
+	barrierWait:  5 * time.Second,
+	silence:      30 * time.Millisecond,
+	lateStrip:    5 * time.Second,
+	nudgeGap:     time.Millisecond,
+	logMax:       4 << 20,
 }
 
 type harnessConfig struct {
@@ -33,13 +34,22 @@ type harnessConfig struct {
 	timing   timing
 	onResize func(cols, rows int)
 	gate     chan struct{}
+	host     string
 }
 
 type harnessOption func(*harnessConfig)
 
 // silentTerminal makes the stand-in answer no queries, like a terminal
-// without DSR 5n.
-func silentTerminal() harnessOption { return func(c *harnessConfig) { c.silent = true } }
+// without DSR 5n and 6n.
+func silentTerminal() harnessOption {
+	return func(c *harnessConfig) {
+		c.silent = true
+		c.timing.positionWait = time.Millisecond
+	}
+}
+
+// hostOutput is on the local terminal before the session starts.
+func hostOutput(s string) harnessOption { return func(c *harnessConfig) { c.host = s } }
 
 func withoutShadow() harnessOption { return func(c *harnessConfig) { c.noShadow = true } }
 
@@ -100,6 +110,7 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 		vtOpts = append(vtOpts, vt.WithWritePty(func(b []byte) { _, _ = h.stdin.Write(b) }))
 	}
 	h.real = newVT(t, cols, rows, vtOpts...)
+	feed(t, h.real, hc.host)
 	h.term = New(Config{
 		Stdin:        h.stdin,
 		Stdout:       stdoutWriter{h},

@@ -17,7 +17,7 @@ func TestPassthroughIsByteExact(t *testing.T) {
 	for _, c := range chunks {
 		h.app(c)
 	}
-	assert.Equal(t, strings.Join(chunks, ""), h.stdout.String())
+	assert.Equal(t, positionQuery+strings.Join(chunks, ""), h.stdout.String())
 	h.keys("ls\r\x1b[A")
 	h.waitContainer("ls\r\x1b[A")
 }
@@ -64,7 +64,7 @@ func TestStdinEOFClosesTheContainerInput(t *testing.T) {
 	require.NoError(t, h.stdin.Close())
 	require.Eventually(t, func() bool { return h.closedIn.Load() == 1 }, 5*time.Second, time.Millisecond)
 	h.app("bye")
-	assert.Equal(t, "bye", h.stdout.String(), "output flows until it ends")
+	assert.Equal(t, positionQuery+"bye", h.stdout.String(), "output flows until it ends")
 	select {
 	case <-h.done:
 		t.Fatal("Run returned before the output ended")

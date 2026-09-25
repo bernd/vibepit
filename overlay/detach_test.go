@@ -45,7 +45,7 @@ func TestDetachCutsAtGround(t *testing.T) {
 	h.waitDetachPending()
 	h.app("\x82\xacX")
 	require.NoError(t, h.result(done))
-	assert.Equal(t, "abc\xe2\x82\xac"+barrierQuery, h.stdout.String(), "forwarding stops right after the character")
+	assert.Equal(t, positionQuery+"abc\xe2\x82\xac"+barrierQuery, h.stdout.String(), "forwarding stops right after the character")
 	h.term.leave(false)
 	assert.False(t, h.snapshotted())
 	assert.Equal(t, "abc€X", firstLine(h.real))
@@ -56,14 +56,14 @@ func TestDetachAtGroundIsImmediate(t *testing.T) {
 	h := newHarness(t, 20, 5)
 	h.app("ab")
 	h.detach()
-	assert.Equal(t, "ab"+barrierQuery, h.stdout.String())
+	assert.Equal(t, positionQuery+"ab"+barrierQuery, h.stdout.String())
 	h.locked(func(tm *Terminal) {
 		assert.False(t, tm.attached)
 		assert.False(t, tm.cut.forced)
 		assert.True(t, tm.cut.barrierSent)
 	})
 	h.app("cd")
-	assert.Equal(t, "ab"+barrierQuery, h.stdout.String(), "output is logged, not forwarded")
+	assert.Equal(t, positionQuery+"ab"+barrierQuery, h.stdout.String(), "output is logged, not forwarded")
 	h.term.leave(false)
 	assert.Equal(t, "abcd", firstLine(h.real))
 }
@@ -220,9 +220,9 @@ func TestDetachCancelledBeforeGround(t *testing.T) {
 	h.waitDetachPending()
 	cancel()
 	assert.ErrorIs(t, h.result(done), context.Canceled)
-	assert.Equal(t, "\x1b]2;x", h.stdout.String(), "nothing written")
+	assert.Equal(t, positionQuery+"\x1b]2;x", h.stdout.String(), "nothing written")
 	h.app("\x07ok")
-	assert.Equal(t, "\x1b]2;x\x07ok", h.stdout.String(), "still attached")
+	assert.Equal(t, positionQuery+"\x1b]2;x\x07ok", h.stdout.String(), "still attached")
 }
 
 func TestDetachUnavailableWithoutShadow(t *testing.T) {

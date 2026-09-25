@@ -201,6 +201,7 @@ func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) (out []b
 		!t.log.overflow && // bytes are missing
 		!t.resized && // the log was written for another geometry
 		!t.answered && // a replayed query would be answered twice
+		!t.misaligned && // the cut's cursor may be on another row
 		!(drawn && c.alt) // the prompt drew over the app's alternate screen
 	if raw {
 		return rawLeave(c, e, t.log.buf), false, false

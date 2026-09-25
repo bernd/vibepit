@@ -226,3 +226,63 @@ func TestInputMuxPromptInputNeverBlocks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rest, "the excess was dropped")
 }
+
+func TestInputMuxPosition(t *testing.T) {
+	tests := []struct {
+		name     string
+		chunks   []string
+		row, col int
+		cont     string
+	}{
+		{name: "reply alone", chunks: []string{"\x1b[12;3R"}, row: 12, col: 3},
+		{name: "input around the reply", chunks: []string{"ab\x1b[7;1Rcd"}, row: 7, col: 1, cont: "abcd"},
+		{name: "reply split across reads", chunks: []string{"\x1b", "[1", "2;4", "0R"}, row: 12, col: 40},
+		{name: "other sequences pass", chunks: []string{"\x1b[A\x1b\x1b[1;2x", "\x1b[2;2R"}, row: 2, col: 2, cont: "\x1b[A\x1b\x1b[1;2x"},
+		{name: "input after the reply", chunks: []string{"\x1b[3;1R\x1b[1;5R"}, row: 3, col: 1, cont: "\x1b[1;5R"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newMuxHarness(t)
+			h.mux.ExpectPosition()
+			for _, c := range tt.chunks {
+				h.src.send(t, c)
+			}
+			row, col, err := h.mux.AwaitPosition(context.Background(), time.Second, time.Second)
+			require.NoError(t, err)
+			assert.Equal(t, tt.row, row)
+			assert.Equal(t, tt.col, col)
+			assert.Equal(t, tt.cont, h.cont.String())
+		})
+	}
+}
+
+func TestInputMuxPositionTimeoutStripsALateReply(t *testing.T) {
+	h := newMuxHarness(t)
+	h.mux.ExpectPosition()
+	h.src.send(t, "\x1b[")
+	_, _, err := h.mux.AwaitPosition(context.Background(), 10*time.Millisecond, time.Second)
+	require.ErrorIs(t, err, errPositionTimeout)
+	assert.Equal(t, "\x1b[", h.cont.String(), "held bytes are flushed at the timeout")
+	h.src.send(t, "a\x1b[5;1Rb")
+	assert.Equal(t, "\x1b[ab", h.cont.String(), "the late reply is dropped")
+	h.src.send(t, "\x1b[5;1R")
+	assert.Equal(t, "\x1b[ab\x1b[5;1R", h.cont.String(), "only one reply is dropped")
+}
+
+func TestInputMuxPositionStripWindowExpires(t *testing.T) {
+	h := newMuxHarness(t)
+	h.mux.ExpectPosition()
+	_, _, err := h.mux.AwaitPosition(context.Background(), time.Millisecond, time.Millisecond)
+	require.ErrorIs(t, err, errPositionTimeout)
+	time.Sleep(5 * time.Millisecond)
+	h.src.send(t, "\x1b[1;5R")
+	assert.Equal(t, "\x1b[1;5R", h.cont.String())
+}
+
+func TestInputMuxPositionEOF(t *testing.T) {
+	h := newMuxHarness(t)
+	h.mux.ExpectPosition()
+	h.src.close()
+	_, _, err := h.mux.AwaitPosition(context.Background(), time.Second, time.Second)
+	require.ErrorIs(t, err, ErrClosed)
+}
