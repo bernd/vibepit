@@ -85,34 +85,45 @@ func (b *LogBuffer) Entries() []LogEntry {
 	return b.entriesLocked()
 }
 
-// EntriesAfter returns entries with ID > afterID in chronological order.
-// When afterID is 0, it returns at most the last 25 entries.
+// TailSize is how many entries a client gets when it asks for the log
+// without a cursor, e.g. to fill a screen on first load.
+const TailSize = 25
+
+// Tail returns the last n entries in chronological order.
+func (b *LogBuffer) Tail(n int) []LogEntry {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastLocked(n)
+}
+
+// EntriesAfter returns every buffered entry with ID > afterID in
+// chronological order. afterID 0 means all of them. IDs are contiguous, so
+// only the new entries are copied, not the whole ring.
 func (b *LogBuffer) EntriesAfter(afterID uint64) []LogEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	all := b.entriesLocked()
-
-	if afterID == 0 {
-		if len(all) > 25 {
-			all = all[len(all)-25:]
-		}
-		return all
-	}
-
-	// Find the first entry with ID > afterID using linear scan.
-	start := -1
-	for i, e := range all {
-		if e.ID > afterID {
-			start = i
-			break
-		}
-	}
-	if start == -1 {
+	lastID := b.nextID - 1
+	if afterID >= lastID {
 		return nil
 	}
-	result := make([]LogEntry, len(all)-start)
-	copy(result, all[start:])
+	return b.lastLocked(int(min(lastID-afterID, uint64(b.cap))))
+}
+
+// lastLocked copies the newest n buffered entries. Caller must hold b.mu.
+func (b *LogBuffer) lastLocked(n int) []LogEntry {
+	count := b.pos
+	if b.full {
+		count = b.cap
+	}
+	n = min(n, count)
+	if n <= 0 {
+		return nil
+	}
+	result := make([]LogEntry, n)
+	start := (b.pos - n + b.cap) % b.cap
+	copied := copy(result, b.entries[start:min(start+n, b.cap)])
+	copy(result[copied:], b.entries[:n-copied])
 	return result
 }
 
