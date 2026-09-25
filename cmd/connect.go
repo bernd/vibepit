@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,77 +11,43 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	ctr "github.com/bernd/vibepit/container"
+	"github.com/bernd/vibepit/overlay"
 	"github.com/bernd/vibepit/sshd"
-	"github.com/bernd/vibepit/ward"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
-
-const connectBarFlag = "bar"
 
 func ConnectCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "connect",
 		Aliases: []string{"c"},
 		Usage:   "Connect to the running sandbox",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:    connectBarFlag,
-				Usage:   "Enable status bar [EXPERIMENTAL]",
-				Aliases: []string{"b"},
-			},
-		},
-		Action: ConnectAction,
+		Flags:   []cli.Flag{promptCLIFlag},
+		Action:  ConnectAction,
 	}
 }
 
 func ConnectAction(ctx context.Context, cmd *cli.Command) error {
-	conn, sandbox, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
+	conn, info, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag), cmd.Bool(promptFlag))
 	if err != nil {
 		return err
 	}
 	defer conn.Close() //nolint:errcheck
+
+	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) { return info, nil })
+	if err != nil {
+		return err
+	}
+	defer prompter.stop()
 
 	session, err := conn.NewSession()
 	if err != nil {
 		return fmt.Errorf("connect session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck
-
-	// Interactive mode — wrap in ward for notification bar unless
-	// already running inside a ward process.
-	if cmd.Bool(connectBarFlag) && os.Getenv("VIBEPIT_WARD_PARENT") == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("resolve executable: %w", err)
-		}
-		// One slot is enough: this channel only preloads the initial status
-		// before ward.Run starts its status-forwarding goroutine.
-		statusCh := make(chan ward.StatusUpdate, 1)
-		statusCh <- ward.StatusUpdate{
-			Message: fmt.Sprintf("╱╱ %s ╱╱ %s", strings.ReplaceAll(sandbox.ProjectDir, os.Getenv("HOME"), "~"), sandbox.SessionID),
-		}
-		w := ward.NewWrapper(ward.Options{
-			Command: append([]string{exe}, os.Args[1:]...),
-			Env:     []string{fmt.Sprintf("VIBEPIT_WARD_PARENT=%d", os.Getpid())},
-			Status:  statusCh,
-			OnKey: func(ctx context.Context, key byte, target string) (string, error) {
-				return "", nil
-			},
-		})
-		exitCode, err := w.Run(ctx)
-		if err != nil {
-			return err
-		}
-		if exitCode != 0 {
-			return &ctr.ExitError{Code: exitCode}
-		}
-		return nil
-	}
 
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
@@ -93,7 +60,8 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer restoreTerminal()
 
-	w, h, err := term.GetSize(fd)
+	size := func() (int, int, error) { return term.GetSize(fd) }
+	w, h, err := size()
 	if err != nil {
 		w, h = 80, 24
 	}
@@ -107,21 +75,9 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("request pty: %w", err)
 	}
 
-	session.Stdout = os.Stdout
-	session.Stderr = os.Stderr
-
-	// Use StdinPipe + a channel-based reader instead of session.Stdin.
-	// Setting session.Stdin makes the SSH library start a goroutine that
-	// reads from os.Stdin. After session.Wait(), that goroutine stays
-	// alive (blocked in Read), racing with the shutdown prompt for user
-	// input. Instead, one goroutine owns os.Stdin reads and sends to a
-	// channel; a stoppable copy goroutine routes the channel to the SSH
-	// pipe. After the session ends, we stop the copy goroutine and
-	// redirect the channel to the prompt reader.
-	stdinPipe, err := session.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("stdin pipe: %w", err)
-	}
+	// One goroutine owns os.Stdin reads for the whole command. It can't be
+	// stopped, so the session and the shutdown prompt below take turns on
+	// its channel through a stdinHandoff; runSSHTerminal switches it over.
 	stdinCh := make(chan []byte, 16)
 	go func() {
 		defer close(stdinCh)
@@ -138,52 +94,22 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 			}
 		}
 	}()
-	stopCopy := make(chan struct{})
-	copyDone := make(chan struct{})
-	go func() {
-		defer close(copyDone)
-		defer stdinPipe.Close() //nolint:errcheck
-		for {
-			select {
-			case data, ok := <-stdinCh:
-				if !ok {
-					return
-				}
-				if _, err := stdinPipe.Write(data); err != nil {
-					return
-				}
-			case <-stopCopy:
-				return
-			}
-		}
-	}()
+	stdin := newStdinHandoff(stdinCh)
 
-	if err := session.Shell(); err != nil {
-		return fmt.Errorf("start shell: %w", err)
-	}
+	winch := make(chan os.Signal, 1)
+	ctr.NotifyResize(winch)
+	defer signal.Stop(winch)
 
-	// Forward SIGWINCH.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH)
-	defer func() {
-		signal.Stop(sigCh)
-		close(sigCh)
-	}()
-	go func() {
-		for range sigCh {
-			if w, h, err := term.GetSize(fd); err == nil {
-				session.WindowChange(h, w) //nolint:errcheck
-			}
-		}
-	}()
-
-	waitErr := session.Wait()
-
-	// Stop the copy goroutine and wait for it to exit. After this,
-	// stdinCh has no consumer, so the prompt reader can take over.
-	close(stopCopy)
-	<-copyDone
-
+	waitErr := runSSHTerminal(ctx, sshTerminalParams{
+		session:  session,
+		stdin:    stdin,
+		stdout:   os.Stdout,
+		size:     size,
+		winch:    winch,
+		prompter: prompter,
+	})
+	// Stop before the shutdown prompt: it may take the proxy down.
+	prompter.stop()
 	restoreTerminal()
 
 	if waitErr != nil {
@@ -200,13 +126,84 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 
 	return handleLastExit(handleLastExitParams{
 		transport:  conn,
-		stdin:      &channelStdinReader{ch: stdinCh},
+		stdin:      stdin.Prompt(),
 		stderr:     os.Stderr,
 		isTerminal: term.IsTerminal(fd),
 		shutdownFn: func() error {
 			return DownAction(ctx, cmd)
 		},
 	})
+}
+
+type sshTerminalParams struct {
+	session  *ssh.Session // with a PTY requested, before Shell
+	stdin    *stdinHandoff
+	stdout   io.Writer
+	size     func() (cols, rows int, err error)
+	winch    <-chan os.Signal // local terminal resizes
+	prompter *blockPrompter
+}
+
+// runSSHTerminal starts the shell and forwards it through an
+// overlay.Terminal, so the prompter can show prompts over it. It returns
+// once the session ended, with session.Wait's error, or ctx's error. By
+// then stdin has been stopped.
+func runSSHTerminal(ctx context.Context, p sshTerminalParams) error {
+	sess := p.session
+	stdinPipe, err := sess.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
+	// vibed writes its own diagnostics to stderr even with a PTY. Both
+	// streams go through the overlay, so nothing lands on a prompt.
+	outR, outW := io.Pipe()
+	sess.Stdout = outW
+	sess.Stderr = outW
+
+	if err := sess.Shell(); err != nil {
+		p.stdin.Stop()
+		return fmt.Errorf("start shell: %w", err)
+	}
+	// Create the Terminal only once the shell runs: only Run releases it,
+	// and a prompt needs Run. The pipe holds the shell's output until then.
+	t := overlay.New(overlay.Config{
+		Stdin:        p.stdin.Session(),
+		Stdout:       p.stdout,
+		ContainerIn:  stdinPipe,
+		ContainerOut: outR,
+		CloseInput:   stdinPipe.Close,
+		Resize:       func(cols, rows int) { sess.WindowChange(rows, cols) }, //nolint:errcheck
+		Size:         p.size,
+		Logf:         p.prompter.logf,
+		NoShadow:     p.prompter.onTerminal == nil,
+	})
+	if p.prompter.onTerminal != nil {
+		p.prompter.onTerminal(t)
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		err := sess.Wait()
+		// Input from here on is for the shutdown prompt, not the ended
+		// session.
+		p.stdin.Stop()
+		outW.Close() //nolint:errcheck
+		waitCh <- err
+	}()
+
+	done := make(chan struct{})
+	defer close(done)
+	go ctr.WatchResizeSignals(p.winch, done, t.Resize)
+
+	if err := t.Run(ctx); err != nil {
+		// Run only ends early when ctx is done. Don't wait for the server
+		// to confirm the close.
+		p.stdin.Stop()
+		outR.Close() //nolint:errcheck
+		sess.Close() //nolint:errcheck
+		return err
+	}
+	return <-waitCh
 }
 
 type sessionCountTransport interface {
@@ -281,9 +278,77 @@ func isSandboxDisconnect(err error) bool {
 	return false
 }
 
-// channelStdinReader adapts a byte channel as an io.Reader. Used to
-// redirect stdin from the SSH copy goroutine to the shutdown prompt
-// without competing readers on os.Stdin.
+// stdinHandoff passes the local terminal's input, read into ch by one
+// goroutine, first to the session and then, after Stop, to the shutdown
+// prompt. A chunk the session's reader holds unread at Stop goes to the
+// prompt; input it already returned stays with the session.
+type stdinHandoff struct {
+	ch       <-chan []byte
+	stop     chan struct{}
+	stopOnce sync.Once
+
+	mu   sync.Mutex // held for a whole session read, so Stop can wait one out
+	left []byte     // for the prompt
+}
+
+func newStdinHandoff(ch <-chan []byte) *stdinHandoff {
+	return &stdinHandoff{ch: ch, stop: make(chan struct{})}
+}
+
+// Session reads input until Stop, then returns io.EOF.
+func (h *stdinHandoff) Session() io.Reader { return handoffSession{h} }
+
+// Stop ends the session's reads and waits for a read in progress to return.
+func (h *stdinHandoff) Stop() {
+	h.stopOnce.Do(func() { close(h.stop) })
+	h.mu.Lock()
+	h.mu.Unlock() //nolint:staticcheck // waits for a session read to finish
+}
+
+// Prompt reads input after Stop.
+func (h *stdinHandoff) Prompt() io.Reader {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	left := h.left
+	h.left = nil
+	return io.MultiReader(bytes.NewReader(left), &channelStdinReader{ch: h.ch})
+}
+
+type handoffSession struct{ h *stdinHandoff }
+
+func (s handoffSession) Read(p []byte) (int, error) {
+	h := s.h
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for len(h.left) == 0 {
+		select {
+		case <-h.stop:
+			return 0, io.EOF
+		default:
+		}
+		select {
+		case data, ok := <-h.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+			h.left = data
+		case <-h.stop:
+			return 0, io.EOF
+		}
+	}
+	select {
+	case <-h.stop:
+		// The session ended while this read waited: the input is the
+		// prompt's.
+		return 0, io.EOF
+	default:
+	}
+	n := copy(p, h.left)
+	h.left = h.left[n:]
+	return n, nil
+}
+
+// channelStdinReader adapts a byte channel as an io.Reader.
 type channelStdinReader struct {
 	ch  <-chan []byte
 	buf []byte

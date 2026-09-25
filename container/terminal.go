@@ -39,7 +39,9 @@ import (
 	"golang.org/x/term"
 )
 
-func watchResizeSignals(sigCh <-chan os.Signal, done <-chan struct{}, onResize func()) {
+// WatchResizeSignals calls onResize for each signal on sigCh until done is
+// closed.
+func WatchResizeSignals(sigCh <-chan os.Signal, done <-chan struct{}, onResize func()) {
 	for {
 		select {
 		case <-done:
@@ -139,13 +141,13 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 
 	// Forward SIGWINCH to the container.
 	sigCh := make(chan os.Signal, 1)
-	notifyResize(sigCh)
+	NotifyResize(sigCh)
 	defer signal.Stop(sigCh)
 	// signal.Stop unregisters delivery but does not close sigCh.
 	// done gives the resize watcher an explicit shutdown path.
 	done := make(chan struct{})
 	defer close(done)
-	go watchResizeSignals(sigCh, done, t.Resize)
+	go WatchResizeSignals(sigCh, done, t.Resize)
 
 	// Run returns when the output ends, so the deferred restore runs as
 	// soon as the container is done, as before.

@@ -62,7 +62,7 @@ vibepit run [flags] [project-path]
 
 ### Blocked connection prompt
 
-With `--prompt`, `run` asks you right away whether to allow a connection
+With `--prompt`, `run` and `connect` ask you right away whether to allow a connection
 the proxy blocked. The prompt appears over the session, in the same
 terminal window, in any terminal emulator. Once you decide or dismiss it,
 the agent's screen comes back as it was, including any output the agent
@@ -104,7 +104,7 @@ Behavior details:
   switches input to the prompt after a short pause in typing.
 - When a prompt can't be shown, the reason is written to the prompt log,
   `$XDG_STATE_HOME/vibepit/prompt-logs/<session>.log` (usually under
-  `~/.local/state/`). `run --prompt` prints its path at startup.
+  `~/.local/state/`). `--prompt` prints its path at startup.
 - When the agent uses the whole screen (for example an editor), or the
   terminal is resized while the prompt shows, vibepit redraws the screen
   from its own copy. Lines that scrolled off in the meantime are then
@@ -245,7 +245,7 @@ vibepit connect
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-b`, `--bar` | bool | `false` | Enable status bar [EXPERIMENTAL] |
+| `--prompt` | bool | `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 
@@ -258,12 +258,18 @@ vibepit connect
   (`SIGWINCH`).
 - When detached sessions exist inside the sandbox, the SSH server presents a
   session selector. You can reattach to a previous session or start a new one.
+- With `--prompt`, blocked connections open an allow/deny prompt over the
+  session, as with `run --prompt`. See
+  [Blocked connection prompt](#blocked-connection-prompt).
 
 ### Examples
 
 ```bash
 # Open an interactive shell
 vibepit connect
+
+# Prompt to allow connections the proxy blocks
+vibepit connect --prompt
 ```
 
 ---

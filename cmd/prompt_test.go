@@ -277,7 +277,9 @@ func TestStartBlockPrompter(t *testing.T) {
 			}
 			require.NoError(t, cmd.Run(context.Background(), tt.args))
 			require.NotNil(t, bp)
-			assert.Empty(t, bp.opts, "no prompter, no attach options")
+			assert.Empty(t, bp.attachOptions(), "no prompter, no attach options")
+			assert.Nil(t, bp.onTerminal, "no prompter, no terminal hook")
+			assert.Nil(t, bp.logf)
 			bp.stop()
 			assert.Equal(t, tt.wantLookups, lookups.Load())
 			if tt.wantErr == "" {

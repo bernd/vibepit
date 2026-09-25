@@ -92,7 +92,8 @@ Built with `urfave/cli/v3`.
 - `down` stops and removes all containers for a session and cleans up
   credentials.
 - `connect` connects to a running daemon-mode session via SSH with ephemeral
-  Ed25519 keys. Opens an interactive shell.
+  Ed25519 keys. Opens an interactive shell. With `--prompt` it shows the
+  approve screen like `run`.
 - `exec` executes a command in the sandbox via SSH and returns its exit code.
 - `status` shows session info including container uptime and published ports.
 - `allow-http` / `allow-dns` call the control API and can persist to project
@@ -169,15 +170,16 @@ or wasm2go.
 
 ### Overlay (`overlay/`)
 
-Shows a Bubble Tea program over a `run` session in any terminal. A shadow
-`vt.Terminal` sees every container byte but never sits between the
-container and the screen. `Terminal.Show` stops forwarding output at a byte
-where the shadow's parser is at ground, hands stdin to the prompt at the
-terminal's reply to a DSR 5n barrier query, and restores the screen by
-replaying the output logged meanwhile or from the shadow. `inputMux` is the
-only reader of stdin. `NewFilter` passes only the prompt output the restore
-can undo. Used by `container.runTTYSession`; `cmd/prompt.go` shows the
-approve screen through it. Only `overlay` imports `vt` on the host side.
+Shows a Bubble Tea program over a `run` or `connect` session in any
+terminal. A shadow `vt.Terminal` sees every container byte but never sits
+between the container and the screen. `Terminal.Show` stops forwarding
+output at a byte where the shadow's parser is at ground, hands stdin to the
+prompt at the terminal's reply to a DSR 5n barrier query, and restores the
+screen by replaying the output logged meanwhile or from the shadow.
+`inputMux` is the only reader of stdin. `NewFilter` passes only the prompt
+output the restore can undo. Used by `container.runTTYSession` and
+`cmd.runSSHTerminal`; `cmd/prompt.go` shows the approve screen through it.
+Only `overlay` imports `vt` on the host side.
 
 ### Embedded proxy binary (`embed/`)
 

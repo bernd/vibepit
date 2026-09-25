@@ -136,11 +136,20 @@ func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc
 	}
 }
 
-// blockPrompter is the prompting set up for one attach: the attach options
-// that hand it the session's terminal, and a stop function.
+// blockPrompter is the prompting set up for one attach: the hooks that hand
+// it the session's terminal, and a stop function.
 type blockPrompter struct {
-	opts []ctr.AttachOption // to pass to the session attach
-	stop func()             // ends polling and closes an open prompt; always safe to call
+	onTerminal func(*overlay.Terminal)          // starts prompting on the session's terminal; nil without --prompt
+	logf       func(format string, args ...any) // the terminal's diagnostics
+	stop       func()                           // ends polling and closes an open prompt; always safe to call
+}
+
+// attachOptions hands the hooks to a container attach.
+func (bp *blockPrompter) attachOptions() []ctr.AttachOption {
+	if bp.onTerminal == nil {
+		return nil
+	}
+	return []ctr.AttachOption{ctr.WithTerminal(bp.onTerminal), ctr.WithLogf(bp.logf)}
 }
 
 var noBlockPrompter = &blockPrompter{stop: func() {}}
@@ -183,7 +192,8 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 	}
 	tui.Status("Prompting", "for blocked connections (log: %s)", logPath)
 	return &blockPrompter{
-		opts: []ctr.AttachOption{ctr.WithTerminal(onTerminal), ctr.WithLogf(logger.Printf)},
+		onTerminal: onTerminal,
+		logf:       logger.Printf,
 		stop: func() {
 			mu.Lock()
 			stopped = true

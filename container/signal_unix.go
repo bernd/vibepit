@@ -8,6 +8,7 @@ import (
 	"syscall"
 )
 
-func notifyResize(ch chan<- os.Signal) {
+// NotifyResize relays the local terminal's resize signals to ch.
+func NotifyResize(ch chan<- os.Signal) {
 	signal.Notify(ch, syscall.SIGWINCH)
 }

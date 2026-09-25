@@ -2,14 +2,21 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/bernd/vibepit/keygen"
+	"github.com/bernd/vibepit/overlay"
 	"github.com/bernd/vibepit/session"
 	"github.com/bernd/vibepit/sshd"
 	"github.com/stretchr/testify/assert"
@@ -119,12 +126,10 @@ func TestBuildRemoteCommand(t *testing.T) {
 	}
 }
 
-// TestSSHRoundTripPreservesLiteralArguments boots a real sshd.Server on a
-// loopback listener, runs a command built by buildRemoteCommand, and
-// asserts that shell metacharacters ($HOME, $(uname), spaces) reach the
-// remote program as literal arguments rather than being expanded or
-// resplit by the remote shell.
-func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
+// startTestSSHServer boots a real sshd.Server on a loopback listener and
+// returns a client connected to it. sessionLimit caps its PTY sessions.
+func startTestSSHServer(t *testing.T, sessionLimit int) *gossh.Client {
+	t.Helper()
 	hostPriv, _, err := keygen.GenerateEd25519Keypair()
 	require.NoError(t, err)
 	clientPriv, clientPub, err := keygen.GenerateEd25519Keypair()
@@ -132,16 +137,16 @@ func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer listener.Close() //nolint:errcheck
+	t.Cleanup(func() { listener.Close() }) //nolint:errcheck
 
 	srv, err := sshd.NewServer(sshd.Config{
 		HostKeyPEM:    hostPriv,
 		AuthorizedKey: clientPub,
-		Sessions:      session.NewManager(50),
+		Sessions:      session.NewManager(sessionLimit),
 	})
 	require.NoError(t, err)
-	go srv.Serve(listener) //nolint:errcheck
-	defer srv.Close()      //nolint:errcheck
+	go srv.Serve(listener)            //nolint:errcheck
+	t.Cleanup(func() { srv.Close() }) //nolint:errcheck
 
 	signer, err := gossh.ParsePrivateKey(clientPriv)
 	require.NoError(t, err)
@@ -152,7 +157,17 @@ func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 	})
 	require.NoError(t, err)
-	defer client.Close() //nolint:errcheck
+	t.Cleanup(func() { client.Close() }) //nolint:errcheck
+	return client
+}
+
+// TestSSHRoundTripPreservesLiteralArguments boots a real sshd.Server on a
+// loopback listener, runs a command built by buildRemoteCommand, and
+// asserts that shell metacharacters ($HOME, $(uname), spaces) reach the
+// remote program as literal arguments rather than being expanded or
+// resplit by the remote shell.
+func TestSSHRoundTripPreservesLiteralArguments(t *testing.T) {
+	client := startTestSSHServer(t, 50)
 
 	sess, err := client.NewSession()
 	require.NoError(t, err)
@@ -395,4 +410,255 @@ func TestHandleLastExit(t *testing.T) {
 		assert.Contains(t, output, "shell")
 		assert.Contains(t, output, "1h2m")
 	})
+}
+
+// syncBuffer is a bytes.Buffer safe for one writer and polling readers.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestStdinHandoff(t *testing.T) {
+	read := func(t *testing.T, r io.Reader, n int) string {
+		t.Helper()
+		buf := make([]byte, n)
+		got, err := r.Read(buf)
+		require.NoError(t, err)
+		return string(buf[:got])
+	}
+
+	t.Run("session reads until stop, the prompt reads after", func(t *testing.T) {
+		ch := make(chan []byte, 4)
+		h := newStdinHandoff(ch)
+		ch <- []byte("ls\n")
+		assert.Equal(t, "ls\n", read(t, h.Session(), 64))
+
+		h.Stop()
+		ch <- []byte("y\n")
+		_, err := h.Session().Read(make([]byte, 64))
+		assert.ErrorIs(t, err, io.EOF)
+		assert.Equal(t, "y\n", read(t, h.Prompt(), 64))
+	})
+
+	t.Run("a chunk partly read by the session goes to the prompt", func(t *testing.T) {
+		ch := make(chan []byte, 4)
+		h := newStdinHandoff(ch)
+		ch <- []byte("abcdef")
+		assert.Equal(t, "ab", read(t, h.Session(), 2))
+
+		h.Stop()
+		assert.Equal(t, "cdef", read(t, h.Prompt(), 64))
+	})
+
+	t.Run("stop ends a blocked session read", func(t *testing.T) {
+		ch := make(chan []byte)
+		h := newStdinHandoff(ch)
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := h.Session().Read(make([]byte, 64))
+			errCh <- err
+		}()
+		h.Stop()
+		select {
+		case err := <-errCh:
+			assert.ErrorIs(t, err, io.EOF)
+		case <-time.After(2 * time.Second):
+			t.Fatal("session read still blocked after Stop")
+		}
+	})
+
+	t.Run("stdin end reaches both readers", func(t *testing.T) {
+		ch := make(chan []byte)
+		close(ch)
+		h := newStdinHandoff(ch)
+		_, err := h.Session().Read(make([]byte, 64))
+		assert.ErrorIs(t, err, io.EOF)
+		h.Stop()
+		_, err = h.Prompt().Read(make([]byte, 64))
+		assert.ErrorIs(t, err, io.EOF)
+	})
+}
+
+func TestRunSSHTerminal(t *testing.T) {
+	if _, err := os.Stat("/bin/bash"); err != nil {
+		t.Skip("the test server's sessions run /bin/bash")
+	}
+
+	tests := []struct {
+		name   string
+		prompt bool
+	}{
+		{name: "without prompter"},
+		{name: "with prompter", prompt: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotTerminal atomic.Bool
+			prompter := noBlockPrompter
+			if tt.prompt {
+				prompter = &blockPrompter{
+					onTerminal: func(*overlay.Terminal) { gotTerminal.Store(true) },
+					stop:       func() {},
+				}
+			}
+
+			client := startTestSSHServer(t, 50)
+			sess, err := client.NewSession()
+			require.NoError(t, err)
+			defer sess.Close() //nolint:errcheck
+			require.NoError(t, sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{gossh.ECHO: 0}))
+
+			var mu sync.Mutex
+			cols, rows := 80, 24
+			size := func() (int, int, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				return cols, rows, nil
+			}
+			ch := make(chan []byte, 16)
+			h := newStdinHandoff(ch)
+			winch := make(chan os.Signal, 1)
+			var out syncBuffer
+
+			done := make(chan error, 1)
+			go func() {
+				done <- runSSHTerminal(t.Context(), sshTerminalParams{
+					session:  sess,
+					stdin:    h,
+					stdout:   &out,
+					size:     size,
+					winch:    winch,
+					prompter: prompter,
+				})
+			}()
+
+			// The resize reaches the server's PTY: stty reports the new size.
+			mu.Lock()
+			cols, rows = 100, 30
+			mu.Unlock()
+			winch <- syscall.SIGWINCH
+			ch <- []byte(`for i in $(seq 50); do s=$(stty size); [ "$s" = "30 100" ] && break; sleep 0.1; done; echo "size=$s"; exit` + "\n")
+
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatalf("session did not end; output: %q", out.String())
+			}
+			assert.Contains(t, out.String(), "size=30 100")
+			assert.Equal(t, tt.prompt, gotTerminal.Load())
+
+			// runSSHTerminal stopped the hand-off: input after the session
+			// ended goes to the last-exit prompt.
+			readErr := make(chan error, 1)
+			go func() {
+				_, err := h.Session().Read(make([]byte, 16))
+				readErr <- err
+			}()
+			select {
+			case err := <-readErr:
+				assert.ErrorIs(t, err, io.EOF)
+			case <-time.After(2 * time.Second):
+				t.Fatal("stdin hand-off not stopped after the session ended")
+			}
+			ch <- []byte("y\n")
+			buf := make([]byte, 16)
+			n, err := h.Prompt().Read(buf)
+			require.NoError(t, err)
+			assert.Equal(t, "y\n", string(buf[:n]))
+		})
+	}
+}
+
+// vibed reports a failed session start on the SSH stderr stream, which has
+// to reach the screen through the overlay too.
+func TestRunSSHTerminal_ServerStderr(t *testing.T) {
+	client := startTestSSHServer(t, 0)
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	defer sess.Close() //nolint:errcheck
+	require.NoError(t, sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{}))
+
+	h := newStdinHandoff(make(chan []byte))
+	var out syncBuffer
+	err = runSSHTerminal(t.Context(), sshTerminalParams{
+		session:  sess,
+		stdin:    h,
+		stdout:   &out,
+		size:     func() (int, int, error) { return 80, 24, nil },
+		winch:    make(chan os.Signal),
+		prompter: noBlockPrompter,
+	})
+	var exitErr *gossh.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitStatus())
+	assert.Contains(t, out.String(), "create session: session limit reached")
+}
+
+func TestRunSSHTerminal_ShellFails(t *testing.T) {
+	client := startTestSSHServer(t, 50)
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	require.NoError(t, sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{}))
+	require.NoError(t, sess.Close())
+
+	var gotTerminal atomic.Bool
+	err = runSSHTerminal(t.Context(), sshTerminalParams{
+		session: sess,
+		stdin:   newStdinHandoff(make(chan []byte)),
+		stdout:  io.Discard,
+		size:    func() (int, int, error) { return 80, 24, nil },
+		winch:   make(chan os.Signal),
+		prompter: &blockPrompter{
+			onTerminal: func(*overlay.Terminal) { gotTerminal.Store(true) },
+			stop:       func() {},
+		},
+	})
+	assert.ErrorContains(t, err, "start shell")
+	assert.False(t, gotTerminal.Load(), "no prompting on a session that never started")
+}
+
+func TestRunSSHTerminal_ContextCancelled(t *testing.T) {
+	if _, err := os.Stat("/bin/bash"); err != nil {
+		t.Skip("the test server's sessions run /bin/bash")
+	}
+	client := startTestSSHServer(t, 50)
+	sess, err := client.NewSession()
+	require.NoError(t, err)
+	defer sess.Close() //nolint:errcheck
+	require.NoError(t, sess.RequestPty("xterm", 24, 80, gossh.TerminalModes{}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		done <- runSSHTerminal(ctx, sshTerminalParams{
+			session:  sess,
+			stdin:    newStdinHandoff(make(chan []byte)),
+			stdout:   &out,
+			size:     func() (int, int, error) { return 80, 24, nil },
+			winch:    make(chan os.Signal),
+			prompter: noBlockPrompter,
+		})
+	}()
+	require.Eventually(t, func() bool { return out.String() != "" }, 5*time.Second, 10*time.Millisecond, "no shell output")
+	cancel()
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("runSSHTerminal did not return after cancel")
+	}
 }

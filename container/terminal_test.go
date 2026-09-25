@@ -24,7 +24,7 @@ func TestWatchResizeSignalsStopsOnDone(t *testing.T) {
 
 	var calls atomic.Int32
 	go func() {
-		watchResizeSignals(sigCh, done, func() {
+		WatchResizeSignals(sigCh, done, func() {
 			calls.Add(1)
 		})
 		close(exited)
