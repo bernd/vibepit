@@ -36,6 +36,9 @@ func TestFilter(t *testing.T) {
 		{name: "cursor style dropped", in: "\x1b[5 q"},
 		{name: "APC dropped", in: "\x1b_Gf=24;AAAA\x1b\\"},
 		{name: "resets dropped", in: "\x1bc\x1b[!p"},
+		{name: "erase display keeps the scrollback", in: "\x1b[J\x1b[0J\x1b[1J\x1b[2J\x1b[3J\x1b[2;3Jx", want: "\x1b[J\x1b[0J\x1b[1J\x1b[2Jx"},
+		{name: "8-bit controls and invalid UTF-8 dropped", in: "\x9b?1049h\x9b6n\x9d2;t\x07\x90q\x9c\xffx", want: "x"},
+		{name: "replacement character kept", in: "a\uFFFDb", keep: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
