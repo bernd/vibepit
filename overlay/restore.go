@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/bernd/vibepit/vt"
@@ -28,11 +29,10 @@ var (
 // switch.
 var skipReconcile = map[uint16]bool{3: true, 47: true, 1047: true, 1048: true, 1049: true}
 
-// reportModes make some terminals send a report as soon as they are
-// enabled: focus (1004), colour scheme (2031), visibility (2033) and
-// in-band size (2048). A snapshot writes them only when they changed, so
-// the app gets each report once, from the real terminal.
-var reportModes = map[uint16]bool{1004: true, 2031: true, 2033: true, 2048: true}
+// inD reports whether the prompt may change mode k: the draw modes and IRM.
+func inD(k modeKey) bool {
+	return k == modeIRM || slices.Contains(drawModes, k)
+}
 
 const (
 	// penReset clears what the formatter emits only when it differs from
@@ -163,10 +163,10 @@ var snapshotExtras = func() vt.Extras {
 // snapshotLeave rebuilds the real terminal from the shadow without
 // assuming anything about it beyond the cut. The order follows
 // snapshotLeave in vt/internal/ghostty/restore_test.go: leave the prompt's
-// screen, match the screen, reconcile every mode, reset the pen, clear,
-// the formatter output. Then come the title, working directory and cursor
-// style, which the formatter doesn't emit, and the continuation of an
-// unfinished sequence. resync reports that the continuation was
+// screen, match the screen, write the set-D modes and those the app
+// changed, reset the pen, clear, the formatter output. Then come the
+// title, working directory and cursor style, which the formatter doesn't
+// emit, and the continuation of an unfinished sequence. resync reports that the continuation was
 // unavailable, so the caller must drop output up to the next ground.
 func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) (out []byte, resync bool, err error) {
 	// Synchronized output off, so the real terminal draws the snapshot.
@@ -227,7 +227,12 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) (out []byte, resync 
 		if !m.ANSI && skipReconcile[m.Mode] {
 			continue
 		}
-		if !m.ANSI && reportModes[m.Mode] && m.Value == c.modes[k] {
+		// Outside set D the real terminal still has the cut's value. The
+		// shadow's value for a mode the app never set is libghostty's
+		// default, not the real terminal's: writing it would turn off key
+		// auto-repeat (8) or cursor blinking (12), and enabling a report
+		// mode (1004, 2031, 2033, 2048) again would send a second report.
+		if !inD(k) && m.Value == c.modes[k] {
 			continue
 		}
 		b.WriteString(modeSeq(k, m.Value))

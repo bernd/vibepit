@@ -146,19 +146,30 @@ func TestSnapshotLeaveOrder(t *testing.T) {
 	assert.True(t, strings.HasSuffix(s, "\x1b[3"), "the continuation comes last")
 }
 
-func TestSnapshotLeaveWritesReportModesOnlyWhenChanged(t *testing.T) {
+func TestSnapshotLeaveWritesModesOutsideDOnlyWhenChanged(t *testing.T) {
 	shadow := newVT(t, 20, 6)
-	feed(t, shadow, "\x1b[?1004h\x1b[?2048h")
+	feed(t, shadow, "\x1b[?1004h\x1b[?2048h\x1b[?2004h")
 	c := mustCut(t, shadow)
-	feed(t, shadow, "\x1b[?2048l\x1b[?2031h")
+	feed(t, shadow, "\x1b[?2048l\x1b[?2031h\x1b[?1000h")
 	out, _, err := snapshotLeave(shadow, c, entered{})
 	require.NoError(t, err)
 	s := string(out)
-	assert.NotContains(t, s, "\x1b[?1004", "unchanged: enabling it again would send a focus report")
-	assert.NotContains(t, s, "\x1b[?2033", "unchanged")
+	for _, unchanged := range []string{
+		"\x1b[?1004", // enabling it again would send a focus report
+		"\x1b[?2033",
+		"\x1b[?2004",
+		"\x1b[?8",    // the shadow's default is off, a real terminal's on: keys would stop repeating
+		"\x1b[?12",   // would stop a blinking cursor
+		"\x1b[?1036", // would override the terminal's configured Alt key
+	} {
+		assert.NotContains(t, s, unchanged)
+	}
 	assert.Contains(t, s, "\x1b[?2048l")
 	assert.Contains(t, s, "\x1b[?2031h")
-	assert.Contains(t, s, "\x1b[?2004l", "other modes are written whatever their value")
+	assert.Contains(t, s, "\x1b[?1000h")
+	for _, k := range append(drawModes, modeIRM) {
+		assert.Contains(t, s, modeSeq(k, c.modes[k]), "the prompt changed set D")
+	}
 }
 
 func TestSnapshotLeaveTurnsSynchronizedOutputOff(t *testing.T) {

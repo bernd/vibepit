@@ -26,12 +26,14 @@ const penReset = "\x1b[r\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x1b*B\x1b+B\x0f\x1b[=0
 // same parts in the same order: match the screen, reconcile every mode,
 // reset the pen, clear, then the formatter output.
 //
-// Don't copy the mode loop as is: it writes every mode, including the
-// report-triggering ones (1004 focus, 2048 in-band size, and check 2031
-// and 2033). Enabling those makes some real terminals send a report right
-// away, so the spec writes them only when they differ from the real
-// terminal's known value. Here b is a shadow that sends no reports, so
-// writing them unconditionally is harmless and keeps the test simple.
+// Don't copy the mode loop as is: it writes every mode. On a real
+// terminal the shadow's value of a mode the app never set is libghostty's
+// default, not the terminal's (autorepeat 8 and cursor blinking 12 are
+// off), and enabling a report mode (1004, 2031, 2033, 2048) again sends a
+// report. So the overlay writes modes outside the prompt's set only when
+// they changed since the cut. Here b is a shadow with the same defaults
+// that sends no reports, so writing every mode is harmless and keeps the
+// test simple.
 func snapshotLeave(t testing.TB, a, b *Instance) string {
 	t.Helper()
 	var s strings.Builder
