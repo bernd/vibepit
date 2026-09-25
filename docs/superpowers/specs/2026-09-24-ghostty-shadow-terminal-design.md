@@ -617,6 +617,11 @@ does.
   `CSI 1;1R` from the shadow, and again from the real terminal on replay.
 - Keys typed between the program's exit and T3 go to the prompt's sink and
   are dropped. The window is a few milliseconds.
+- Focus reports (mode 1004) typed while prompting went to the prompt, so
+  the app would keep a stale focus state. If the shadow still has 1004 on,
+  the last focus report the prompt got goes to the app right after the
+  hand-back, unless the last one the app got was the same. zmx does the
+  same across a detach.
 
 **Barrier failure** (T2 doesn't happen within 500 ms):
 
@@ -633,7 +638,10 @@ does.
   to `prompt.log` and retries the prompt on the next block.
 - After two consecutive barrier timeouts, the session is marked
   `barrierUnsupported`. Later prompts use a degraded T2: switch input after
-  100 ms of input silence. The risk that a stray reply crosses to the
+  100 ms of input silence, or after 1 s at the latest. Mouse and focus
+  reports don't break the silence: with any-motion tracking (1003) a moving
+  mouse would otherwise hold the prompt back for good. The 1 s cap covers
+  typing that never pauses. The risk that a stray reply crosses to the
   prompt, or a keystroke to the app, is logged once. No common terminal is
   expected to take this path. The manual terminal matrix records it.
 
