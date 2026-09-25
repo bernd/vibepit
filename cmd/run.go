@@ -31,6 +31,7 @@ const (
 const (
 	allowFlag       = "allow"
 	localFlag       = "local"
+	memoryFlag      = "memory"
 	presetFlag      = "preset"
 	reconfigureFlag = "reconfigure"
 )
@@ -54,6 +55,11 @@ func RunCommand() *cli.Command {
 				Name:    presetFlag,
 				Aliases: []string{"p"},
 				Usage:   "Additional presets to activate",
+			},
+			&cli.StringFlag{
+				Name:    memoryFlag,
+				Aliases: []string{"m"},
+				Usage:   "Memory limit for the sandbox container (e.g. 8g, 512m)",
 			},
 			&cli.BoolFlag{
 				Name:    reconfigureFlag,
@@ -155,6 +161,11 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	merged := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice("preset"))
+
+	memoryLimit, err := cfg.MemoryLimit(cmd.String(memoryFlag))
+	if err != nil {
+		return err
+	}
 
 	uid, _ := strconv.Atoi(u.Uid)
 
@@ -293,6 +304,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		ColorTerm:  os.Getenv("COLORTERM"),
 		UID:        uid,
 		User:       u.Username,
+		Memory:     memoryLimit,
 	})
 	if err != nil {
 		return fmt.Errorf("dev container: %w", err)

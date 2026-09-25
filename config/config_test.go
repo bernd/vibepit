@@ -190,3 +190,36 @@ func TestAppendAllowDNS(t *testing.T) {
 		assert.Contains(t, cfg.AllowDNS, "svc.local")
 	})
 }
+
+func TestMemoryLimit(t *testing.T) {
+	tests := []struct {
+		name    string
+		global  string
+		project string
+		cli     string
+		want    int64
+		wantErr bool
+	}{
+		{name: "unset means unlimited", want: 0},
+		{name: "global only", global: "8g", want: 8 << 30},
+		{name: "project overrides global", global: "8g", project: "512m", want: 512 << 20},
+		{name: "cli overrides config", global: "8g", project: "4g", cli: "16g", want: 16 << 30},
+		{name: "invalid value", cli: "lots", wantErr: true},
+		{name: "zero is invalid", cli: "0", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Global:  GlobalConfig{Memory: tt.global},
+				Project: ProjectConfig{Memory: tt.project},
+			}
+			got, err := cfg.MemoryLimit(tt.cli)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

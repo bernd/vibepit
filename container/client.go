@@ -608,6 +608,8 @@ type DevContainerConfig struct {
 	ColorTerm  string
 	UID        int
 	User       string
+	// Memory is the memory limit in bytes; 0 means unlimited.
+	Memory int64
 }
 
 // CreateDevContainer creates the sandboxed development container
@@ -672,6 +674,7 @@ func (c *Client) CreateDevContainer(ctx context.Context, cfg DevContainerConfig)
 			CapDrop:        []string{"ALL"},
 			SecurityOpt:    []string{"no-new-privileges"},
 			Tmpfs:          map[string]string{"/tmp": "exec"},
+			Resources:      container.Resources{Memory: cfg.Memory},
 		},
 		&network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{

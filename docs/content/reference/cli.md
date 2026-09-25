@@ -41,6 +41,7 @@ vibepit run [flags] [project-path]
 | `-L`, `--local` | bool | `false` | Use the local `vibepit:latest` image instead of the published one. Required when you [build a custom image](../how-to/troubleshooting.md#sandbox-image-not-found) for an unsupported UID/GID combination. |
 | `-a`, `--allow` | string (repeatable) | | Additional `domain:port` entries to allow through the proxy (e.g. `api.example.com:443`) |
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
+| `-m`, `--memory` | string | | Memory limit for the sandbox container (e.g. `16g`, `512m`). Overrides the `memory` config setting. |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
 
 ### Behavior

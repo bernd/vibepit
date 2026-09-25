@@ -78,6 +78,7 @@ reaping.
 | Root filesystem | Read-only |
 | Capabilities | All dropped (`CAP_DROP: ALL`) |
 | Security options | `no-new-privileges` |
+| Memory limit | Unlimited unless set with `--memory` or the `memory` config key |
 
 For a full description of these controls, see the
 [Security Model](../explanations/security-model.md).

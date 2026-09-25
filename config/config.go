@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/proxy"
+	units "github.com/docker/go-units"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -27,6 +29,7 @@ type GlobalConfig struct {
 	AllowHTTP []string `koanf:"allow-http"`
 	AllowDNS  []string `koanf:"allow-dns"`
 	BlockCIDR []string `koanf:"block-cidr"`
+	Memory    string   `koanf:"memory"`
 }
 
 type ProjectConfig struct {
@@ -34,6 +37,7 @@ type ProjectConfig struct {
 	AllowHTTP      []string `koanf:"allow-http"`
 	AllowDNS       []string `koanf:"allow-dns"`
 	AllowHostPorts []int    `koanf:"allow-host-ports"`
+	Memory         string   `koanf:"memory"`
 }
 
 type Config struct {
@@ -114,6 +118,24 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) MergedConfig {
 		BlockCIDR:      c.Global.BlockCIDR,
 		AllowHostPorts: c.Project.AllowHostPorts,
 	}
+}
+
+// MemoryLimit returns the sandbox memory limit in bytes, or 0 for no limit.
+// The CLI value takes precedence over project config, which takes precedence
+// over global config.
+func (c *Config) MemoryLimit(cliMemory string) (int64, error) {
+	memory := cmp.Or(cliMemory, c.Project.Memory, c.Global.Memory)
+	if memory == "" {
+		return 0, nil
+	}
+	limit, err := units.RAMInBytes(memory)
+	if err != nil {
+		return 0, fmt.Errorf("invalid memory limit %q: %w", memory, err)
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("invalid memory limit %q: must be positive", memory)
+	}
+	return limit, nil
 }
 
 // dedup merges multiple string slices, removing duplicates while preserving order.
