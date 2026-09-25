@@ -21,7 +21,9 @@ func (t *Terminal) detachAt(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	switch {
-	case t.closed:
+	case t.closed, t.isDone():
+		// isDone: Run is returning, and finish waits for this Show. Nothing
+		// may reach the terminal after the session output ended.
 		t.mu.Unlock()
 		return ErrClosed
 	case t.shadowErr != nil:

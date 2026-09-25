@@ -246,3 +246,18 @@ func TestLateBarrierReplyIsStripped(t *testing.T) {
 	h.keys("\x1b[0n")
 	h.waitContainer("ab\x1b[0n")
 }
+
+func TestDetachWhileTheSessionEnds(t *testing.T) {
+	h := newHarness(t, 20, 5)
+	h.app("$ ")
+	// A Show that won showMu just as the output ended: finish has closed
+	// done and waits for showMu.
+	h.term.showMu.Lock()
+	h.out.close()
+	require.Eventually(t, h.term.isDone, 5*time.Second, time.Millisecond)
+	written := h.stdout.String()
+	err := h.term.detachAt(context.Background())
+	h.term.showMu.Unlock()
+	assert.ErrorIs(t, err, ErrClosed)
+	assert.Equal(t, written, h.stdout.String(), "nothing written")
+}
