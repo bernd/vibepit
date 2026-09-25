@@ -248,13 +248,25 @@ func (t *Terminal) pump() error {
 	}
 }
 
-// output handles one chunk of container output.
+// output handles one chunk of container output. Resync runs first: while
+// it drops a sequence tail the shadow isn't at ground, so a pending detach
+// can only cut after it.
 func (t *Terminal) output(p []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.resyncing && t.shadowErr == nil {
+		p = t.resyncLocked(p)
+	}
+	if t.detach != nil {
+		p = t.advanceDetachLocked(p)
+	}
 	t.shadowWriteLocked(p)
-	if t.attached {
+	switch {
+	case len(p) == 0:
+	case t.attached:
 		_, _ = t.cfg.Stdout.Write(p)
+	default:
+		t.log.append(p, t.timing.logMax)
 	}
 }
 
