@@ -31,6 +31,7 @@ type harnessConfig struct {
 	silent   bool
 	noShadow bool
 	timing   timing
+	onResize func(cols, rows int)
 }
 
 type harnessOption func(*harnessConfig)
@@ -42,6 +43,11 @@ func silentTerminal() harnessOption { return func(c *harnessConfig) { c.silent =
 func withoutShadow() harnessOption { return func(c *harnessConfig) { c.noShadow = true } }
 
 func withTiming(f func(*timing)) harnessOption { return func(c *harnessConfig) { f(&c.timing) } }
+
+// onContainerResize runs f in the container's resize, before it is logged.
+func onContainerResize(f func(cols, rows int)) harnessOption {
+	return func(c *harnessConfig) { c.onResize = f }
+}
 
 // harness runs a Terminal against fakes. real stands in for the user's
 // terminal: it gets everything written to stdout and answers queries on
@@ -61,6 +67,7 @@ type harness struct {
 	mu         sync.Mutex
 	cols, rows int
 	resizes    []string
+	onResize   func(cols, rows int)
 }
 
 func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
@@ -70,14 +77,15 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 		o(&hc)
 	}
 	h := &harness{
-		t:      t,
-		stdin:  newBufPipe(1 << 20),
-		out:    newChunkReader(),
-		toCont: &syncBuffer{},
-		stdout: &syncBuffer{},
-		done:   make(chan struct{}),
-		cols:   cols,
-		rows:   rows,
+		t:        t,
+		stdin:    newBufPipe(1 << 20),
+		out:      newChunkReader(),
+		toCont:   &syncBuffer{},
+		stdout:   &syncBuffer{},
+		done:     make(chan struct{}),
+		cols:     cols,
+		rows:     rows,
+		onResize: hc.onResize,
 	}
 	var vtOpts []vt.TerminalOption
 	if !hc.silent {
@@ -132,6 +140,9 @@ func (h *harness) size() (int, int, error) {
 }
 
 func (h *harness) recordResize(cols, rows int) {
+	if h.onResize != nil {
+		h.onResize(cols, rows)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.resizes = append(h.resizes, fmt.Sprintf("%dx%d", cols, rows))

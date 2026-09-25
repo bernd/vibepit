@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -68,4 +69,33 @@ func TestStdinEOFClosesTheContainerInput(t *testing.T) {
 		t.Fatal("Run returned before the output ended")
 	default:
 	}
+}
+
+func TestConcurrentResizesKeepTheLatestSize(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h := newHarness(t, 20, 5, onContainerResize(func(cols, rows int) {
+		if cols == 30 {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+	}))
+	var wg sync.WaitGroup
+	h.mu.Lock()
+	h.cols, h.rows = 30, 6
+	h.mu.Unlock()
+	wg.Go(h.term.Resize) // the initial size, stalled in the container resize
+	<-entered
+	h.mu.Lock()
+	h.cols, h.rows = 40, 7
+	h.mu.Unlock()
+	wg.Go(h.term.Resize) // SIGWINCH meanwhile
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	log := h.resizeLog()
+	require.NotEmpty(t, log)
+	assert.Equal(t, "40x7", log[len(log)-1], "the container ends at the latest size")
+	h.app(strings.Repeat("x", 35))
+	assert.Equal(t, strings.Repeat("x", 35), firstLine(h.term.shadow), "so does the shadow")
 }

@@ -84,6 +84,9 @@ type Terminal struct {
 	done    chan struct{} // closed when Run returns
 
 	showMu sync.Mutex // one Show at a time; finish takes it to wait for one
+	// resizeMu orders whole resizes, so the shadow and the container end at
+	// the same, latest size. The container's resize runs outside mu.
+	resizeMu sync.Mutex
 
 	mu                 sync.Mutex // guards everything below
 	shadow             *vt.Terminal
@@ -310,6 +313,8 @@ func (t *Terminal) flushAnswersLocked() {
 // layout matches what the app redraws for, then to the container, then to
 // a prompt that is showing.
 func (t *Terminal) Resize() {
+	t.resizeMu.Lock()
+	defer t.resizeMu.Unlock()
 	cols, rows := t.size()
 	t.mu.Lock()
 	changed := cols != t.cols || rows != t.rows
