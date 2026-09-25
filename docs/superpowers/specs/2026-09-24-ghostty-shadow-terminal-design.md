@@ -702,6 +702,11 @@ mechanisms guarantee it:
      - DECSTBM
      - `CSI ?25h/l`
      - `CSI ?2026h/l`
+     - the sequences Bubble Tea's renderer picks by `TERM` (ultraviolet's
+       `xtermCaps`) and its hard-scroll path: REP, HPA, HPR, VPR, CHT,
+       CBT, SU, SD, and RI, IND, NEL (`ESC M`, `ESC D`, `ESC E`). They only
+       move the cursor or edit content on the prompt's screen, which set D
+       already covers. Without them the prompt is drawn wrong.
    - **Dropped:** everything else. That includes:
      - every query (DA, DSR, DECRQM, XTVERSION, OSC colour queries)
      - every other mode change
@@ -716,10 +721,13 @@ mechanisms guarantee it:
      - 8-bit C1 controls and invalid UTF-8, with any sequence they start
        (`0x9b` CSI, `0x9d` OSC, `0x90` DCS). A terminal that honours 8-bit
        controls would act on them.
+   - The filter puts a CR in front of a bare LF. Bubble Tea's renderer
+     writes a bare LF for a new line when its input isn't a TTY, counting on
+     the TTY's ONLCR, which raw mode turns off.
    - A test checks that `approveScreen` renders the same through the
-     filter and handles keys with every query dropped. Bubble Tea sends its
-     queries asynchronously and falls back when no reply arrives. That's
-     an assumption, and the test verifies it.
+     filter and handles keys with every query dropped, for several `TERM`
+     values. Bubble Tea sends its queries asynchronously and falls back
+     when no reply arrives. That's an assumption, and the test verifies it.
 2. **Enter changes only set D, and only in ways the leave can undo.**
 
 **Set D**, the state vibepit itself changes on enter:
