@@ -1,15 +1,21 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/config"
+	"github.com/bernd/vibepit/overlay"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
+	"github.com/bernd/vibepit/vt"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -262,4 +268,88 @@ func TestApproveScreen_RetryAfterFailedAllowClearsError(t *testing.T) {
 	res := cmd().(decisionResultMsg)
 	require.NoError(t, res.err)
 	assert.True(t, httpAL.Allows("api.example.com", "443"))
+}
+
+// The prompt's output passes overlay.NewFilter, which drops every query.
+// The approve screen must look the same through it as on a cooked TTY,
+// whatever TERM makes Bubble Tea's renderer use, and still take keys.
+func TestApproveScreen_RendersThroughPromptFilter(t *testing.T) {
+	for _, term := range []string{"xterm-256color", "xterm-ghostty", "screen", "linux"} {
+		t.Run(term, func(t *testing.T) {
+			tp := newTestProxy(t)
+			session := &SessionInfo{SessionID: "test123456", ProjectDir: t.TempDir()}
+			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
+			start := func(out io.Writer, in io.Reader) (*tea.Program, <-chan error) {
+				p := tea.NewProgram(tui.NewWindow(header, newApproveScreen(session, tp.client, blockedEntry)),
+					tea.WithInput(in),
+					tea.WithOutput(out),
+					tea.WithWindowSize(100, 30),
+					tea.WithColorProfile(colorprofile.TrueColor),
+					tea.WithEnvironment([]string{"TERM=" + term}),
+					tea.WithoutSignalHandler(),
+				)
+				errc := make(chan error, 1)
+				go func() {
+					_, err := p.Run()
+					errc <- err
+				}()
+				return p, errc
+			}
+			filtered, direct := newScreen(t, 100, 30), newScreen(t, 100, 30)
+			keysR, keysW := io.Pipe()
+			idleR, idleW := io.Pipe()
+			t.Cleanup(func() {
+				_ = keysW.Close()
+				_ = idleW.Close()
+			})
+			_, filteredDone := start(overlay.NewFilter(filtered), keysR)
+			directProg, directDone := start(onlcr{direct}, idleR)
+
+			require.Eventually(t, func() bool {
+				got := screenText(filtered)
+				return strings.Contains(got, "Allow this connection?") && got == screenText(direct)
+			}, 10*time.Second, 20*time.Millisecond)
+
+			_, err := keysW.Write([]byte("a"))
+			require.NoError(t, err)
+			select {
+			case err := <-filteredDone:
+				require.NoError(t, err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the prompt didn't take the key")
+			}
+			assert.True(t, tp.http.Allows("api.example.com", "443"))
+			directProg.Kill()
+			<-directDone
+		})
+	}
+}
+
+// onlcr maps LF to CR LF, as a TTY with ONLCR does. Bubble Tea's renderer
+// counts on it when its input isn't a TTY.
+type onlcr struct{ w io.Writer }
+
+func (o onlcr) Write(p []byte) (int, error) {
+	if _, err := o.w.Write(bytes.ReplaceAll(p, []byte("\n"), []byte("\r\n"))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+func newScreen(t *testing.T, cols, rows int) *vt.Terminal {
+	t.Helper()
+	term, err := vt.NewTerminal(uint16(cols), uint16(rows))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = term.Close() })
+	return term
+}
+
+// screenText is the visible screen as plain text, or "" on error, so it is
+// safe inside require.Eventually.
+func screenText(term *vt.Terminal) string {
+	b, err := term.Format(vt.FormatOptions{Output: vt.OutputPlain, Trim: true, Region: vt.RegionScreen})
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
