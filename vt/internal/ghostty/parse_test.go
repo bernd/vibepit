@@ -114,7 +114,7 @@ func TestModeTableComplete(t *testing.T) {
 	scan := func(t *testing.T, in *Instance) {
 		found := map[uint16]bool{}
 		for _, ansi := range []bool{true, false} {
-			for v := uint16(0); v < 10000; v++ {
+			for v := range uint16(10000) {
 				mode := EncodeMode(v, ansi)
 				on, err := in.GetMode(mode)
 				if err != nil {

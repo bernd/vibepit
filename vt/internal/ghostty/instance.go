@@ -538,9 +538,9 @@ func (in *Instance) TypeJSON() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	end := bytes.IndexByte(b, 0)
-	if end < 0 {
+	before, _, ok := bytes.Cut(b, []byte{0})
+	if !ok {
 		return "", errors.New("ghostty: type json is not NUL-terminated")
 	}
-	return string(b[:end]), nil
+	return string(before), nil
 }

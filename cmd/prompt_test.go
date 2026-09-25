@@ -148,8 +148,7 @@ func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
 	}))
 
 	prompted := make(chan proxy.LogEntry, 10)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go runBlockPrompter(ctx, client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
 		prompted <- e
 		return nil
@@ -170,8 +169,7 @@ func TestRunBlockPrompter_ReasksAfterBarrierTimeout(t *testing.T) {
 	tp := newTestProxy(t)
 	prompted := make(chan proxy.LogEntry, 10)
 	var calls atomic.Int32
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go runBlockPrompter(ctx, tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
 		prompted <- e
 		if calls.Add(1) == 1 {
@@ -200,8 +198,7 @@ func TestRunBlockPrompter_ReasksAfterBarrierTimeout(t *testing.T) {
 func TestRunBlockPrompter_BurstPastTail(t *testing.T) {
 	tp := newTestProxy(t)
 	prompted := make(chan proxy.LogEntry, 100)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go runBlockPrompter(ctx, tp.client, 20*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
 		prompted <- e
 		return nil

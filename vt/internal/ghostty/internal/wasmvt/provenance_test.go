@@ -26,7 +26,7 @@ type provenance struct {
 // parseProvenance parses the key=value lines of a GHOSTTY_COMMIT file.
 func parseProvenance(s string) (provenance, error) {
 	var p provenance
-	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(s), "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if !ok {
 			return provenance{}, fmt.Errorf("GHOSTTY_COMMIT: malformed line %q", line)
@@ -121,7 +121,7 @@ func generateArgs(t *testing.T, out string) []string {
 	t.Helper()
 	src, err := os.ReadFile("doc.go")
 	require.NoError(t, err)
-	for _, line := range strings.Split(string(src), "\n") {
+	for line := range strings.SplitSeq(string(src), "\n") {
 		rest, ok := strings.CutPrefix(line, "//go:generate go ")
 		if !ok {
 			continue
