@@ -56,8 +56,8 @@ func (m *InputMux) Run() error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := m.src.Read(buf)
-		if n > 0 {
-			m.route(buf[:n])
+		if n > 0 && m.route(buf[:n]) {
+			m.waitContainer()
 		}
 		if err != nil {
 			m.mu.Lock()
@@ -75,14 +75,16 @@ func (m *InputMux) Run() error {
 	}
 }
 
-func (m *InputMux) route(p []byte) {
+// route sends p to the owner of the input. It reports whether the input
+// still belongs to the container.
+func (m *InputMux) route(p []byte) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
 	m.lastInput = now
 	if m.mode == toContainer && !now.Before(m.stripUntil) {
 		m.write(p)
-		return
+		return true
 	}
 	var plain []byte
 	for _, b := range p {
@@ -114,6 +116,19 @@ func (m *InputMux) route(p []byte) {
 		m.held = 0
 	}
 	m.write(plain)
+	return m.mode != toPrompt
+}
+
+// roomWaiter is a container input that queues writes instead of blocking.
+type roomWaiter interface{ waitRoom() }
+
+// waitContainer is the stdin pump's backpressure: it waits, outside the
+// lock, until a queueing container input has room. The prompt's input
+// never waits for the container.
+func (m *InputMux) waitContainer() {
+	if w, ok := m.container.(roomWaiter); ok {
+		w.waitRoom()
+	}
 }
 
 // reply handles a complete barrier reply.

@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -98,4 +99,46 @@ func TestConcurrentResizesKeepTheLatestSize(t *testing.T) {
 	assert.Equal(t, "40x7", log[len(log)-1], "the container ends at the latest size")
 	h.app(strings.Repeat("x", 35))
 	assert.Equal(t, strings.Repeat("x", 35), firstLine(h.term.shadow), "so does the shadow")
+}
+
+func TestAStalledContainerInputNeverStallsOutput(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	h := newHarness(t, 20, 5, stalledContainerInput(gate))
+	t.Cleanup(release)
+	h.keys("k")
+	require.Eventually(t, func() bool { return h.stalled.Load() > 0 }, 5*time.Second, time.Millisecond)
+	require.NoError(t, h.result(h.detachAsync(context.Background())), "the detach waited for the container")
+	h.app("\x1b[6n") // the shadow answers into the stalled input
+	h.app("more")
+	left := make(chan struct{})
+	go func() {
+		h.term.leave(false)
+		close(left)
+	}()
+	select {
+	case <-left:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the leave waited for the container")
+	}
+	assert.Contains(t, screenText(h.real), "more")
+	release()
+	h.waitContainer("k\x1b[1;1R")
+}
+
+func TestStdinEOFClosesTheContainerInputAfterQueuedKeys(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	h := newHarness(t, 20, 5, stalledContainerInput(gate))
+	t.Cleanup(release)
+	h.keys("bye")
+	require.NoError(t, h.stdin.Close())
+	require.Eventually(t, func() bool { return h.stalled.Load() > 0 }, 5*time.Second, time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	assert.Zero(t, h.closedIn.Load(), "the queued keys go first")
+	release()
+	require.Eventually(t, func() bool { return h.closedIn.Load() == 1 }, 5*time.Second, time.Millisecond)
+	assert.Equal(t, "bye", h.toCont.String())
 }

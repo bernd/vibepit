@@ -77,7 +77,7 @@ type Terminal struct {
 	cfg     Config
 	timing  timing
 	in      *InputMux
-	toCont  *lockedWriter
+	toCont  *containerInput
 	environ []string
 	profile colorprofile.Profile
 	logf    func(format string, args ...any)
@@ -135,19 +135,6 @@ func (l *rawLog) append(p []byte, max int) {
 	l.buf = append(l.buf, p...)
 }
 
-// lockedWriter serializes the two writers of the container's input: the
-// stdin pump and the shadow's answers.
-type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(p)
-}
-
 // New sets up a Terminal. A shadow that can't be created only turns
 // prompts off.
 func New(cfg Config) *Terminal {
@@ -167,7 +154,7 @@ func New(cfg Config) *Terminal {
 		t.logf = func(string, ...any) {}
 	}
 	t.profile = colorprofile.Detect(cfg.Stdout, t.environ)
-	t.toCont = &lockedWriter{w: cfg.ContainerIn}
+	t.toCont = newContainerInput(cfg.ContainerIn)
 	t.in = NewInputMux(cfg.Stdin, t.toCont)
 	t.cols, t.rows = t.size()
 	if cfg.NoShadow {
@@ -194,12 +181,14 @@ func New(cfg Config) *Terminal {
 // keeps forwarding output.
 func (t *Terminal) Run(ctx context.Context) error {
 	defer t.finish()
+	go t.toCont.run()
 	inDone := make(chan struct{})
 	go func() {
 		defer close(inDone)
 		if err := t.in.Run(); err != nil {
 			t.logf("overlay: stdin: %v", err)
 		}
+		t.toCont.flush()
 		if t.cfg.CloseInput != nil {
 			_ = t.cfg.CloseInput()
 		}
@@ -225,6 +214,7 @@ func (t *Terminal) Run(ctx context.Context) error {
 // and restores the screen before Run returns.
 func (t *Terminal) finish() {
 	close(t.done)
+	t.toCont.close()
 	t.showMu.Lock()
 	defer t.showMu.Unlock()
 	t.mu.Lock()

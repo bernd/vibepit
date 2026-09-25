@@ -32,6 +32,7 @@ type harnessConfig struct {
 	noShadow bool
 	timing   timing
 	onResize func(cols, rows int)
+	gate     chan struct{}
 }
 
 type harnessOption func(*harnessConfig)
@@ -43,6 +44,12 @@ func silentTerminal() harnessOption { return func(c *harnessConfig) { c.silent =
 func withoutShadow() harnessOption { return func(c *harnessConfig) { c.noShadow = true } }
 
 func withTiming(f func(*timing)) harnessOption { return func(c *harnessConfig) { f(&c.timing) } }
+
+// stalledContainerInput makes the container stop reading its input until
+// gate is closed.
+func stalledContainerInput(gate chan struct{}) harnessOption {
+	return func(c *harnessConfig) { c.gate = gate }
+}
 
 // onContainerResize runs f in the container's resize, before it is logged.
 func onContainerResize(f func(cols, rows int)) harnessOption {
@@ -61,6 +68,7 @@ type harness struct {
 	toCont   *syncBuffer  // the container's input
 	stdout   *syncBuffer
 	closedIn atomic.Int32
+	stalled  atomic.Int32  // writes waiting for a stalled container input
 	done     chan struct{} // closed when Run returned
 	err      error         // Run's result, after done
 
@@ -95,7 +103,7 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 	h.term = New(Config{
 		Stdin:        h.stdin,
 		Stdout:       stdoutWriter{h},
-		ContainerIn:  h.toCont,
+		ContainerIn:  gatedWriter{h, hc.gate},
 		ContainerOut: h.out,
 		CloseInput:   func() error { h.closedIn.Add(1); return nil },
 		Resize:       h.recordResize,
@@ -121,6 +129,21 @@ type stdoutWriter struct{ h *harness }
 func (w stdoutWriter) Write(p []byte) (int, error) {
 	_, _ = w.h.stdout.Write(p)
 	return w.h.real.Write(p)
+}
+
+// gatedWriter is the container's input: it takes nothing while gate is
+// open.
+type gatedWriter struct {
+	h    *harness
+	gate chan struct{}
+}
+
+func (w gatedWriter) Write(p []byte) (int, error) {
+	if w.gate != nil {
+		w.h.stalled.Add(1)
+		<-w.gate
+	}
+	return w.h.toCont.Write(p)
 }
 
 func (h *harness) stop() {
