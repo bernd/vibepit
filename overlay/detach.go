@@ -21,7 +21,7 @@ func (t *Terminal) detachAt(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	switch {
-	case t.closed, t.isDone():
+	case t.isDone():
 		// isDone: Run is returning, and finish waits for this Show. Nothing
 		// may reach the terminal after the session output ended.
 		t.mu.Unlock()
@@ -85,7 +85,7 @@ func (t *Terminal) cutLocked(forced bool) {
 		return
 	}
 	c.forced = forced
-	c.barrierSent = !t.barrierUnsupported
+	c.barrierSent = !t.barrierUnsupportedLocked()
 	t.cut = c
 	t.attached = false
 	t.log = rawLog{}
@@ -111,19 +111,11 @@ func (t *Terminal) cutLocked(forced bool) {
 // advanceDetachLocked forwards p up to the byte where the shadow reaches
 // ground, cuts there, and returns the rest for the shadow and the log.
 func (t *Terminal) advanceDetachLocked(p []byte) []byte {
-	ground, err := t.shadow.AtGround()
-	if err == nil && !ground {
-		if len(p) == 0 {
-			return p
-		}
-		var n int
-		n, ground, err = t.shadow.WriteUntilGround(p)
-		if err == nil {
-			t.flushAnswersLocked()
-			_, _ = t.cfg.Stdout.Write(p[:n])
-			t.detach.forwarded += n
-			p = p[n:]
-		}
+	n, ground, err := t.writeToGroundLocked(p)
+	if n > 0 {
+		_, _ = t.cfg.Stdout.Write(p[:n])
+		t.detach.forwarded += n
+		p = p[n:]
 	}
 	switch {
 	case err != nil:
@@ -143,15 +135,7 @@ func (t *Terminal) resyncLocked(p []byte) []byte {
 	if len(p) == 0 {
 		return p
 	}
-	ground, err := t.shadow.AtGround()
-	if err == nil && !ground {
-		var n int
-		n, ground, err = t.shadow.WriteUntilGround(p)
-		if err == nil {
-			t.flushAnswersLocked()
-			p = p[n:]
-		}
-	}
+	n, ground, err := t.writeToGroundLocked(p)
 	if err != nil {
 		t.failLocked(err)
 		ground = true
@@ -159,10 +143,26 @@ func (t *Terminal) resyncLocked(p []byte) []byte {
 	if ground {
 		t.resyncing = false
 	}
-	return p
+	return p[n:]
 }
 
-// leave is T3. Holding t.mu, and the InputMux lock through Release, it
+// writeToGroundLocked feeds the shadow p up to the byte where its parser
+// reaches ground and returns how much it took: nothing when the parser is
+// at ground already, or on an error.
+func (t *Terminal) writeToGroundLocked(p []byte) (int, bool, error) {
+	if len(p) == 0 {
+		ground, err := t.shadow.AtGround()
+		return 0, ground, err
+	}
+	n, ground, err := t.shadow.WriteUntilGround(p)
+	if err != nil {
+		return 0, false, err
+	}
+	t.flushAnswersLocked()
+	return n, ground, nil
+}
+
+// leave is T3. Holding t.mu, and the inputMux lock through Release, it
 // writes the leave sequence, attaches output and hands input back, so no
 // container output and no input slips in between. drawn tells whether the
 // enter sequence was written.

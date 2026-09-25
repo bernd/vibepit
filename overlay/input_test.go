@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// muxHarness runs an InputMux over a chunkReader, recording what reaches
+// muxHarness runs an inputMux over a chunkReader, recording what reaches
 // the container.
 type muxHarness struct {
-	mux  *InputMux
+	mux  *inputMux
 	src  *chunkReader
 	cont *syncBuffer
 	err  chan error
@@ -23,7 +23,7 @@ type muxHarness struct {
 func newMuxHarness(t *testing.T) *muxHarness {
 	t.Helper()
 	h := &muxHarness{src: newChunkReader(), cont: &syncBuffer{}, err: make(chan error, 1)}
-	h.mux = NewInputMux(h.src, h.cont)
+	h.mux = newInputMux(h.src, h.cont)
 	go func() { h.err <- h.mux.Run() }()
 	t.Cleanup(func() {
 		h.src.close()

@@ -15,14 +15,6 @@ import (
 	"github.com/charmbracelet/colorprofile"
 )
 
-// Shadow configuration on the host. The snapshot uses only the visible
-// screen, and 64 KiB of continuation covers OSC 52 clipboard writes and
-// kitty graphics.
-const (
-	shadowScrollbackLines   = 1000
-	shadowContinuationBytes = 64 << 10
-)
-
 // barrierTimeoutsBeforeDegraded consecutive barrier timeouts switch T2 to
 // waiting for input silence.
 const barrierTimeoutsBeforeDegraded = 2
@@ -81,7 +73,7 @@ var errNoShadow = errors.New("no shadow terminal")
 type Terminal struct {
 	cfg     Config
 	timing  timing
-	in      *InputMux
+	in      *inputMux
 	toCont  *containerInput
 	environ []string
 	profile colorprofile.Profile
@@ -94,23 +86,22 @@ type Terminal struct {
 	// runs outside mu.
 	resizeMu sync.Mutex
 
-	mu                 sync.Mutex // guards everything below
-	shadow             *vt.Terminal
-	shadowErr          error // set: prompts are unavailable
-	cols, rows         int
-	attached           bool
-	detach             *detachReq // a T1 waiting for ground
-	cut                *cutState  // from T1 to T3
-	log                rawLog     // output since the cut
-	answers            []byte     // the shadow's answers during the current call
-	answered           bool       // the shadow answered a query while detached
-	resized            bool       // resized while detached
-	resyncing          bool       // drop output up to the next ground
-	misaligned         bool       // the shadow's cursor may not be the real one's
-	prog               *tea.Program
-	closed             bool
-	barrierTimeouts    int
-	barrierUnsupported bool
+	mu              sync.Mutex // guards everything below
+	shadow          *vt.Terminal
+	shadowErr       error // set: prompts are unavailable
+	cols, rows      int
+	attached        bool
+	detach          *detachReq // a T1 waiting for ground
+	cut             *cutState  // from T1 to T3
+	log             rawLog     // output since the cut
+	answers         []byte     // the shadow's answers during the current call
+	answered        bool       // the shadow answered a query while detached
+	resized         bool       // resized while detached
+	resyncing       bool       // drop output up to the next ground
+	misaligned      bool       // the shadow's cursor may not be the real one's
+	prog            *tea.Program
+	closed          bool
+	barrierTimeouts int
 	// snapshot is snapshotLeave; tests replace it to inject failures.
 	snapshot func(*vt.Terminal, *cutState, entered) ([]byte, bool, error)
 }
@@ -162,15 +153,16 @@ func New(cfg Config) *Terminal {
 	}
 	t.profile = colorprofile.Detect(cfg.Stdout, t.environ)
 	t.toCont = newContainerInput(cfg.ContainerIn)
-	t.in = NewInputMux(cfg.Stdin, t.toCont)
+	t.in = newInputMux(cfg.Stdin, t.toCont)
 	t.cols, t.rows = t.size()
 	if cfg.NoShadow {
 		t.shadowErr = errNoShadow
 		return t
 	}
+	// vt's defaults fit: the snapshot uses only the visible screen, and
+	// 64 KiB of continuation covers OSC 52 clipboard writes and kitty
+	// graphics.
 	sh, err := vt.NewTerminal(uint16(t.cols), uint16(t.rows),
-		vt.WithScrollbackLines(shadowScrollbackLines),
-		vt.WithContinuationMaxBytes(shadowContinuationBytes),
 		// Runs inside shadow calls, which all hold t.mu.
 		vt.WithWritePty(func(b []byte) { t.answers = append(t.answers, b...) }),
 	)
@@ -375,6 +367,12 @@ func (t *Terminal) size() (int, int) {
 }
 
 func (t *Terminal) isDone() bool { return isClosed(t.done) }
+
+// barrierUnsupportedLocked tells whether T2 waits for input silence
+// instead of the barrier reply. The count stops once it is reached.
+func (t *Terminal) barrierUnsupportedLocked() bool {
+	return t.barrierTimeouts >= barrierTimeoutsBeforeDegraded
+}
 
 func isClosed(ch <-chan struct{}) bool {
 	select {

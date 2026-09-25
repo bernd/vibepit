@@ -151,11 +151,6 @@ func (in *Instance) Alloc(n uint32) (uint32, error) {
 	return in.callPtr("ghostty_wasm_alloc", func() int32 { return in.mod.Xghostty_wasm_alloc(int32(n)) })
 }
 
-// Free is ghostty_wasm_free.
-func (in *Instance) Free(p, n uint32) error {
-	return in.guard("ghostty_wasm_free", func() { in.mod.Xghostty_wasm_free(int32(p), int32(n)) })
-}
-
 // mem is linear memory. A call can grow it and move the slice, so never
 // keep it across a call into the module.
 func (in *Instance) mem() []byte { return *in.mod.Xmemory().Slice() }
@@ -367,7 +362,7 @@ func (in *Instance) GetString(d TerminalData) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	b, err := in.read(p, sizeofString)
+	b, err := in.span(p, sizeofString)
 	if err != nil {
 		return "", err
 	}
@@ -375,8 +370,11 @@ func (in *Instance) GetString(d TerminalData) (string, error) {
 	if n == 0 {
 		return "", nil
 	}
-	s, err := in.read(ptr, n)
-	return string(s), err
+	s, err := in.span(ptr, n)
+	if err != nil {
+		return "", err
+	}
+	return string(s), nil
 }
 
 // GetMode reads GHOSTTY_TERMINAL_DATA_MODE. An unknown mode is
@@ -510,7 +508,7 @@ func (in *Instance) ContinuationAlloc() ([]byte, error) {
 // takeAlloc copies the (ptr, len) out-pair at out and releases the buffer
 // with ghostty_free. Empty output is (NULL, 0).
 func (in *Instance) takeAlloc(out uint32) ([]byte, error) {
-	b, err := in.read(out, 8)
+	b, err := in.span(out, 8)
 	if err != nil {
 		return nil, err
 	}

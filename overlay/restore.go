@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/bernd/vibepit/vt"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // modeKey names a mode: a DEC mode (CSI ? n h) unless ansi.
@@ -45,7 +47,6 @@ const (
 	// the app's flags.
 	keyboardReset = "\x1b[=0;1u\x1b[>4;0m"
 	clearScreen   = "\x1b[2J\x1b[H"
-	ris           = "\x1bc"
 )
 
 // cutState is the real terminal's state at the cut (T1), read from the
@@ -66,31 +67,58 @@ type cutState struct {
 var cutExtras = vt.Extras{ScrollRegion: true, Cursor: true, Style: true, Hyperlink: true, Protection: true, Charsets: true}
 
 func captureCut(sh *vt.Terminal) (*cutState, error) {
-	c := &cutState{modes: make(map[modeKey]bool)}
-	var err error
-	if c.alt, err = sh.AltScreen(); err != nil {
-		return nil, err
-	}
-	modes, err := sh.Modes()
+	s, err := readShadowState(sh)
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range modes {
-		c.modes[modeKey{m.Mode, m.ANSI}] = m.Value
-	}
-	if c.extras, err = sh.Format(vt.FormatOptions{Region: vt.RegionNone, Extras: cutExtras}); err != nil {
+	extras, err := sh.Format(vt.FormatOptions{Region: vt.RegionNone, Extras: cutExtras})
+	if err != nil {
 		return nil, err
 	}
-	if c.title, err = sh.Title(); err != nil {
-		return nil, err
+	return &cutState{
+		alt:    s.alt,
+		modes:  modeMap(s.modes),
+		extras: extras,
+		title:  s.title,
+		pwd:    s.pwd,
+		cursor: s.cursor,
+	}, nil
+}
+
+// shadowState is what both the cut and the snapshot read from the shadow
+// besides the formatter output.
+type shadowState struct {
+	alt        bool
+	modes      []vt.ModeState
+	title, pwd string
+	cursor     vt.CursorStyle
+}
+
+func readShadowState(sh *vt.Terminal) (shadowState, error) {
+	var s shadowState
+	var err error
+	if s.alt, err = sh.AltScreen(); err != nil {
+		return s, err
 	}
-	if c.pwd, err = sh.Pwd(); err != nil {
-		return nil, err
+	if s.modes, err = sh.Modes(); err != nil {
+		return s, err
 	}
-	if c.cursor, err = sh.CursorStyle(); err != nil {
-		return nil, err
+	if s.title, err = sh.Title(); err != nil {
+		return s, err
 	}
-	return c, nil
+	if s.pwd, err = sh.Pwd(); err != nil {
+		return s, err
+	}
+	s.cursor, err = sh.CursorStyle()
+	return s, err
+}
+
+func modeMap(modes []vt.ModeState) map[modeKey]bool {
+	m := make(map[modeKey]bool, len(modes))
+	for _, mode := range modes {
+		m[modeKey{mode.Mode, mode.ANSI}] = mode.Value
+	}
+	return m
 }
 
 // entered records what the enter sequence changed, so the leave undoes
@@ -173,27 +201,11 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error
 	if err := sh.SetMode(2026, false, false); err != nil {
 		return nil, false, err
 	}
-	alt, err := sh.AltScreen()
-	if err != nil {
-		return nil, false, err
-	}
-	modes, err := sh.Modes()
+	s, err := readShadowState(sh)
 	if err != nil {
 		return nil, false, err
 	}
 	screen, err := sh.Format(vt.FormatOptions{Unwrap: true, Extras: snapshotExtras, Region: vt.RegionScreen})
-	if err != nil {
-		return nil, false, err
-	}
-	title, err := sh.Title()
-	if err != nil {
-		return nil, false, err
-	}
-	pwd, err := sh.Pwd()
-	if err != nil {
-		return nil, false, err
-	}
-	cursor, err := sh.CursorStyle()
 	if err != nil {
 		return nil, false, err
 	}
@@ -205,25 +217,21 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error
 	case err != nil:
 		return nil, false, err
 	}
-	current := make(map[modeKey]bool, len(modes))
-	for _, m := range modes {
-		current[modeKey{m.Mode, m.ANSI}] = m.Value
-	}
 
 	var b bytes.Buffer
 	b.WriteString(leaveScreen(e))
 	// The real terminal is on the cut's screen now.
 	switch {
-	case c.alt && !alt:
+	case c.alt && !s.alt:
 		b.WriteString(screenSeq(c.modes, false))
-	case !c.alt && alt:
+	case !c.alt && s.alt:
 		// Enter before the clear, so the primary screen keeps its content.
 		// 1049 saves the cursor and pen: put back the cut's first, not the
 		// prompt's.
 		b.Write(rawLeave(c, entered{}, nil))
-		b.WriteString(screenSeq(current, true))
+		b.WriteString(screenSeq(modeMap(s.modes), true))
 	}
-	for _, m := range modes {
+	for _, m := range s.modes {
 		k := modeKey{m.Mode, m.ANSI}
 		if !m.ANSI && skipReconcile[m.Mode] {
 			continue
@@ -245,14 +253,14 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error
 	// After a forced cut the real terminal's title and directory are
 	// unknown: some terminals, ghostty among them, apply an OSC that CAN
 	// ends instead of dropping it.
-	if title != c.title || c.forced {
-		fmt.Fprintf(&b, "\x1b]2;%s\x1b\\", oscText(title))
+	if s.title != c.title || c.forced {
+		fmt.Fprintf(&b, "\x1b]2;%s\x1b\\", oscText(s.title))
 	}
-	if pwd != c.pwd || c.forced {
-		fmt.Fprintf(&b, "\x1b]7;%s\x1b\\", oscText(pwd))
+	if s.pwd != c.pwd || c.forced {
+		fmt.Fprintf(&b, "\x1b]7;%s\x1b\\", oscText(s.pwd))
 	}
-	if cursor != c.cursor {
-		b.WriteString(cursor.DECSCUSR())
+	if s.cursor != c.cursor {
+		b.WriteString(s.cursor.DECSCUSR())
 	}
 	b.Write(cont)
 	return b.Bytes(), resync, nil
@@ -260,7 +268,7 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error
 
 // resetLeave is the last resort when neither replay nor snapshot is
 // possible: RIS, after which the caller nudges the app to repaint.
-func resetLeave(e entered) []byte { return []byte(leaveScreen(e) + ris) }
+func resetLeave(e entered) []byte { return []byte(leaveScreen(e) + ansi.ResetInitialState) }
 
 // screenSeq switches the alternate screen on or off with the mode that is
 // set in modes, preferring 1049, so no mode bit stays set.
@@ -291,7 +299,7 @@ func modeSeq(k modeKey, on bool) string {
 // early.
 func oscText(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+		if unicode.IsControl(r) {
 			return -1
 		}
 		return r

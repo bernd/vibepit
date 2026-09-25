@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/vt"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,7 +155,7 @@ func TestResyncWhenTheContinuationIsUnavailable(t *testing.T) {
 	h := newHarness(t, 20, 5)
 	h.app("a")
 	h.detach()
-	h.app("\x1b]2;" + strings.Repeat("y", shadowContinuationBytes+1024))
+	h.app("\x1b]2;" + strings.Repeat("y", vt.DefaultContinuationMaxBytes+1024))
 	h.resize(24, 6) // rules out raw replay
 	h.term.leave(false)
 	h.locked(func(tm *Terminal) { assert.True(t, tm.resyncing) })
@@ -180,7 +181,7 @@ func TestShadowFailureLeavesWithAReset(t *testing.T) {
 	h.resize(24, 6) // rules out raw replay
 	h.locked(func(tm *Terminal) { tm.shadowErr = errors.New("trap") })
 	h.term.leave(false)
-	assert.True(t, strings.HasSuffix(h.stdout.String(), ris))
+	assert.True(t, strings.HasSuffix(h.stdout.String(), ansi.ResetInitialState))
 	require.Eventually(t, func() bool {
 		return slices.Equal(h.resizeLog(), []string{"24x6", "24x5", "24x6"})
 	}, 5*time.Second, time.Millisecond, "a size change makes the app repaint")
@@ -206,7 +207,7 @@ func TestSnapshotOutOfMemoryResetsWithoutFailingTheShadow(t *testing.T) {
 	h.detach()
 	h.resize(24, 6)
 	h.term.leave(false)
-	assert.True(t, strings.HasSuffix(h.stdout.String(), ris))
+	assert.True(t, strings.HasSuffix(h.stdout.String(), ansi.ResetInitialState))
 	h.locked(func(tm *Terminal) { assert.NoError(t, tm.shadowErr) })
 	h.detach()
 	h.term.leave(false)

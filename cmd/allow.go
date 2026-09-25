@@ -125,29 +125,18 @@ func AllowDNSCommand() *cli.Command {
 // and approve screens.
 func allowEntry(client *ControlClient, session *SessionInfo, entry proxy.LogEntry, save bool) (allowStatus, error) {
 	value := entry.Target().String()
-
-	var err error
-	switch entry.Source {
-	case proxy.SourceDNS:
-		_, err = client.AllowDNS([]string{value})
-	default:
-		_, err = client.AllowHTTP([]string{value})
+	live, persist := client.AllowHTTP, config.AppendAllowHTTP
+	if entry.Source == proxy.SourceDNS {
+		live, persist = client.AllowDNS, config.AppendAllowDNS
 	}
-	if err != nil {
+
+	if _, err := live([]string{value}); err != nil {
 		return statusNone, err
 	}
 	if !save {
 		return statusTemp, nil
 	}
-
-	projectPath := config.DefaultProjectPath(session.ProjectDir)
-	switch entry.Source {
-	case proxy.SourceDNS:
-		err = config.AppendAllowDNS(projectPath, []string{value})
-	default:
-		err = config.AppendAllowHTTP(projectPath, []string{value})
-	}
-	if err != nil {
+	if err := persist(config.DefaultProjectPath(session.ProjectDir), []string{value}); err != nil {
 		return statusNone, err
 	}
 	return statusSaved, nil

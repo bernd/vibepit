@@ -153,7 +153,7 @@ func TestModes(t *testing.T) {
 	require.Len(t, modes, 43)
 	assert.Contains(t, modes, vt.ModeState{Mode: 2004, Value: true})
 	assert.Contains(t, modes, vt.ModeState{Mode: 4, ANSI: true, Value: true})
-	assert.Contains(t, modes, vt.ModeState{Mode: 7, Value: true, Default: true})
+	assert.Contains(t, modes, vt.ModeState{Mode: 7, Value: true})
 
 	on, err := term.Mode(2004, false)
 	require.NoError(t, err)

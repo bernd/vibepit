@@ -3,6 +3,7 @@ package overlay
 import (
 	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
@@ -23,7 +24,8 @@ type filter struct {
 	w       io.Writer
 	p       *ansi.Parser
 	pending []byte
-	cr      bool // the last byte passed was CR
+	out     []byte // reused across writes; w must not keep it
+	cr      bool   // the last byte passed was CR
 }
 
 // NewFilter returns a writer that passes only the output a prompt may send
@@ -37,9 +39,12 @@ func NewFilter(w io.Writer) io.Writer {
 }
 
 func (f *filter) Write(b []byte) (int, error) {
-	data := append(f.pending, b...)
-	f.pending = nil
-	var out []byte
+	data := b
+	if len(f.pending) > 0 {
+		f.pending = append(f.pending, b...)
+		data, f.pending = f.pending, nil
+	}
+	out := f.out[:0]
 	for len(data) > 0 {
 		if data[0] >= utf8.RuneSelf && !utf8.FullRune(data) {
 			// A character split across writes: wait for the rest.
@@ -70,6 +75,7 @@ func (f *filter) Write(b []byte) (int, error) {
 		}
 		data = data[n:]
 	}
+	f.out = out
 	if len(out) > 0 {
 		if _, err := f.w.Write(out); err != nil {
 			return 0, err
@@ -97,7 +103,7 @@ func allowed(seq []byte, p *ansi.Parser) bool {
 		if r == utf8.RuneError && size <= 1 {
 			return false
 		}
-		return r >= 0x20 && (r < 0x80 || r >= 0xa0) // no C1 controls
+		return !unicode.IsControl(r) // no C1 controls
 	}
 }
 

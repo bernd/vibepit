@@ -1,17 +1,16 @@
 package vt
 
 import (
-	"fmt"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bernd/vibepit/vt/internal/ghostty"
 )
 
-// ModeState is one terminal mode: its current and its default value.
+// ModeState is one terminal mode and its current value.
 type ModeState struct {
-	Mode    uint16
-	ANSI    bool // an ANSI mode (CSI n h) rather than a DEC mode (CSI ? n h)
-	Value   bool
-	Default bool
+	Mode  uint16
+	ANSI  bool // an ANSI mode (CSI n h) rather than a DEC mode (CSI ? n h)
+	Value bool
 }
 
 // CursorShape is the shape selected by DECSCUSR.
@@ -43,7 +42,7 @@ func (s CursorStyle) DECSCUSR() string {
 	if s.Blinking {
 		n--
 	}
-	return fmt.Sprintf("\x1b[%d q", n)
+	return ansi.SetCursorStyle(n)
 }
 
 func cursorShape(v ghostty.CursorVisualStyle) CursorShape {

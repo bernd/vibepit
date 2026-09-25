@@ -44,9 +44,9 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		if err != nil {
 			return err
 		}
-		defer prompter.Stop()
+		defer prompter.stop()
 		tui.Status("Attaching", "to running session in %s", projectRoot)
-		return client.ExecSession(ctx, existing.ContainerID, prompter.AttachOptions()...)
+		return client.ExecSession(ctx, existing.ContainerID, prompter.opts...)
 	}
 
 	infra, cleanups, err := startSessionInfra(ctx, cmd, client, projectRoot, u, infraOptions{})
@@ -75,10 +75,10 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer prompter.Stop()
+	defer prompter.stop()
 
 	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	return client.AttachAndStartSession(ctx, sandboxContainer, prompter.AttachOptions()...)
+	return client.AttachAndStartSession(ctx, sandboxContainer, prompter.opts...)
 }

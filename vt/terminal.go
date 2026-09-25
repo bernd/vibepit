@@ -240,7 +240,7 @@ func (t *Terminal) Modes() ([]ModeState, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, ModeState{Mode: m.Value, ANSI: m.ANSI, Value: v, Default: m.Default})
+			out = append(out, ModeState{Mode: m.Value, ANSI: m.ANSI, Value: v})
 		}
 		return out, nil
 	})

@@ -32,17 +32,10 @@ func (t *Terminal) Show(ctx context.Context, model tea.Model) error {
 // awaitBarrier is T2. After barrierTimeoutsBeforeDegraded timeouts in a
 // row, the session waits for input silence instead.
 func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := t.untilEnd(ctx, nil)
 	defer cancel()
-	go func() {
-		select {
-		case <-t.done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
 	t.mu.Lock()
-	degraded := t.barrierUnsupported
+	degraded := t.barrierUnsupportedLocked()
 	t.mu.Unlock()
 	var in io.Reader
 	var err error
@@ -64,8 +57,7 @@ func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 		t.barrierTimeouts = 0
 	case errors.Is(err, ErrBarrierTimeout):
 		t.barrierTimeouts++
-		if t.barrierTimeouts == barrierTimeoutsBeforeDegraded {
-			t.barrierUnsupported = true
+		if t.barrierUnsupportedLocked() {
 			t.logf("overlay: the terminal doesn't answer DSR 5n; prompts now take input after %v without typing, so a reply or key in flight may reach the wrong side", t.timing.silence)
 		}
 	}
@@ -81,17 +73,9 @@ func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model)
 	t.mu.Unlock()
 	defer t.leave(true)
 
-	pctx, cancel := context.WithCancel(ctx)
+	// The session ending cancels the program.
+	pctx, cancel := t.untilEnd(ctx, t.in.Done())
 	defer cancel()
-	go func() {
-		// The session ending cancels the program.
-		select {
-		case <-t.done:
-		case <-t.in.Done():
-		case <-pctx.Done():
-		}
-		cancel()
-	}()
 	p := tea.NewProgram(model,
 		tea.WithContext(pctx),
 		tea.WithInput(in),
@@ -124,4 +108,19 @@ func (t *Terminal) setProgram(p *tea.Program) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.prog = p
+}
+
+// untilEnd derives a context that is also cancelled when the session's
+// output ends or input closes; a nil input isn't watched.
+func (t *Terminal) untilEnd(ctx context.Context, input <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-t.done:
+		case <-input:
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
+	return ctx, cancel
 }

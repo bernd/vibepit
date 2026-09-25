@@ -82,7 +82,7 @@ func (b *LogBuffer) Entries() []LogEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return b.entriesLocked()
+	return b.lastLocked(b.cap)
 }
 
 // TailSize is how many entries a client gets when it asks for the log
@@ -124,20 +124,6 @@ func (b *LogBuffer) lastLocked(n int) []LogEntry {
 	start := (b.pos - n + b.cap) % b.cap
 	copied := copy(result, b.entries[start:min(start+n, b.cap)])
 	copy(result[copied:], b.entries[:n-copied])
-	return result
-}
-
-// entriesLocked returns all entries in chronological order. Caller must hold b.mu.
-func (b *LogBuffer) entriesLocked() []LogEntry {
-	if !b.full {
-		result := make([]LogEntry, b.pos)
-		copy(result, b.entries[:b.pos])
-		return result
-	}
-
-	result := make([]LogEntry, b.cap)
-	copy(result, b.entries[b.pos:])
-	copy(result[b.cap-b.pos:], b.entries[:b.pos])
 	return result
 }
 

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -10,10 +11,7 @@ import (
 // sandbox requests, so it cannot inject terminal escape sequences.
 func SanitizeText(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '\t' {
-			return r
-		}
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == utf8.RuneError {
+		if r != '\t' && (unicode.IsControl(r) || r == utf8.RuneError) {
 			return -1
 		}
 		return r

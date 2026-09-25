@@ -176,7 +176,7 @@ func TestShowBarrierTimeout(t *testing.T) {
 		assert.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrBarrierTimeout)
 	}
 	assert.NotContains(t, h.stdout.String(), "\x1b[?1047h", "nothing was drawn")
-	h.locked(func(tm *Terminal) { assert.True(t, tm.barrierUnsupported) })
+	h.locked(func(tm *Terminal) { assert.True(t, tm.barrierUnsupportedLocked()) })
 	h.prompt(nil)
 	assert.Equal(t, barrierTimeoutsBeforeDegraded, strings.Count(h.stdout.String(), barrierQuery),
 		"no barrier query once degraded")

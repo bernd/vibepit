@@ -118,50 +118,32 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 const prompterStopGrace = 3 * time.Second
 
 // startPrompterLoop runs runBlockPrompter in the background. The returned
-// stop function cancels it and waits, up to grace, for it to return, so an
-// open prompt is closed before the CLI exits.
-func startPrompterLoop(ctx context.Context, cc *ControlClient, interval, grace time.Duration, prompt promptFunc) func() {
+// stop function cancels it and waits, up to prompterStopGrace, for it to
+// return, so an open prompt is closed before the CLI exits.
+func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc) func() {
 	pctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runBlockPrompter(pctx, cc, interval, prompt)
+		runBlockPrompter(pctx, cc, pollInterval, prompt)
 	}()
 	return func() {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(grace):
+		case <-time.After(prompterStopGrace):
 		}
 	}
-}
-
-// prompter shows the approve screen over the session.
-type prompter struct {
-	term    *overlay.Terminal
-	session *SessionInfo
-	client  *ControlClient
-}
-
-func (p *prompter) Show(ctx context.Context, entry proxy.LogEntry) error {
-	header := &tui.HeaderInfo{ProjectDir: p.session.ProjectDir, SessionID: p.session.SessionID}
-	return p.term.Show(ctx, tui.NewWindow(header, newApproveScreen(p.session, p.client, entry)))
 }
 
 // blockPrompter is the prompting set up for one attach: the attach options
 // that hand it the session's terminal, and a stop function.
 type blockPrompter struct {
-	opts []ctr.AttachOption
-	stop func()
+	opts []ctr.AttachOption // to pass to the session attach
+	stop func()             // ends polling and closes an open prompt; always safe to call
 }
 
 var noBlockPrompter = &blockPrompter{stop: func() {}}
-
-// AttachOptions returns the options to pass to the session attach.
-func (bp *blockPrompter) AttachOptions() []ctr.AttachOption { return bp.opts }
-
-// Stop ends polling and closes an open prompt. Always safe to call.
-func (bp *blockPrompter) Stop() { bp.stop() }
 
 // startBlockPrompter sets up prompting when --prompt is set. The session
 // and the control client are resolved before the attach takes over the
@@ -192,8 +174,12 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 		if stopped || stopLoop != nil {
 			return
 		}
-		p := &prompter{term: t, session: session, client: cc}
-		stopLoop = startPrompterLoop(ctx, cc, pollInterval, prompterStopGrace, loggedPrompt(logger, p.Show))
+		// show puts the approve screen over the session.
+		show := func(ctx context.Context, entry proxy.LogEntry) error {
+			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
+			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, entry)))
+		}
+		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(logger, show))
 	}
 	tui.Status("Prompting", "for blocked connections (log: %s)", logPath)
 	return &blockPrompter{

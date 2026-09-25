@@ -24,8 +24,9 @@ type containerInput struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
 	buf    []byte
-	busy   bool // a write to the container is in flight
-	failed bool // the container's input is gone; drop everything
+	spare  []byte // the buffer of the last write, reused for the next queue
+	busy   bool   // a write to the container is in flight
+	failed bool   // the container's input is gone; drop everything
 	closed bool
 }
 
@@ -61,11 +62,15 @@ func (c *containerInput) run() {
 			return
 		}
 		p := c.buf
-		c.buf, c.busy = nil, true
+		c.buf, c.spare, c.busy = c.spare, nil, true
 		c.mu.Unlock()
 		_, err := c.w.Write(p)
 		c.mu.Lock()
 		c.busy = false
+		if cap(p) <= containerInputRoom {
+			// Larger buffers only come from bursts; let them go.
+			c.spare = p[:0]
+		}
 		if err != nil {
 			c.failed = true
 			c.buf = nil

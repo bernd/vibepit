@@ -29,10 +29,10 @@ const (
 	toPrompt
 )
 
-// InputMux is the only reader of stdin. Input goes to the container except
+// inputMux is the only reader of stdin. Input goes to the container except
 // while a prompt owns it, and it changes hands at exact bytes: at the
 // barrier reply (T2) and under the caller's lock (T3).
-type InputMux struct {
+type inputMux struct {
 	src       io.Reader
 	container io.Writer
 	done      chan struct{}
@@ -64,16 +64,16 @@ type posWait struct {
 // query in time.
 var errPositionTimeout = errors.New("overlay: terminal did not answer the cursor position query")
 
-// NewInputMux routes src to container until a prompt takes the input.
-func NewInputMux(src io.Reader, container io.Writer) *InputMux {
-	return &InputMux{src: src, container: container, done: make(chan struct{})}
+// newInputMux routes src to container until a prompt takes the input.
+func newInputMux(src io.Reader, container io.Writer) *inputMux {
+	return &inputMux{src: src, container: container, done: make(chan struct{})}
 }
 
 // Done is closed when stdin has ended.
-func (m *InputMux) Done() <-chan struct{} { return m.done }
+func (m *inputMux) Done() <-chan struct{} { return m.done }
 
 // Run reads stdin until it ends. It returns nil at EOF.
-func (m *InputMux) Run() error {
+func (m *inputMux) Run() error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := m.src.Read(buf)
@@ -102,18 +102,20 @@ func (m *InputMux) Run() error {
 
 // route sends p to the owner of the input. It reports whether the input
 // still belongs to the container.
-func (m *InputMux) route(p []byte) bool {
+func (m *inputMux) route(p []byte) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
-	if only, _ := reports(p); !only {
+	only, focus := reports(p)
+	if !only {
 		m.lastInput = now
 	}
 	if m.pos != nil && m.pos.active {
 		p = m.scanPosition(p, now)
+		_, focus = reports(p)
 	}
 	if m.mode == toContainer && !now.Before(m.stripUntil) {
-		m.write(p)
+		m.send(p, focus)
 		return true
 	}
 	var plain []byte
@@ -155,14 +157,14 @@ type roomWaiter interface{ waitRoom() }
 // waitContainer is the stdin pump's backpressure: it waits, outside the
 // lock, until a queueing container input has room. The prompt's input
 // never waits for the container.
-func (m *InputMux) waitContainer() {
+func (m *inputMux) waitContainer() {
 	if w, ok := m.container.(roomWaiter); ok {
 		w.waitRoom()
 	}
 }
 
 // reply handles a complete barrier reply.
-func (m *InputMux) reply() {
+func (m *inputMux) reply() {
 	switch m.mode {
 	case draining:
 		// T2: the terminal answers in order, so every reply it owed the
@@ -181,11 +183,16 @@ func (m *InputMux) reply() {
 }
 
 // write sends p to the current owner of the input.
-func (m *InputMux) write(p []byte) {
+func (m *inputMux) write(p []byte) {
+	_, focus := reports(p)
+	m.send(p, focus)
+}
+
+// send is write with p's last focus report already known.
+func (m *inputMux) send(p []byte, focus byte) {
 	if len(p) == 0 {
 		return
 	}
-	_, focus := reports(p)
 	if m.mode == toPrompt {
 		if focus != 0 {
 			m.promptFocus = focus
@@ -199,7 +206,7 @@ func (m *InputMux) write(p []byte) {
 	_, _ = m.container.Write(p)
 }
 
-func (m *InputMux) flushHeldLocked() {
+func (m *inputMux) flushHeldLocked() {
 	if m.held > 0 {
 		m.write([]byte(barrierReply[:m.held]))
 		m.held = 0
@@ -209,7 +216,7 @@ func (m *InputMux) flushHeldLocked() {
 // Drain starts T1. Input stays with the container until the barrier
 // reply, which AwaitBarrier waits for. Call it before the barrier query
 // goes out.
-func (m *InputMux) Drain() {
+func (m *inputMux) Drain() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mode = draining
@@ -221,39 +228,46 @@ func (m *InputMux) Drain() {
 
 // AwaitBarrier is T2: it waits for the barrier reply and returns the
 // prompt's input. It fails with ErrBarrierTimeout after timeout.
-func (m *InputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.Reader, error) {
+func (m *inputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.Reader, error) {
 	m.mu.Lock()
 	barrier, prompt := m.barrier, m.prompt
 	m.mu.Unlock()
+	if err := m.await(ctx, barrier, timeout, ErrBarrierTimeout); err != nil {
+		return nil, err
+	}
+	return prompt, nil
+}
+
+// await waits until reply is closed, or fails with timeoutErr after
+// timeout, with ctx, or at the end of stdin. A reply that won the race
+// against the failure still counts.
+func (m *inputMux) await(ctx context.Context, reply <-chan struct{}, timeout time.Duration, timeoutErr error) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	var err error
 	select {
-	case <-barrier:
-		return prompt, nil
+	case <-reply:
+		return nil
 	case <-timer.C:
-		err = ErrBarrierTimeout
+		err = timeoutErr
 	case <-ctx.Done():
 		err = ctx.Err()
 	case <-m.done:
 		err = ErrClosed
 	}
-	select {
-	case <-barrier:
-		// The reply won the race.
-		return prompt, nil
-	default:
-		return nil, err
+	if isClosed(reply) {
+		return nil
 	}
+	return err
 }
 
 // AwaitSilence is T2 for a terminal that doesn't answer the barrier
 // query: input moves to the prompt after quiet without input, or after
-// max, so typing that never pauses can't hold the prompt back. Mouse and
+// limit, so typing that never pauses can't hold the prompt back. Mouse and
 // focus reports don't count as input: the terminal sends them while the
 // mouse moves. A reply or key in flight may land on the wrong side.
-func (m *InputMux) AwaitSilence(ctx context.Context, quiet, max time.Duration) (io.Reader, error) {
-	deadline := time.Now().Add(max)
+func (m *inputMux) AwaitSilence(ctx context.Context, quiet, limit time.Duration) (io.Reader, error) {
+	deadline := time.Now().Add(limit)
 	for {
 		m.mu.Lock()
 		wait := min(quiet-time.Since(m.lastInput), time.Until(deadline))
@@ -283,7 +297,7 @@ func (m *InputMux) AwaitSilence(ctx context.Context, quiet, max time.Duration) (
 // strip drops one that arrives within that time, so it can't reach the
 // app. When the app takes focus reports (focusReports), the latest one the
 // prompt got goes to the app, unless the app already had that focus.
-func (m *InputMux) Release(strip time.Duration, focusReports bool, leave func()) {
+func (m *inputMux) Release(strip time.Duration, focusReports bool, leave func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	leave()
@@ -305,7 +319,7 @@ func (m *InputMux) Release(strip time.Duration, focusReports bool, leave func())
 
 // ExpectPosition starts watching stdin for the reply to a cursor position
 // query. Call it before the query goes out.
-func (m *InputMux) ExpectPosition() {
+func (m *inputMux) ExpectPosition() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pos = &posWait{active: true, reply: make(chan struct{})}
@@ -315,32 +329,19 @@ func (m *InputMux) ExpectPosition() {
 // the 1-based cursor position. It fails with errPositionTimeout after
 // timeout; a reply that arrives within strip after that is dropped, so it
 // can't reach the app.
-func (m *InputMux) AwaitPosition(ctx context.Context, timeout, strip time.Duration) (int, int, error) {
+func (m *inputMux) AwaitPosition(ctx context.Context, timeout, strip time.Duration) (int, int, error) {
 	m.mu.Lock()
 	w := m.pos
 	m.mu.Unlock()
 	if w == nil {
 		return 0, 0, errPositionTimeout
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	var err error
-	select {
-	case <-w.reply:
-	case <-timer.C:
-		err = errPositionTimeout
-	case <-ctx.Done():
-		err = ctx.Err()
-	case <-m.done:
-		err = ErrClosed
-	}
+	err := m.await(ctx, w.reply, timeout, errPositionTimeout)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	select {
-	case <-w.reply:
-		// The reply won the race.
+	// Checked again under the lock: the reply may have come since.
+	if isClosed(w.reply) {
 		return w.row, w.col, nil
-	default:
 	}
 	if w.active {
 		m.write(w.held)
@@ -358,7 +359,7 @@ func (m *InputMux) AwaitPosition(ctx context.Context, timeout, strip time.Durati
 // watching after it. A possible reply prefix waits across reads only until
 // AwaitPosition gives up. A late reply must arrive in one read, so a held
 // ESC can't delay the Escape key.
-func (m *InputMux) scanPosition(p []byte, now time.Time) []byte {
+func (m *inputMux) scanPosition(p []byte, now time.Time) []byte {
 	w := m.pos
 	late := !w.until.IsZero()
 	if late && !now.Before(w.until) {
