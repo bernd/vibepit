@@ -144,6 +144,31 @@ func TestShowKeysGoToThePrompt(t *testing.T) {
 	h.waitContainer("beforeafter")
 }
 
+func TestShowPassesOnFocusChanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		before string // app output before the prompt
+		during string // app output while prompting
+		want   string
+	}{
+		{name: "app takes focus reports", before: "\x1b[?1004h", want: "\x1b[O"},
+		{name: "app takes no focus reports"},
+		{name: "app turned them off while prompting", before: "\x1b[?1004h", during: "\x1b[?1004l"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, 20, 6)
+			h.app(tt.before)
+			h.prompt(func() {
+				h.app(tt.during)
+				h.keys("\x1b[O")
+			})
+			h.keys("after")
+			h.waitContainer(tt.want + "after")
+		})
+	}
+}
+
 func TestShowBarrierTimeout(t *testing.T) {
 	h := newHarness(t, 20, 6, silentTerminal(), withTiming(func(tm *timing) { tm.barrierWait = 50 * time.Millisecond }))
 	h.app("$ ")

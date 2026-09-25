@@ -56,6 +56,7 @@ type timing struct {
 	groundBytes  int           // T1: most bytes forwarded while waiting for ground
 	barrierWait  time.Duration // T2: wait for the barrier reply
 	silence      time.Duration // T2 without barrier support: input quiet time
+	silenceMax   time.Duration // T2 without barrier support: longest wait for quiet
 	lateStrip    time.Duration // after a barrier or position timeout: drop a late reply
 	nudgeGap     time.Duration // between the two resizes of a repaint nudge
 	logMax       int           // raw log cap
@@ -67,6 +68,7 @@ var defaultTiming = timing{
 	groundBytes:  64 << 10,
 	barrierWait:  500 * time.Millisecond,
 	silence:      100 * time.Millisecond,
+	silenceMax:   time.Second,
 	lateStrip:    10 * time.Second,
 	nudgeGap:     100 * time.Millisecond,
 	logMax:       4 << 20,

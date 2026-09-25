@@ -180,7 +180,7 @@ func (t *Terminal) leave(drawn bool) {
 		strip = t.timing.lateStrip
 	}
 	var nudge bool
-	t.in.Release(strip, func() {
+	t.in.Release(strip, t.reportsFocusLocked(), func() {
 		out, resync, reset := t.leaveBytesLocked(c, e, drawn)
 		_, _ = t.cfg.Stdout.Write(out)
 		t.attached = true
@@ -219,6 +219,17 @@ func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) (out []b
 		t.logf("overlay: snapshot restore failed, resetting the terminal: %v", err)
 	}
 	return resetLeave(e), false, true
+}
+
+// reportsFocusLocked tells whether the app takes focus reports (mode
+// 1004), so the ones the prompt got while it owned the input are the
+// app's too.
+func (t *Terminal) reportsFocusLocked() bool {
+	if t.shadowErr != nil {
+		return false
+	}
+	on, err := t.shadow.Mode(1004, false)
+	return err == nil && on
 }
 
 // nudge makes the app repaint after a reset: a size change delivers

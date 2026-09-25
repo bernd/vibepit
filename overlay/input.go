@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -42,8 +43,12 @@ type InputMux struct {
 	prompt     *bufPipe
 	barrier    chan struct{} // closed at the barrier reply
 	stripUntil time.Time     // until then, drop one barrier reply
-	lastInput  time.Time
-	pos        *posWait // the latest cursor position query
+	lastInput  time.Time     // the latest input other than reports
+	appFocus   byte          // the latest focus report the container got: 'I', 'O' or 0
+	// promptFocus is the latest focus report the current prompt got,
+	// which Release passes on to the app.
+	promptFocus byte
+	pos         *posWait // the latest cursor position query
 }
 
 // posWait watches stdin for the reply to a cursor position query.
@@ -101,7 +106,9 @@ func (m *InputMux) route(p []byte) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
-	m.lastInput = now
+	if only, _ := reports(p); !only {
+		m.lastInput = now
+	}
 	if m.pos != nil && m.pos.active {
 		p = m.scanPosition(p, now)
 	}
@@ -178,9 +185,16 @@ func (m *InputMux) write(p []byte) {
 	if len(p) == 0 {
 		return
 	}
+	_, focus := reports(p)
 	if m.mode == toPrompt {
+		if focus != 0 {
+			m.promptFocus = focus
+		}
 		_, _ = m.prompt.Write(p)
 		return
+	}
+	if focus != 0 {
+		m.appFocus = focus
 	}
 	_, _ = m.container.Write(p)
 }
@@ -234,12 +248,15 @@ func (m *InputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.
 }
 
 // AwaitSilence is T2 for a terminal that doesn't answer the barrier
-// query: input moves to the prompt after quiet without input. A reply or
-// key in flight may land on the wrong side.
-func (m *InputMux) AwaitSilence(ctx context.Context, quiet time.Duration) (io.Reader, error) {
+// query: input moves to the prompt after quiet without input, or after
+// max, so typing that never pauses can't hold the prompt back. Mouse and
+// focus reports don't count as input: the terminal sends them while the
+// mouse moves. A reply or key in flight may land on the wrong side.
+func (m *InputMux) AwaitSilence(ctx context.Context, quiet, max time.Duration) (io.Reader, error) {
+	deadline := time.Now().Add(max)
 	for {
 		m.mu.Lock()
-		wait := quiet - time.Since(m.lastInput)
+		wait := min(quiet-time.Since(m.lastInput), time.Until(deadline))
 		if wait <= 0 {
 			m.flushHeldLocked()
 			m.mode = toPrompt
@@ -264,14 +281,19 @@ func (m *InputMux) AwaitSilence(ctx context.Context, quiet time.Duration) (io.Re
 // Release is T3: it runs leave while no input can be routed, then hands
 // input back to the container. When the barrier reply is still pending,
 // strip drops one that arrives within that time, so it can't reach the
-// app.
-func (m *InputMux) Release(strip time.Duration, leave func()) {
+// app. When the app takes focus reports (focusReports), the latest one the
+// prompt got goes to the app, unless the app already had that focus.
+func (m *InputMux) Release(strip time.Duration, focusReports bool, leave func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	leave()
 	pending := m.mode == draining
 	m.flushHeldLocked()
 	m.mode = toContainer
+	if focusReports && m.promptFocus != 0 && m.promptFocus != m.appFocus {
+		m.write([]byte{0x1b, '[', m.promptFocus})
+	}
+	m.promptFocus = 0
 	if m.prompt != nil {
 		_ = m.prompt.Close()
 		m.prompt = nil
@@ -409,4 +431,77 @@ func matchPosition(b []byte) (state, row, col int) {
 		}
 	}
 	return posPrefix, 0, 0
+}
+
+// reports scans p for mouse and focus reports, which the terminal sends
+// without a key being typed. only tells whether p holds nothing else;
+// focus is the final byte of the last focus report, 'I' or 'O', or 0.
+// Anything unrecognized, a report split across reads included, counts as
+// input.
+func reports(p []byte) (only bool, focus byte) {
+	if bytes.IndexByte(p, 0x1b) < 0 {
+		return len(p) == 0, 0
+	}
+	only = true
+	for i := 0; i < len(p); {
+		n, f := reportAt(p[i:])
+		if n == 0 {
+			only = false
+			i++
+			continue
+		}
+		if f != 0 {
+			focus = f
+		}
+		i += n
+	}
+	return only, focus
+}
+
+// reportAt returns the length of the mouse or focus report at the start of
+// p, or 0, and the final byte of a focus report.
+func reportAt(p []byte) (n int, focus byte) {
+	if len(p) < 3 || p[0] != 0x1b || p[1] != '[' {
+		return 0, 0
+	}
+	switch c := p[2]; c {
+	case 'I', 'O':
+		return 3, c
+	case 'M':
+		// X10: three bytes from 32 up.
+		if len(p) >= 6 && p[3] >= 32 && p[4] >= 32 && p[5] >= 32 {
+			return 6, 0
+		}
+	case '<':
+		// SGR (1006): CSI < b ; x ; y M, or m for a release.
+		if k := 3 + mouseParams(p[3:]); k > 3 && k < len(p) && (p[k] == 'M' || p[k] == 'm') {
+			return k + 1, 0
+		}
+	default:
+		// urxvt (1015): CSI b ; x ; y M.
+		if k := 2 + mouseParams(p[2:]); k > 2 && k < len(p) && p[k] == 'M' {
+			return k + 1, 0
+		}
+	}
+	return 0, 0
+}
+
+// mouseParams returns the length of the three semicolon-separated numbers
+// at the start of p, or 0.
+func mouseParams(p []byte) int {
+	count, digits := 1, 0
+	for i, c := range p {
+		switch {
+		case c >= '0' && c <= '9':
+			digits++
+		case c == ';' && digits > 0 && count < 3:
+			count, digits = count+1, 0
+		default:
+			if count == 3 && digits > 0 {
+				return i
+			}
+			return 0
+		}
+	}
+	return 0
 }

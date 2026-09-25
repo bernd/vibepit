@@ -23,6 +23,7 @@ var testTiming = timing{
 	groundBytes:  64 << 10,
 	barrierWait:  5 * time.Second,
 	silence:      30 * time.Millisecond,
+	silenceMax:   5 * time.Second,
 	lateStrip:    5 * time.Second,
 	nudgeGap:     time.Millisecond,
 	logMax:       4 << 20,

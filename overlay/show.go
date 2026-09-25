@@ -47,7 +47,7 @@ func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 	var in io.Reader
 	var err error
 	if degraded {
-		in, err = t.in.AwaitSilence(ctx, t.timing.silence)
+		in, err = t.in.AwaitSilence(ctx, t.timing.silence, t.timing.silenceMax)
 	} else {
 		in, err = t.in.AwaitBarrier(ctx, t.timing.barrierWait)
 	}
