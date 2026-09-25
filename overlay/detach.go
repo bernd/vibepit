@@ -226,6 +226,9 @@ func (t *Terminal) nudge() {
 	if t.cfg.Resize == nil {
 		return
 	}
+	// A resize in the gap waits, so the nudge can't put back an old size.
+	t.resizeMu.Lock()
+	defer t.resizeMu.Unlock()
 	t.mu.Lock()
 	cols, rows := t.cols, t.rows
 	t.mu.Unlock()

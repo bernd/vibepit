@@ -261,3 +261,17 @@ func TestDetachWhileTheSessionEnds(t *testing.T) {
 	assert.ErrorIs(t, err, ErrClosed)
 	assert.Equal(t, written, h.stdout.String(), "nothing written")
 }
+
+func TestNudgeKeepsAResizeDuringItsGap(t *testing.T) {
+	h := newHarness(t, 20, 5, withTiming(func(tm *timing) { tm.nudgeGap = 100 * time.Millisecond }))
+	nudged := make(chan struct{})
+	go func() {
+		h.term.nudge()
+		close(nudged)
+	}()
+	require.Eventually(t, func() bool { return slices.Contains(h.resizeLog(), "20x4") }, 5*time.Second, time.Millisecond)
+	h.resize(30, 8) // SIGWINCH in the nudge's gap
+	<-nudged
+	log := h.resizeLog()
+	assert.Equal(t, "30x8", log[len(log)-1], "the container ends at the real size")
+}

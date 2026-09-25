@@ -84,8 +84,9 @@ type Terminal struct {
 	done    chan struct{} // closed when Run returns
 
 	showMu sync.Mutex // one Show at a time; finish takes it to wait for one
-	// resizeMu orders whole resizes, so the shadow and the container end at
-	// the same, latest size. The container's resize runs outside mu.
+	// resizeMu orders whole resizes and repaint nudges, so the shadow and
+	// the container end at the same, latest size. The container's resize
+	// runs outside mu.
 	resizeMu sync.Mutex
 
 	mu                 sync.Mutex // guards everything below
