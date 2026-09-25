@@ -432,7 +432,7 @@ func (c *Client) FindProxyIP(ctx context.Context) (string, error) {
 // client. When the user exits the shell, the container's entrypoint exits and
 // the container stops on its own. Returns an *ExitError if the container exits
 // with a non-zero status code.
-func (c *Client) AttachAndStartSession(ctx context.Context, containerID string) error {
+func (c *Client) AttachAndStartSession(ctx context.Context, containerID string, opts ...AttachOption) error {
 	resp, err := c.docker.ContainerAttach(ctx, containerID, container.AttachOptions{
 		Stream: true,
 		Stdin:  true,
@@ -460,7 +460,7 @@ func (c *Client) AttachAndStartSession(ctx context.Context, containerID string) 
 		})
 	}
 
-	if err := runTTYSession(ctx, resp, resizeFn); err != nil {
+	if err := runTTYSession(ctx, resp, resizeFn, buildAttachOptions(opts)); err != nil {
 		return err
 	}
 
@@ -481,7 +481,7 @@ func (c *Client) AttachAndStartSession(ctx context.Context, containerID string) 
 // ExecSession starts a new interactive shell inside a running container.
 // Used when reattaching to an existing session. Returns an *ExitError if
 // the shell exits with a non-zero status code.
-func (c *Client) ExecSession(ctx context.Context, containerID string) error {
+func (c *Client) ExecSession(ctx context.Context, containerID string, opts ...AttachOption) error {
 	size := terminalSize()
 
 	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
@@ -511,7 +511,7 @@ func (c *Client) ExecSession(ctx context.Context, containerID string) error {
 		})
 	}
 
-	if err := runTTYSession(ctx, hijack, resizeFn); err != nil {
+	if err := runTTYSession(ctx, hijack, resizeFn, buildAttachOptions(opts)); err != nil {
 		return err
 	}
 
