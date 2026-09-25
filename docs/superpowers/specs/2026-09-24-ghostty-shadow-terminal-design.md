@@ -696,7 +696,8 @@ mechanisms guarantee it:
      - printable text
      - BS, HT, LF, CR
      - cursor movement: CUP, CUU, CUD, CUF, CUB, CHA, VPA, CNL, CPL
-     - erasing and editing: ED, EL, ECH, ICH, DCH, IL, DL
+     - erasing and editing: ED with one parameter of 0 to 2, EL, ECH,
+       ICH, DCH, IL, DL
      - SGR
      - DECSTBM
      - `CSI ?25h/l`
@@ -711,6 +712,10 @@ mechanisms guarantee it:
      - DECSCUSR (cursor style)
      - DCS and APC
      - RIS and DECSTR
+     - ED 3, which clears the scrollback. No leave restores it.
+     - 8-bit C1 controls and invalid UTF-8, with any sequence they start
+       (`0x9b` CSI, `0x9d` OSC, `0x90` DCS). A terminal that honours 8-bit
+       controls would act on them.
    - A test checks that `approveScreen` renders the same through the
      filter and handles keys with every query dropped. Bubble Tea sends its
      queries asynchronously and falls back when no reply arrives. That's
