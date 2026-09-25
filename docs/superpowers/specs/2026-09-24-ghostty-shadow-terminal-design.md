@@ -1532,3 +1532,15 @@ LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
   `Run` closes its done channel before it waits for a running `Show`, so
   the detach checks it too, and nothing reaches the terminal after the
   session output ended.
+- **The shadow's cursor starts where the real one is.** A session starts
+  below the host's output (banner, status lines), but the shadow starts
+  empty at 1;1. The raw leave restores the cut's cursor by absolute
+  position, so it put the cursor on the shadow's row, and the app's next
+  output overwrote the host lines above the session (found in manual
+  testing). Before forwarding any output, `Run` sends DSR 6n, waits up to
+  500 ms for the reply, and moves the shadow's cursor there. The reply is
+  taken out of stdin; a late one within the strip window is dropped. It
+  holds the terminal lock while waiting, so a `Show` can't cut first.
+  Without a reply, every leave restores from the shadow. The lines above
+  the session stay blank in the shadow, so a snapshot leave blanks them
+  on the screen (known).
