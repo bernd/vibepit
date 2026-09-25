@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bernd/vibepit/vt"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,4 +117,83 @@ func readN(t *testing.T, r io.Reader, n int) string {
 		t.Fatalf("reading %d bytes timed out", n)
 	}
 	return string(buf)
+}
+
+func newVT(t *testing.T, cols, rows int, opts ...vt.TerminalOption) *vt.Terminal {
+	t.Helper()
+	term, err := vt.NewTerminal(uint16(cols), uint16(rows), opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = term.Close() })
+	return term
+}
+
+func feed(t *testing.T, term *vt.Terminal, s string) {
+	t.Helper()
+	_, err := term.Write([]byte(s))
+	require.NoError(t, err)
+}
+
+// screenText is the visible screen as plain text, or "" on error, so it is
+// safe inside require.Eventually.
+func screenText(term *vt.Terminal) string {
+	b, err := term.Format(vt.FormatOptions{Output: vt.OutputPlain, Trim: true, Region: vt.RegionScreen})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// termState is what a restore must reproduce on the real terminal.
+type termState struct {
+	Screen string // content, modes, cursor, pen, keyboard state
+	Alt    bool
+	Kitty  uint8
+	Modes  []vt.ModeState
+	Title  string
+	Pwd    string
+	Cursor vt.CursorStyle
+}
+
+// stateExtras leave out charsets: libghostty's default designation is
+// UTF-8, which ESC ( B doesn't restore, while real terminals treat ESC ( B
+// as the default. probeSuffix checks charsets by printing through them.
+var stateExtras = func() vt.Extras {
+	x := vt.AllExtras
+	x.Charsets = false
+	return x
+}()
+
+func stateOf(t *testing.T, term *vt.Terminal) termState {
+	t.Helper()
+	var s termState
+	screen, err := term.Format(vt.FormatOptions{Unwrap: true, Extras: stateExtras, Region: vt.RegionScreen})
+	require.NoError(t, err)
+	s.Screen = string(screen)
+	s.Alt, err = term.AltScreen()
+	require.NoError(t, err)
+	s.Kitty, err = term.KittyKeyboardFlags()
+	require.NoError(t, err)
+	s.Modes, err = term.Modes()
+	require.NoError(t, err)
+	s.Title, err = term.Title()
+	require.NoError(t, err)
+	s.Pwd, err = term.Pwd()
+	require.NoError(t, err)
+	s.Cursor, err = term.CursorStyle()
+	require.NoError(t, err)
+	return s
+}
+
+// probeSuffix shows state the capture can't: the active charset (q draws a
+// line in DEC graphics), LNM, and the scroll region (DL).
+const probeSuffix = "q\r\nw\x1b[Mz"
+
+// assertSameTerminal compares the state of want and got, then again after
+// the same probe output.
+func assertSameTerminal(t *testing.T, want, got *vt.Terminal) {
+	t.Helper()
+	assert.Equal(t, stateOf(t, want), stateOf(t, got))
+	feed(t, want, probeSuffix)
+	feed(t, got, probeSuffix)
+	assert.Equal(t, stateOf(t, want), stateOf(t, got), "after the probe suffix")
 }
