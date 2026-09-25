@@ -37,6 +37,7 @@ go run .                     # default command: run
 go run . -L                  # use local image instead of published one
 go run . -a example.com:443  # allow additional domain:port
 go run . -p vcs-github       # enable additional network preset
+go run . --prompt            # prompt to allow blocked connections
 go run . --reconfigure       # re-run interactive setup
 go run . up                  # start in daemon mode with SSH server
 go run . connect             # connect to running daemon-mode session
@@ -83,7 +84,9 @@ When docs and behavior differ, treat `cmd/root.go` and command files under
 Built with `urfave/cli/v3`.
 
 - `run` creates an isolated network, starts proxy + sandbox containers, and
-  manages persistent `vibepit-home` volume and per-session networking.
+  manages persistent `vibepit-home` volume and per-session networking. With
+  `--prompt` it polls the control API for blocked connections and shows the
+  approve screen over the session through `overlay`.
 - `up` creates the same infrastructure as `run` but in daemon mode — containers
   run in the background with an SSH server. Returns immediately after startup.
 - `down` stops and removes all containers for a session and cleans up
@@ -163,6 +166,18 @@ WebAssembly and translated to Go by wasm2go, so builds stay
 bindings and the feature tests that pin libghostty behaviour; only `vt` may
 import it. See `vt/internal/ghostty/README.md` before upgrading the module
 or wasm2go.
+
+### Overlay (`overlay/`)
+
+Shows a Bubble Tea program over a `run` session in any terminal. A shadow
+`vt.Terminal` sees every container byte but never sits between the
+container and the screen. `Terminal.Show` stops forwarding output at a byte
+where the shadow's parser is at ground, hands stdin to the prompt at the
+terminal's reply to a DSR 5n barrier query, and restores the screen by
+replaying the output logged meanwhile or from the shadow. `InputMux` is the
+only reader of stdin. `NewFilter` passes only the prompt output the restore
+can undo. Used by `container.runTTYSession`; `cmd/prompt.go` shows the
+approve screen through it. Only `overlay` imports `vt` on the host side.
 
 ### Embedded proxy binary (`embed/`)
 

@@ -42,6 +42,7 @@ vibepit run [flags] [project-path]
 | `-a`, `--allow` | string (repeatable) | | Additional `domain:port` entries to allow through the proxy (e.g. `api.example.com:443`) |
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
+| `--prompt` | bool | `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 
@@ -56,6 +57,56 @@ vibepit run [flags] [project-path]
   select network presets. Pass `--reconfigure` to re-run this selector later.
 - Entries passed with `--allow` and `--preset` are merged with any entries
   saved in the project configuration file.
+- With `--prompt`, blocked connections open an allow/deny prompt over the
+  session. See [Blocked connection prompt](#blocked-connection-prompt).
+
+### Blocked connection prompt
+
+With `--prompt`, `run` asks you right away whether to allow a connection
+the proxy blocked. The prompt appears over the session, in the same
+terminal window, in any terminal emulator. Once you decide or dismiss it,
+the agent's screen comes back as it was, including any output the agent
+wrote in the meantime.
+
+| Key | Action |
+|-----|--------|
+| `a` | Allow for the rest of the session |
+| `A` | Allow and save to the project configuration |
+| `n` | Deny. Other clients stop asking about this target for the rest of the session. |
+| `Esc`, `q` | Dismiss without deciding. Other clients still ask. |
+
+Behavior details:
+
+- The blocked request has already failed when the prompt appears. Retry it
+  after allowing.
+- The agent keeps running while the prompt shows. Its output appears when
+  the prompt closes.
+- Each target prompts at most once per session, no matter how often the
+  agent retries.
+- Prompts for different targets open one after another, never on top of
+  each other.
+- When several clients are attached to one session, each shows the prompt.
+  As soon as one of them allows or denies, the others close within about a
+  second.
+- Denied targets are held in memory by the proxy. They are forgotten when
+  the session stops. To allow a denied target later, use
+  [`allow-http`](#allow-http), [`allow-dns`](#allow-dns), or
+  [`monitor`](#monitor).
+- IPv6 address targets can be denied or dismissed, but not allowed. The
+  allowlist does not support IPv6 literals.
+- Before the prompt appears, vibepit asks the terminal for a status report
+  to find the exact point where your typing ends and the prompt's input
+  begins. If the terminal doesn't answer, the prompt is skipped and shown
+  on the next block of that target. After two misses, vibepit instead
+  switches input to the prompt after a short pause in typing.
+- When a prompt can't be shown, the reason is written to the prompt log,
+  `$XDG_STATE_HOME/vibepit/prompt-logs/<session>.log` (usually under
+  `~/.local/state/`). `run --prompt` prints its path at startup.
+- When the agent uses the whole screen (for example an editor), or the
+  terminal is resized while the prompt shows, vibepit redraws the screen
+  from its own copy. Lines that scrolled off in the meantime are then
+  missing from the terminal's scrollback, and hyperlinks and images are not
+  restored.
 
 ### Examples
 
@@ -77,6 +128,9 @@ vibepit run -a api.example.com:443 -a cdn.example.com:443 -p vcs-github
 
 # Re-run the network preset selector
 vibepit run -r
+
+# Prompt to allow connections the proxy blocks
+vibepit run --prompt
 ```
 
 ---

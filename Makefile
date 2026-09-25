@@ -23,7 +23,7 @@ test:
 # field (SafeEmulator doesn't lock Close()). Run locally to audit your own
 # changes; tolerate the upstream race until the fix lands.
 test-race:
-	CGO_ENABLED=1 go test -race ./session ./sshd ./cmd ./vt/...
+	CGO_ENABLED=1 go test -race ./session ./sshd ./cmd ./vt/... ./overlay ./container
 
 test-integration:
 	go test -tags=integration -timeout 60s ./...
