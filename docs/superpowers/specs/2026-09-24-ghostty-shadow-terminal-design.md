@@ -120,7 +120,7 @@ Two findings shape this design:
 | Enter with `?1049h`, restore "whatever Bubble Tea enabled" | **Replaced** by the Restoration Contract: Bubble Tea's output is filtered, enter changes only set D with `?1047h`, and each leave path restores a defined list. |
 | Alt-screen resize bounce to force a redraw | **Replaced** by redrawing the screen from the shadow. |
 | Terminal queries lost while paused | **Improved.** The shadow answers them while the prompt shows. Every query gets at most one answer (see Ownership Transitions). |
-| `approveScreen`, `blockWatcher`, `runBlockPrompter`, `prompt.log`, attach wiring | **Kept** unchanged. |
+| `approveScreen`, `blockWatcher`, `runBlockPrompter`, attach wiring | **Kept** unchanged. `prompt.log` was dropped in step 4 (see its notes). |
 | `Prompter` interface with `kittyPrompter` and `inlinePrompter` | **Dropped.** There is one concrete type, `prompter`, with no interface and no variant name. The poller calls `prompter.Show` directly. |
 | `kittyPrompter`, `kitty.go`, `approve.go` (`vibepit approve`, the child process started in the kitty overlay) | **Removed.** |
 | `--prompt MODE` | **Back to `--prompt`**, a plain on/off flag. With a single mode there's nothing to choose. |
@@ -634,8 +634,9 @@ does.
   Input never left the container, so no keys are lost.
 - **Late barrier reply.** For 10 s, `InputMux` strips the next `CSI 0n`,
   so a late barrier reply doesn't reach the app.
-- `Show` returns `ErrBarrierTimeout`. The poller logs the blocked request
-  to `prompt.log` and retries the prompt on the next block.
+- `Show` returns `ErrBarrierTimeout`. The poller notes the blocked
+  request for the report after the session and retries the prompt on the
+  next block.
 - After two consecutive barrier timeouts, the session is marked
   `barrierUnsupported`. Later prompts use a degraded T2: switch input after
   100 ms of input silence, or after 1 s at the latest. Mouse and focus
@@ -977,9 +978,9 @@ host. Prompts don't need `vibed`'s replay, so history is never duplicated.
 ## Error Handling
 
 - **WASM trap in the host shadow.** Mark the overlay unavailable for the
-  session and keep passthrough running. The poller then only logs blocked
-  requests to `prompt.log`. The user can still allow them with `allow-http`,
-  `allow-dns` or `monitor`.
+  session and keep passthrough running. The poller then only notes blocked
+  requests, reported after the session. The user can still allow them
+  with `allow-http`, `allow-dns` or `monitor`.
 - **Trap in `Show` after the detach.** Take the raw replay path if it's
   allowed. `cut.modes` and `cut.extras` were captured at T1, so it doesn't
   need the shadow. Otherwise write `ESC c` and send a SIGWINCH nudge.
@@ -1525,10 +1526,9 @@ LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
   (`overlay.Config.NoShadow`), but use the same I/O path.
 - **`--prompt` defaults to off** until the manual terminal matrix
   (rollout step 3) passes.
-- **`prompt.log`** lives at
-  `$XDG_STATE_HOME/vibepit/prompt-logs/<session>.log`, beside the session
-  directories, because those are removed when the session stops. It's
-  capped at 1 MiB, and logs untouched for 7 days are removed.
+- **Prompt notes.** What prompting couldn't show goes to memory while the
+  session owns the terminal, and is printed to stderr as warnings once it
+  ends. See step 4, which replaced the per-session `prompt.log` file.
 - **The container's input goes through an ordered queue** with one
   writer goroutine, fed by the stdin pump and the shadow's answers. Both
   write while holding a lock, so a container that stopped reading its
@@ -1583,3 +1583,12 @@ LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
   through the same Docker client and proxy lookup as the SSH port.
 - **No initial resize.** The PTY request already carries the size, unlike
   a container attach.
+- **No prompt log file.** Its lines are rare (terminal gaps, a failed
+  shadow, skipped prompts) and nobody looks for a file unless something
+  already seems wrong. `promptNotes` keeps the latest 32 in a ring
+  buffer, and `run` and `connect` print them to stderr as warnings
+  after the session. A crash loses them.
+- **No "Prompting" status line.** It only carried the log path. `connect`
+  couldn't show it anyway: vibed's attach replay starts with `ESC c` even
+  for a new session, which wiped the line at once. The reset on attach is
+  Phase 2's to revisit.
