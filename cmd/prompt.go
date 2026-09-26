@@ -32,7 +32,12 @@ type promptFunc func(ctx context.Context, entry proxy.LogEntry) error
 type blockWatcher struct {
 	cursor uint64
 	seen   map[proxy.Target]bool
+	tries  map[proxy.Target]int // failed prompts per target
 }
+
+// maxPromptTries bounds how often a target is asked about when its prompt
+// fails, so a prompt that always fails doesn't come back at every block.
+const maxPromptTries = 3
 
 // Next returns the entries in batch that allowing would unblock and that
 // have not been seen before, and advances the cursor past the batch.
@@ -56,9 +61,16 @@ func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 	return fresh
 }
 
-// Forget lets target prompt again on its next block.
-func (bw *blockWatcher) Forget(target proxy.Target) {
-	delete(bw.seen, target)
+// Retry lets target prompt again on its next block after a failed prompt,
+// until it failed maxPromptTries times.
+func (bw *blockWatcher) Retry(target proxy.Target) {
+	if bw.tries == nil {
+		bw.tries = make(map[proxy.Target]int)
+	}
+	bw.tries[target]++
+	if bw.tries[target] < maxPromptTries {
+		delete(bw.seen, target)
+	}
 }
 
 // runBlockPrompter polls the control API for new blocked requests and calls
@@ -104,9 +116,10 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 			if res, err := client.Check(e); err == nil && res.Decided() {
 				continue
 			}
-			if err := prompt(ctx, e); errors.Is(err, overlay.ErrBarrierTimeout) {
-				// Nothing was shown: ask again on the next block.
-				bw.Forget(e.Target())
+			// A failed prompt may not have been seen: ask again on the next
+			// block. Without a shadow no prompt can be shown.
+			if err := prompt(ctx, e); err != nil && !errors.Is(err, overlay.ErrUnavailable) {
+				bw.Retry(e.Target())
 			}
 		}
 	}

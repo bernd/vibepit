@@ -98,15 +98,20 @@ func TestBlockWatcher_Next(t *testing.T) {
 	}
 }
 
-func TestBlockWatcher_Forget(t *testing.T) {
+func TestBlockWatcher_Retry(t *testing.T) {
 	var bw blockWatcher
 	e := proxy.LogEntry{ID: 1, Source: proxy.SourceProxy, Domain: "b.com", Port: "443", Action: proxy.ActionBlock}
 	require.Len(t, bw.Next([]proxy.LogEntry{e}), 1)
-	e.ID = 2
+	e.ID++
 	assert.Empty(t, bw.Next([]proxy.LogEntry{e}))
-	bw.Forget(e.Target())
-	e.ID = 3
-	assert.Len(t, bw.Next([]proxy.LogEntry{e}), 1, "a forgotten target prompts again")
+	for i := 1; i < maxPromptTries; i++ {
+		bw.Retry(e.Target())
+		e.ID++
+		assert.Len(t, bw.Next([]proxy.LogEntry{e}), 1, "try %d: a retried target prompts again", i+1)
+	}
+	bw.Retry(e.Target())
+	e.ID++
+	assert.Empty(t, bw.Next([]proxy.LogEntry{e}), "no more tries")
 }
 
 func TestRunBlockPrompter(t *testing.T) {
@@ -185,33 +190,51 @@ func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
 	}
 }
 
-func TestRunBlockPrompter_ReasksAfterBarrierTimeout(t *testing.T) {
-	tp := newTestProxy(t)
-	prompted := make(chan proxy.LogEntry, 10)
-	var calls atomic.Int32
-	ctx := t.Context()
-	go runBlockPrompter(ctx, tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-		prompted <- e
-		if calls.Add(1) == 1 {
-			return fmt.Errorf("show: %w", overlay.ErrBarrierTimeout)
-		}
-		return nil
-	})
-	time.Sleep(20 * time.Millisecond)
-	block := proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy}
-	for i := range 2 {
-		tp.log.Add(block)
-		select {
-		case <-prompted:
-		case <-time.After(time.Second):
-			t.Fatalf("no prompt %d", i+1)
-		}
+func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		reask bool
+	}{
+		{"barrier timeout", fmt.Errorf("show: %w", overlay.ErrBarrierTimeout), true},
+		{"program error", errors.New("program failed"), true},
+		{"prompts unavailable", fmt.Errorf("show: %w", overlay.ErrUnavailable), false},
 	}
-	tp.log.Add(block)
-	select {
-	case <-prompted:
-		t.Fatal("a shown prompt is not repeated")
-	case <-time.After(50 * time.Millisecond):
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp := newTestProxy(t)
+			prompted := make(chan proxy.LogEntry, 10)
+			var calls atomic.Int32
+			go runBlockPrompter(t.Context(), tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
+				prompted <- e
+				if calls.Add(1) == 1 {
+					return tt.err
+				}
+				return nil
+			})
+			time.Sleep(20 * time.Millisecond)
+			block := proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy}
+			tp.log.Add(block)
+			select {
+			case <-prompted:
+			case <-time.After(time.Second):
+				require.FailNow(t, "no first prompt")
+			}
+			if tt.reask {
+				tp.log.Add(block)
+				select {
+				case <-prompted:
+				case <-time.After(time.Second):
+					require.FailNow(t, "no second prompt")
+				}
+			}
+			tp.log.Add(block)
+			select {
+			case <-prompted:
+				require.FailNow(t, "prompted again")
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
 	}
 }
 
