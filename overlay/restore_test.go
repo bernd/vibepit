@@ -234,7 +234,3 @@ func TestResetLeave(t *testing.T) {
 	assert.Equal(t, "\x1b[<u\x1b[?1047l\x1bc", string(resetLeave(entered{kitty: true, promptScreen: true})))
 	assert.Equal(t, "\x1bc", string(resetLeave(entered{})))
 }
-
-func TestOSCText(t *testing.T) {
-	assert.Equal(t, "evil[2Jtitle", oscText("evil\x1b[2J\x07title\u009c"))
-}

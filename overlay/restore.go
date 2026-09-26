@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode"
 
+	"github.com/bernd/vibepit/tui"
 	"github.com/bernd/vibepit/vt"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -257,10 +257,10 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error
 	// unknown: some terminals, ghostty among them, apply an OSC that CAN
 	// ends instead of dropping it.
 	if s.title != c.title || c.forced {
-		fmt.Fprintf(&b, "\x1b]2;%s\x1b\\", oscText(s.title))
+		fmt.Fprintf(&b, "\x1b]2;%s\x1b\\", tui.SanitizeText(s.title))
 	}
 	if s.pwd != c.pwd || c.forced {
-		fmt.Fprintf(&b, "\x1b]7;%s\x1b\\", oscText(s.pwd))
+		fmt.Fprintf(&b, "\x1b]7;%s\x1b\\", tui.SanitizeText(s.pwd))
 	}
 	if s.cursor != c.cursor {
 		b.WriteString(s.cursor.DECSCUSR())
@@ -296,15 +296,4 @@ func modeSeq(k modeKey, on bool) string {
 		final = "h"
 	}
 	return fmt.Sprintf("\x1b[%s%d%s", prefix, k.mode, final)
-}
-
-// oscText drops controls from an OSC payload, so it can't end the sequence
-// early.
-func oscText(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, s)
 }
