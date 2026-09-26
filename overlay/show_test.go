@@ -202,6 +202,32 @@ func TestShowHandoffWaitsForTheAppsBarrierReplies(t *testing.T) {
 	require.NoError(t, h.result(done))
 }
 
+func TestShowResumesBarrierQueriesAfterALateReply(t *testing.T) {
+	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.barrierWait = 50 * time.Millisecond }))
+	h.app("$ ")
+	h.holdReplies()
+	for range barrierTimeoutsBeforeDegraded {
+		require.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrBarrierTimeout)
+	}
+	h.locked(func(tm *Terminal) { require.True(t, tm.barrierUnsupportedLocked()) })
+	h.releaseReplies()
+	require.Eventually(t, func() bool {
+		var n int
+		h.term.in.mu.Lock()
+		n = len(h.term.in.lateSent)
+		h.term.in.mu.Unlock()
+		return n == 0
+	}, 5*time.Second, time.Millisecond, "the late replies arrived")
+	h.prompt(nil)
+	assert.Equal(t, barrierTimeoutsBeforeDegraded+1, strings.Count(h.stdout.String(), barrierQuery),
+		"the terminal answers, so barrier queries resume")
+	h.locked(func(tm *Terminal) {
+		assert.False(t, tm.barrierUnsupportedLocked())
+		assert.Greater(t, tm.timing.barrierWait, 50*time.Millisecond)
+	})
+	assert.Empty(t, h.sessionIn.String(), "no late reply reached the app")
+}
+
 func TestShowRestoresWhenTheProgramPanics(t *testing.T) {
 	h := newHarness(t, 20, 6)
 	h.app("$ ")

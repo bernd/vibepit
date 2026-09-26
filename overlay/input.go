@@ -42,10 +42,15 @@ type inputMux struct {
 	held int // leading bytes of barrierReply seen and not routed yet
 	// owed counts the app's DSR 5n queries the terminal hasn't answered.
 	// Their replies come before the barrier's and are the app's.
-	owed       int
-	prompt     *bufPipe
-	barrier    chan struct{} // closed at the barrier reply
-	stripUntil time.Time     // until then, drop one barrier reply
+	owed      int
+	prompt    *bufPipe
+	barrier   chan struct{} // closed at the barrier reply
+	drainedAt time.Time     // when the latest barrier query went out
+	// lateSent holds when the barrier queries that timed out went out, in
+	// order. Their replies are dropped until stripUntil.
+	lateSent   []time.Time
+	stripUntil time.Time
+	lateReply  time.Duration // the longest delay of a late reply not taken yet
 	lastInput  time.Time     // the latest input other than reports
 	appFocus   byte          // the latest focus report the session got: 'I', 'O' or 0
 	// promptFocus is the latest focus report the current prompt got,
@@ -117,7 +122,7 @@ func (m *inputMux) route(p []byte) bool {
 		p = m.scanPosition(p, now)
 		_, focus = reports(p)
 	}
-	if m.mode == toSession && m.owed == 0 && !now.Before(m.stripUntil) {
+	if m.mode == toSession && m.owed == 0 && !m.lateDue(now) {
 		m.send(p, focus)
 		return true
 	}
@@ -129,7 +134,7 @@ func (m *inputMux) route(p []byte) bool {
 				m.held = 0
 				m.write(plain)
 				plain = plain[:0]
-				m.reply()
+				m.reply(now)
 			}
 			continue
 		}
@@ -166,31 +171,50 @@ func (m *inputMux) waitSession() {
 	}
 }
 
-// reply handles a complete barrier reply.
-func (m *inputMux) reply() {
-	if m.owed > 0 {
-		// The app's reply. Before the leave it comes ahead of the barrier's;
-		// after it, a late barrier reply may come first, but the bytes are
-		// the same.
+// reply handles a complete CSI 0n. Terminals answer in order, but the
+// owners of the replies due are only counted, which is enough: the bytes
+// are the same, so only the handoff's position matters.
+func (m *inputMux) reply(now time.Time) {
+	switch {
+	case m.lateDue(now):
+		// The reply to a barrier query that timed out: it must not reach
+		// the app. It shows the terminal answers, only slowly.
+		m.lateReply = max(m.lateReply, now.Sub(m.lateSent[0]))
+		m.lateSent = m.lateSent[1:]
+	case m.owed > 0:
+		// The app's reply. Before the leave it comes ahead of the barrier's.
 		m.owed--
 		_, _ = m.session.Write([]byte(barrierReply))
-		return
-	}
-	switch m.mode {
-	case draining:
-		// The handoff: the terminal answers in order, so every reply it owed
-		// the app has already gone to the session.
+	case m.mode == draining:
+		// The handoff: the terminal answers in order, so every reply it
+		// owed the app has already gone to the session.
 		m.mode = toPrompt
 		close(m.barrier)
-	case toPrompt:
-		// The prompt's queries are filtered out, so this answers a DSR 5n
-		// the app sent before the cut. The first CSI 0n went to the
-		// barrier; the bytes are the same, so the app still gets one.
-		_, _ = m.session.Write([]byte(barrierReply))
 	default:
-		// The late reply to a barrier query that timed out.
-		m.stripUntil = time.Time{}
+		// A DSR 5n reply the app's count missed. The prompt's queries are
+		// filtered out, so it isn't the prompt's.
+		_, _ = m.session.Write([]byte(barrierReply))
 	}
+}
+
+// lateDue tells whether replies to timed-out barrier queries are still
+// due. After the strip time they no longer are: the terminal may never
+// answer.
+func (m *inputMux) lateDue(now time.Time) bool {
+	if len(m.lateSent) > 0 && !now.Before(m.stripUntil) {
+		m.lateSent = nil
+	}
+	return len(m.lateSent) > 0
+}
+
+// TakeLateReply returns the longest delay of a barrier reply that came
+// after its timeout since the last call, if one came.
+func (m *inputMux) TakeLateReply() (time.Duration, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.lateReply
+	m.lateReply = 0
+	return d, d > 0
 }
 
 // write sends p to the current owner of the input.
@@ -242,7 +266,7 @@ func (m *inputMux) Drain() {
 	defer m.mu.Unlock()
 	m.mode = draining
 	m.held = 0
-	m.stripUntil = time.Time{}
+	m.drainedAt = time.Now()
 	m.prompt = newBufPipe(promptInputMax)
 	m.barrier = make(chan struct{})
 }
@@ -321,8 +345,8 @@ func (m *inputMux) AwaitSilence(ctx context.Context, quiet, limit time.Duration)
 
 // Release is input's side of the leave: it runs leave while no input can be
 // routed, then hands input back to the session. When the barrier reply is
-// still pending, strip drops one that arrives within that time, so it can't
-// reach the app. When the app takes focus reports (focusReports), the latest
+// still pending, strip drops it if it arrives within that time, so it can't
+// reach the app or be taken for the next barrier's. When the app takes focus reports (focusReports), the latest
 // one the prompt got goes to the app, unless the app already had that focus.
 func (m *inputMux) Release(strip time.Duration, focusReports bool, leave func()) {
 	m.mu.Lock()
@@ -340,6 +364,7 @@ func (m *inputMux) Release(strip time.Duration, focusReports bool, leave func())
 		m.prompt = nil
 	}
 	if strip > 0 && pending {
+		m.lateSent = append(m.lateSent, m.drainedAt)
 		m.stripUntil = time.Now().Add(strip)
 	}
 }

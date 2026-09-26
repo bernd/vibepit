@@ -20,6 +20,10 @@ import (
 // handoff to waiting for input silence.
 const barrierTimeoutsBeforeDegraded = 2
 
+// maxBarrierWait bounds how long a slow terminal's barrier reply is waited
+// for. Output is held back meanwhile.
+const maxBarrierWait = 2 * time.Second
+
 // Config connects a Terminal to the local terminal and the session.
 type Config struct {
 	Stdin      io.Reader // the local terminal, already in raw mode
@@ -376,6 +380,21 @@ func (t *Terminal) size() (int, int) {
 }
 
 func (t *Terminal) isDone() bool { return isClosed(t.done) }
+
+// noteLateBarrierLocked resumes barrier queries after a late barrier reply:
+// the terminal answers DSR 5n, only slowly. The wait grows to twice the
+// delay, unless that is too long to hold output back.
+func (t *Terminal) noteLateBarrierLocked() {
+	d, ok := t.in.TakeLateReply()
+	if !ok || 2*d > max(t.timing.barrierWait, maxBarrierWait) {
+		return
+	}
+	t.timing.barrierWait = max(t.timing.barrierWait, 2*d)
+	if t.barrierTimeouts > 0 {
+		t.barrierTimeouts = 0
+		t.logf("overlay: the terminal answered DSR 5n after %v; prompts wait up to %v for it", d.Round(time.Millisecond), t.timing.barrierWait)
+	}
+}
 
 // barrierUnsupportedLocked tells whether the handoff waits for input silence
 // instead of the barrier reply. The count stops once it is reached.

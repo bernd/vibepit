@@ -31,6 +31,7 @@ func (t *Terminal) detachAt(ctx context.Context) error {
 		t.mu.Unlock()
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	t.noteLateBarrierLocked()
 	req := &detachReq{done: make(chan struct{})}
 	t.detach = req
 	switch ground, err := t.shadow.AtGround(); {

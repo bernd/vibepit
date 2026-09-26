@@ -201,6 +201,41 @@ func TestInputMuxNoStripOnceTheReplyArrived(t *testing.T) {
 	assert.Equal(t, "\x1b[0n", h.sessionIn.String(), "a later reply belongs to the app")
 }
 
+// timeout runs a barrier that times out and leaves with a strip window.
+func (h *muxHarness) timeout(t *testing.T) {
+	t.Helper()
+	h.mux.Drain()
+	_, err := h.mux.AwaitBarrier(context.Background(), time.Millisecond)
+	require.ErrorIs(t, err, ErrBarrierTimeout)
+	h.mux.Release(time.Second, false, func() {})
+}
+
+func TestInputMuxStripsEveryLateBarrierReply(t *testing.T) {
+	h := newMuxHarness(t)
+	_, ok := h.mux.TakeLateReply()
+	assert.False(t, ok)
+	h.timeout(t)
+	h.timeout(t)
+	h.src.send(t, "a\x1b[0nb\x1b[0nc\x1b[0n")
+	assert.Equal(t, "abc\x1b[0n", h.sessionIn.String(), "one reply per timed-out barrier is dropped")
+	d, ok := h.mux.TakeLateReply()
+	assert.True(t, ok)
+	assert.Positive(t, d)
+	_, ok = h.mux.TakeLateReply()
+	assert.False(t, ok, "taken")
+}
+
+func TestInputMuxLateReplyIsNotTheNextHandoff(t *testing.T) {
+	h := newMuxHarness(t)
+	h.timeout(t)
+	h.mux.Drain()
+	h.src.send(t, "a\x1b[0nb\x1b[0nc")
+	in, err := h.mux.AwaitBarrier(context.Background(), time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, "ab", h.sessionIn.String())
+	assert.Equal(t, "c", readN(t, in, 1))
+}
+
 func TestInputMuxAwaitBarrierCancelled(t *testing.T) {
 	h := newMuxHarness(t)
 	h.mux.Drain()

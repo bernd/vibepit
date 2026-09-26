@@ -23,6 +23,7 @@
 //     app's, counted from the shadow's answers. Only now is
 //     the prompt drawn. A terminal that didn't answer twice in a row gets
 //     no more barrier queries; input then moves after a pause in typing.
+//     A late reply brings them back, with a longer wait.
 //   - The leave: after the prompt exits, the screen is restored, and
 //     output and input switch back to the session at once. The leave
 //     replays the logged output when that reproduces the screen exactly
