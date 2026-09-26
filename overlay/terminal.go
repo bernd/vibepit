@@ -19,15 +19,15 @@ import (
 // waiting for input silence.
 const barrierTimeoutsBeforeDegraded = 2
 
-// Config connects a Terminal to the local terminal and the container.
+// Config connects a Terminal to the local terminal and the session.
 type Config struct {
-	Stdin        io.Reader // the local terminal, already in raw mode
-	Stdout       io.Writer
-	ContainerIn  io.Writer
-	ContainerOut io.Reader
-	// CloseInput half-closes the container's input after stdin ends.
+	Stdin      io.Reader // the local terminal, already in raw mode
+	Stdout     io.Writer
+	SessionIn  io.Writer
+	SessionOut io.Reader
+	// CloseInput half-closes the session's input after stdin ends.
 	CloseInput func() error
-	// Resize resizes the container's PTY.
+	// Resize resizes the session's PTY.
 	Resize func(cols, rows int)
 	// Size reports the local terminal's size.
 	Size func() (cols, rows int, err error)
@@ -68,21 +68,21 @@ var defaultTiming = timing{
 
 var errNoShadow = errors.New("no shadow terminal")
 
-// Terminal forwards a container session to the local terminal and shows
+// Terminal forwards a session to the local terminal and shows
 // prompts over it. Create it with New and run it with Run.
 type Terminal struct {
-	cfg     Config
-	timing  timing
-	in      *inputMux
-	toCont  *containerInput
-	environ []string
-	profile colorprofile.Profile
-	logf    func(format string, args ...any)
-	done    chan struct{} // closed when Run returns
+	cfg       Config
+	timing    timing
+	in        *inputMux
+	sessionIn *sessionInput
+	environ   []string
+	profile   colorprofile.Profile
+	logf      func(format string, args ...any)
+	done      chan struct{} // closed when Run returns
 
 	showMu sync.Mutex // one Show at a time; finish takes it to wait for one
 	// resizeMu orders whole resizes and repaint nudges, so the shadow and
-	// the container end at the same, latest size. The container's resize
+	// the session end at the same, latest size. The session's resize
 	// runs outside mu.
 	resizeMu sync.Mutex
 
@@ -114,7 +114,7 @@ type detachReq struct {
 	err       error // why no cut happened
 }
 
-// rawLog holds the container output since the cut, for raw replay.
+// rawLog holds the session output since the cut, for raw replay.
 type rawLog struct {
 	buf      []byte
 	overflow bool
@@ -152,8 +152,8 @@ func New(cfg Config) *Terminal {
 		t.logf = func(string, ...any) {}
 	}
 	t.profile = colorprofile.Detect(cfg.Stdout, t.environ)
-	t.toCont = newContainerInput(cfg.ContainerIn)
-	t.in = newInputMux(cfg.Stdin, t.toCont)
+	t.sessionIn = newSessionInput(cfg.SessionIn)
+	t.in = newInputMux(cfg.Stdin, t.sessionIn)
 	t.cols, t.rows = t.size()
 	if cfg.NoShadow {
 		t.shadowErr = errNoShadow
@@ -175,19 +175,19 @@ func New(cfg Config) *Terminal {
 	return t
 }
 
-// Run forwards stdin and the container's output until the output ends or
-// ctx is done. When stdin ends it half-closes the container's input and
+// Run forwards stdin and the session's output until the output ends or
+// ctx is done. When stdin ends it half-closes the session's input and
 // keeps forwarding output.
 func (t *Terminal) Run(ctx context.Context) error {
 	defer t.finish()
-	go t.toCont.run()
+	go t.sessionIn.run()
 	inDone := make(chan struct{})
 	go func() {
 		defer close(inDone)
 		if err := t.in.Run(); err != nil {
 			t.logf("overlay: stdin: %v", err)
 		}
-		t.toCont.flush()
+		t.sessionIn.flush()
 		if t.cfg.CloseInput != nil {
 			_ = t.cfg.CloseInput()
 		}
@@ -216,7 +216,7 @@ func (t *Terminal) Run(ctx context.Context) error {
 // and restores the screen before Run returns.
 func (t *Terminal) finish() {
 	close(t.done)
-	t.toCont.close()
+	t.sessionIn.close()
 	t.showMu.Lock()
 	defer t.showMu.Unlock()
 	t.mu.Lock()
@@ -253,7 +253,7 @@ func (t *Terminal) align(ctx context.Context) {
 func (t *Terminal) pump() error {
 	buf := make([]byte, 32<<10)
 	for {
-		n, err := t.cfg.ContainerOut.Read(buf)
+		n, err := t.cfg.SessionOut.Read(buf)
 		if n > 0 {
 			t.output(buf[:n])
 		}
@@ -266,7 +266,7 @@ func (t *Terminal) pump() error {
 	}
 }
 
-// output handles one chunk of container output. Resync runs first: while
+// output handles one chunk of session output. Resync runs first: while
 // it drops a sequence tail the shadow isn't at ground, so a pending detach
 // can only cut after it.
 func (t *Terminal) output(p []byte) {
@@ -310,7 +310,7 @@ func (t *Terminal) failLocked(err error) {
 	}
 }
 
-// flushAnswersLocked sends the shadow's answers to the container while
+// flushAnswersLocked sends the shadow's answers to the session while
 // detached. While attached the real terminal answers the same queries, so
 // the shadow's answers are dropped.
 func (t *Terminal) flushAnswersLocked() {
@@ -318,14 +318,14 @@ func (t *Terminal) flushAnswersLocked() {
 		return
 	}
 	if !t.attached {
-		_, _ = t.toCont.Write(t.answers)
+		_, _ = t.sessionIn.Write(t.answers)
 		t.answered = true
 	}
 	t.answers = t.answers[:0]
 }
 
 // Resize applies the local terminal's size: to the shadow first, so its
-// layout matches what the app redraws for, then to the container, then to
+// layout matches what the app redraws for, then to the session, then to
 // a prompt that is showing.
 func (t *Terminal) Resize() {
 	t.resizeMu.Lock()

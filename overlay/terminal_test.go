@@ -19,15 +19,15 @@ func TestPassthroughIsByteExact(t *testing.T) {
 	}
 	assert.Equal(t, positionQuery+strings.Join(chunks, ""), h.stdout.String())
 	h.keys("ls\r\x1b[A")
-	h.waitContainer("ls\r\x1b[A")
+	h.waitSessionInput("ls\r\x1b[A")
 }
 
 func TestShadowAnswersAreDroppedWhileAttached(t *testing.T) {
 	h := newHarness(t, 20, 5)
 	h.app("\x1b[6n")
-	h.waitContainer("\x1b[1;1R")
+	h.waitSessionInput("\x1b[1;1R")
 	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, "\x1b[1;1R", h.toCont.String(), "only the real terminal answers")
+	assert.Equal(t, "\x1b[1;1R", h.sessionIn.String(), "only the real terminal answers")
 }
 
 func TestWithoutShadow(t *testing.T) {
@@ -44,7 +44,7 @@ func TestResize(t *testing.T) {
 	h.app(strings.Repeat("x", 25))
 	assert.Equal(t, strings.Repeat("x", 25), firstLine(h.term.shadow), "the shadow has the new width")
 	h.term.Resize()
-	assert.Equal(t, []string{"30x6", "30x6"}, h.resizeLog(), "the container gets every resize")
+	assert.Equal(t, []string{"30x6", "30x6"}, h.resizeLog(), "the session gets every resize")
 }
 
 func TestRunEndsWithTheOutput(t *testing.T) {
@@ -59,7 +59,7 @@ func TestRunEndsWithTheOutput(t *testing.T) {
 	assert.Zero(t, h.closedIn.Load(), "stdin is still open")
 }
 
-func TestStdinEOFClosesTheContainerInput(t *testing.T) {
+func TestStdinEOFClosesTheSessionInput(t *testing.T) {
 	h := newHarness(t, 20, 5)
 	require.NoError(t, h.stdin.Close())
 	require.Eventually(t, func() bool { return h.closedIn.Load() == 1 }, 5*time.Second, time.Millisecond)
@@ -75,7 +75,7 @@ func TestStdinEOFClosesTheContainerInput(t *testing.T) {
 func TestConcurrentResizesKeepTheLatestSize(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	h := newHarness(t, 20, 5, onContainerResize(func(cols, rows int) {
+	h := newHarness(t, 20, 5, onSessionResize(func(cols, rows int) {
 		if cols == 30 {
 			once.Do(func() { close(entered) })
 			<-release
@@ -85,7 +85,7 @@ func TestConcurrentResizesKeepTheLatestSize(t *testing.T) {
 	h.mu.Lock()
 	h.cols, h.rows = 30, 6
 	h.mu.Unlock()
-	wg.Go(h.term.Resize) // the initial size, stalled in the container resize
+	wg.Go(h.term.Resize) // the initial size, stalled in the session resize
 	<-entered
 	h.mu.Lock()
 	h.cols, h.rows = 40, 7
@@ -96,20 +96,20 @@ func TestConcurrentResizesKeepTheLatestSize(t *testing.T) {
 	wg.Wait()
 	log := h.resizeLog()
 	require.NotEmpty(t, log)
-	assert.Equal(t, "40x7", log[len(log)-1], "the container ends at the latest size")
+	assert.Equal(t, "40x7", log[len(log)-1], "the session is left at the latest size")
 	h.app(strings.Repeat("x", 35))
 	assert.Equal(t, strings.Repeat("x", 35), firstLine(h.term.shadow), "so does the shadow")
 }
 
-func TestAStalledContainerInputNeverStallsOutput(t *testing.T) {
+func TestAStalledSessionInputNeverStallsOutput(t *testing.T) {
 	gate := make(chan struct{})
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate) }) }
-	h := newHarness(t, 20, 5, stalledContainerInput(gate))
+	h := newHarness(t, 20, 5, stalledSessionInput(gate))
 	t.Cleanup(release)
 	h.keys("k")
 	require.Eventually(t, func() bool { return h.stalled.Load() > 0 }, 5*time.Second, time.Millisecond)
-	require.NoError(t, h.result(h.detachAsync(context.Background())), "the detach waited for the container")
+	require.NoError(t, h.result(h.detachAsync(context.Background())), "the detach waited for the session")
 	h.app("\x1b[6n") // the shadow answers into the stalled input
 	h.app("more")
 	left := make(chan struct{})
@@ -120,18 +120,18 @@ func TestAStalledContainerInputNeverStallsOutput(t *testing.T) {
 	select {
 	case <-left:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the leave waited for the container")
+		t.Fatal("the leave waited for the session")
 	}
 	assert.Contains(t, screenText(h.real), "more")
 	release()
-	h.waitContainer("k\x1b[1;1R")
+	h.waitSessionInput("k\x1b[1;1R")
 }
 
-func TestStdinEOFClosesTheContainerInputAfterQueuedKeys(t *testing.T) {
+func TestStdinEOFClosesTheSessionInputAfterQueuedKeys(t *testing.T) {
 	gate := make(chan struct{})
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate) }) }
-	h := newHarness(t, 20, 5, stalledContainerInput(gate))
+	h := newHarness(t, 20, 5, stalledSessionInput(gate))
 	t.Cleanup(release)
 	h.keys("bye")
 	require.NoError(t, h.stdin.Close())
@@ -140,5 +140,5 @@ func TestStdinEOFClosesTheContainerInputAfterQueuedKeys(t *testing.T) {
 	assert.Zero(t, h.closedIn.Load(), "the queued keys go first")
 	release()
 	require.Eventually(t, func() bool { return h.closedIn.Load() == 1 }, 5*time.Second, time.Millisecond)
-	assert.Equal(t, "bye", h.toCont.String())
+	assert.Equal(t, "bye", h.sessionIn.String())
 }

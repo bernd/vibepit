@@ -1,8 +1,8 @@
-// Package overlay shows a Bubble Tea program over a container session in
-// the user's terminal, in any terminal emulator.
+// Package overlay shows a Bubble Tea program over a session, a container
+// attach or an SSH shell, in the user's terminal, in any terminal emulator.
 //
-// A shadow terminal emulator (package vt) sees every byte the container
-// writes but never sits between the container and the screen. Before the
+// A shadow terminal emulator (package vt) sees every byte the session
+// writes but never sits between the session and the screen. Before the
 // first byte, its cursor moves to the real terminal's, which the terminal
 // reports to a DSR 6n query, so both put the output on the same rows.
 // Showing a prompt is a detach inside this process: output stops being

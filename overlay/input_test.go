@@ -12,18 +12,18 @@ import (
 )
 
 // muxHarness runs an inputMux over a chunkReader, recording what reaches
-// the container.
+// the session.
 type muxHarness struct {
-	mux  *inputMux
-	src  *chunkReader
-	cont *syncBuffer
-	err  chan error
+	mux       *inputMux
+	src       *chunkReader
+	sessionIn *syncBuffer
+	err       chan error
 }
 
 func newMuxHarness(t *testing.T) *muxHarness {
 	t.Helper()
-	h := &muxHarness{src: newChunkReader(), cont: &syncBuffer{}, err: make(chan error, 1)}
-	h.mux = newInputMux(h.src, h.cont)
+	h := &muxHarness{src: newChunkReader(), sessionIn: &syncBuffer{}, err: make(chan error, 1)}
+	h.mux = newInputMux(h.src, h.sessionIn)
 	go func() { h.err <- h.mux.Run() }()
 	t.Cleanup(func() {
 		h.src.close()
@@ -46,29 +46,29 @@ func (h *muxHarness) barrier(t *testing.T) io.Reader {
 	return in
 }
 
-func TestInputMuxRoutesToContainer(t *testing.T) {
+func TestInputMuxRoutesToSession(t *testing.T) {
 	h := newMuxHarness(t)
 	h.src.send(t, "ls\r")
 	h.src.send(t, "\x1b[A")
 	h.src.send(t, barrierReply)
-	assert.Equal(t, "ls\r\x1b[A"+barrierReply, h.cont.String(), "an app's DSR 5n reply passes while attached")
+	assert.Equal(t, "ls\r\x1b[A"+barrierReply, h.sessionIn.String(), "an app's DSR 5n reply passes while attached")
 }
 
 func TestInputMuxBarrier(t *testing.T) {
 	tests := []struct {
-		name          string
-		chunks        []string
-		wantContainer string
-		wantPrompt    string
+		name        string
+		chunks      []string
+		wantSession string
+		wantPrompt  string
 	}{
 		{name: "reply alone", chunks: []string{"\x1b[0n"}},
-		{name: "keys around the reply", chunks: []string{"ab\x1b[0ncd"}, wantContainer: "ab", wantPrompt: "cd"},
-		{name: "reply split across reads", chunks: []string{"a\x1b[", "0nb"}, wantContainer: "a", wantPrompt: "b"},
+		{name: "keys around the reply", chunks: []string{"ab\x1b[0ncd"}, wantSession: "ab", wantPrompt: "cd"},
+		{name: "reply split across reads", chunks: []string{"a\x1b[", "0nb"}, wantSession: "a", wantPrompt: "b"},
 		{name: "reply split at every byte", chunks: []string{"\x1b", "[", "0", "n", "x"}, wantPrompt: "x"},
-		{name: "another reply before the barrier", chunks: []string{"\x1b[12;5R\x1b[0n"}, wantContainer: "\x1b[12;5R"},
-		{name: "escape key before the reply", chunks: []string{"\x1b", "\x1b[0n"}, wantContainer: "\x1b"},
-		{name: "arrow key split before the reply", chunks: []string{"\x1b[", "A\x1b[0nq"}, wantContainer: "\x1b[A", wantPrompt: "q"},
-		{name: "app DSR 5n in flight gets one reply", chunks: []string{"\x1b[0n", "\x1b[0n"}, wantContainer: "\x1b[0n"},
+		{name: "another reply before the barrier", chunks: []string{"\x1b[12;5R\x1b[0n"}, wantSession: "\x1b[12;5R"},
+		{name: "escape key before the reply", chunks: []string{"\x1b", "\x1b[0n"}, wantSession: "\x1b"},
+		{name: "arrow key split before the reply", chunks: []string{"\x1b[", "A\x1b[0nq"}, wantSession: "\x1b[A", wantPrompt: "q"},
+		{name: "app DSR 5n in flight gets one reply", chunks: []string{"\x1b[0n", "\x1b[0n"}, wantSession: "\x1b[0n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -79,7 +79,7 @@ func TestInputMuxBarrier(t *testing.T) {
 			}
 			in, err := h.mux.AwaitBarrier(context.Background(), time.Second)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantContainer, h.cont.String())
+			assert.Equal(t, tt.wantSession, h.sessionIn.String())
 			if tt.wantPrompt != "" {
 				assert.Equal(t, tt.wantPrompt, readN(t, in, len(tt.wantPrompt)))
 			}
@@ -105,7 +105,7 @@ func TestInputMuxReleaseHandsInputBack(t *testing.T) {
 	assert.Equal(t, "p", readN(t, in, 1))
 	h.mux.Release(0, false, func() {})
 	h.src.send(t, "c")
-	assert.Equal(t, "c", h.cont.String())
+	assert.Equal(t, "c", h.sessionIn.String())
 	_, err := in.Read(make([]byte, 1))
 	assert.ErrorIs(t, err, io.EOF, "release closes the prompt's input")
 }
@@ -133,16 +133,16 @@ func TestInputMuxReleaseRunsLeaveUnderLock(t *testing.T) {
 	close(proceed)
 	<-released
 	require.True(t, <-routed)
-	assert.Equal(t, "k", h.cont.String(), "input after T3 goes to the container")
+	assert.Equal(t, "k", h.sessionIn.String(), "input after T3 goes to the session")
 }
 
 func TestInputMuxReleaseFlushesHeldBytes(t *testing.T) {
 	h := newMuxHarness(t)
 	h.mux.Drain()
 	h.src.send(t, "\x1b[")
-	assert.Empty(t, h.cont.String(), "a possible reply prefix waits while draining")
+	assert.Empty(t, h.sessionIn.String(), "a possible reply prefix waits while draining")
 	h.mux.Release(0, false, func() {})
-	assert.Equal(t, "\x1b[", h.cont.String())
+	assert.Equal(t, "\x1b[", h.sessionIn.String())
 }
 
 func TestInputMuxStripsLateBarrierReply(t *testing.T) {
@@ -153,7 +153,7 @@ func TestInputMuxStripsLateBarrierReply(t *testing.T) {
 	h.mux.Release(time.Second, false, func() {})
 	h.src.send(t, "a\x1b[0nb")
 	h.src.send(t, "\x1b[0n")
-	assert.Equal(t, "ab\x1b[0n", h.cont.String(), "only one reply is the barrier's")
+	assert.Equal(t, "ab\x1b[0n", h.sessionIn.String(), "only one reply is the barrier's")
 }
 
 func TestInputMuxStripWindowExpires(t *testing.T) {
@@ -164,7 +164,7 @@ func TestInputMuxStripWindowExpires(t *testing.T) {
 	h.mux.Release(20*time.Millisecond, false, func() {})
 	time.Sleep(50 * time.Millisecond)
 	h.src.send(t, "\x1b[0n")
-	assert.Equal(t, "\x1b[0n", h.cont.String())
+	assert.Equal(t, "\x1b[0n", h.sessionIn.String())
 }
 
 func TestInputMuxNoStripOnceTheReplyArrived(t *testing.T) {
@@ -172,7 +172,7 @@ func TestInputMuxNoStripOnceTheReplyArrived(t *testing.T) {
 	h.barrier(t)
 	h.mux.Release(time.Second, false, func() {})
 	h.src.send(t, "\x1b[0n")
-	assert.Equal(t, "\x1b[0n", h.cont.String(), "a later reply belongs to the app")
+	assert.Equal(t, "\x1b[0n", h.sessionIn.String(), "a later reply belongs to the app")
 }
 
 func TestInputMuxAwaitBarrierCancelled(t *testing.T) {
@@ -192,7 +192,7 @@ func TestInputMuxAwaitSilence(t *testing.T) {
 	in, err := h.mux.AwaitSilence(context.Background(), 30*time.Millisecond, time.Hour)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, time.Since(start), 20*time.Millisecond, "waits for quiet")
-	assert.Equal(t, "k1", h.cont.String())
+	assert.Equal(t, "k1", h.sessionIn.String())
 	h.src.send(t, "p")
 	assert.Equal(t, "p", readN(t, in, 1))
 }
@@ -216,7 +216,7 @@ func TestInputMuxAwaitSilenceIgnoresReports(t *testing.T) {
 			defer cancel()
 			_, err := h.mux.AwaitSilence(ctx, time.Hour, time.Hour)
 			require.NoError(t, err, "a report isn't typing")
-			assert.Equal(t, tt.chunk, h.cont.String())
+			assert.Equal(t, tt.chunk, h.sessionIn.String())
 		})
 	}
 }
@@ -269,7 +269,7 @@ func TestInputMuxAwaitSilenceGivesUpWaiting(t *testing.T) {
 func TestInputMuxReleasePassesOnFocus(t *testing.T) {
 	tests := []struct {
 		name      string
-		before    string // input the container got before the prompt
+		before    string // input the session got before the prompt
 		prompting string // input the prompt got
 		reports   bool   // the app takes focus reports
 		want      string
@@ -293,7 +293,7 @@ func TestInputMuxReleasePassesOnFocus(t *testing.T) {
 			readN(t, in, len(tt.prompting))
 			h.mux.Release(0, tt.reports, func() {})
 			h.src.send(t, "c")
-			assert.Equal(t, tt.before+tt.want+"c", h.cont.String())
+			assert.Equal(t, tt.before+tt.want+"c", h.sessionIn.String())
 		})
 	}
 }
@@ -306,7 +306,7 @@ func TestInputMuxFocusIsPerPrompt(t *testing.T) {
 	h.mux.Release(0, true, func() {})
 	h.barrier(t)
 	h.mux.Release(0, true, func() {})
-	assert.Equal(t, "\x1b[O", h.cont.String(), "a report is passed on once")
+	assert.Equal(t, "\x1b[O", h.sessionIn.String(), "a report is passed on once")
 }
 
 func TestInputMuxEOF(t *testing.T) {
@@ -341,16 +341,16 @@ func TestInputMuxPromptInputNeverBlocks(t *testing.T) {
 
 func TestInputMuxPosition(t *testing.T) {
 	tests := []struct {
-		name     string
-		chunks   []string
-		row, col int
-		cont     string
+		name      string
+		chunks    []string
+		row, col  int
+		sessionIn string
 	}{
 		{name: "reply alone", chunks: []string{"\x1b[12;3R"}, row: 12, col: 3},
-		{name: "input around the reply", chunks: []string{"ab\x1b[7;1Rcd"}, row: 7, col: 1, cont: "abcd"},
+		{name: "input around the reply", chunks: []string{"ab\x1b[7;1Rcd"}, row: 7, col: 1, sessionIn: "abcd"},
 		{name: "reply split across reads", chunks: []string{"\x1b", "[1", "2;4", "0R"}, row: 12, col: 40},
-		{name: "other sequences pass", chunks: []string{"\x1b[A\x1b\x1b[1;2x", "\x1b[2;2R"}, row: 2, col: 2, cont: "\x1b[A\x1b\x1b[1;2x"},
-		{name: "input after the reply", chunks: []string{"\x1b[3;1R\x1b[1;5R"}, row: 3, col: 1, cont: "\x1b[1;5R"},
+		{name: "other sequences pass", chunks: []string{"\x1b[A\x1b\x1b[1;2x", "\x1b[2;2R"}, row: 2, col: 2, sessionIn: "\x1b[A\x1b\x1b[1;2x"},
+		{name: "input after the reply", chunks: []string{"\x1b[3;1R\x1b[1;5R"}, row: 3, col: 1, sessionIn: "\x1b[1;5R"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -363,7 +363,7 @@ func TestInputMuxPosition(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.row, row)
 			assert.Equal(t, tt.col, col)
-			assert.Equal(t, tt.cont, h.cont.String())
+			assert.Equal(t, tt.sessionIn, h.sessionIn.String())
 		})
 	}
 }
@@ -374,11 +374,11 @@ func TestInputMuxPositionTimeoutStripsALateReply(t *testing.T) {
 	h.src.send(t, "\x1b[")
 	_, _, err := h.mux.AwaitPosition(context.Background(), 10*time.Millisecond, time.Second)
 	require.ErrorIs(t, err, errPositionTimeout)
-	assert.Equal(t, "\x1b[", h.cont.String(), "held bytes are flushed at the timeout")
+	assert.Equal(t, "\x1b[", h.sessionIn.String(), "held bytes are flushed at the timeout")
 	h.src.send(t, "a\x1b[5;1Rb")
-	assert.Equal(t, "\x1b[ab", h.cont.String(), "the late reply is dropped")
+	assert.Equal(t, "\x1b[ab", h.sessionIn.String(), "the late reply is dropped")
 	h.src.send(t, "\x1b[5;1R")
-	assert.Equal(t, "\x1b[ab\x1b[5;1R", h.cont.String(), "only one reply is dropped")
+	assert.Equal(t, "\x1b[ab\x1b[5;1R", h.sessionIn.String(), "only one reply is dropped")
 }
 
 func TestInputMuxPositionStripWindowExpires(t *testing.T) {
@@ -388,7 +388,7 @@ func TestInputMuxPositionStripWindowExpires(t *testing.T) {
 	require.ErrorIs(t, err, errPositionTimeout)
 	time.Sleep(5 * time.Millisecond)
 	h.src.send(t, "\x1b[1;5R")
-	assert.Equal(t, "\x1b[1;5R", h.cont.String())
+	assert.Equal(t, "\x1b[1;5R", h.sessionIn.String())
 }
 
 func TestInputMuxPositionEOF(t *testing.T) {

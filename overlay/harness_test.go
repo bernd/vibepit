@@ -56,14 +56,14 @@ func withoutShadow() harnessOption { return func(c *harnessConfig) { c.noShadow 
 
 func withTiming(f func(*timing)) harnessOption { return func(c *harnessConfig) { f(&c.timing) } }
 
-// stalledContainerInput makes the container stop reading its input until
+// stalledSessionInput makes the session stop reading its input until
 // gate is closed.
-func stalledContainerInput(gate chan struct{}) harnessOption {
+func stalledSessionInput(gate chan struct{}) harnessOption {
 	return func(c *harnessConfig) { c.gate = gate }
 }
 
-// onContainerResize runs f in the container's resize, before it is logged.
-func onContainerResize(f func(cols, rows int)) harnessOption {
+// onSessionResize runs f in the session's resize, before it is logged.
+func onSessionResize(f func(cols, rows int)) harnessOption {
 	return func(c *harnessConfig) { c.onResize = f }
 }
 
@@ -71,17 +71,17 @@ func onContainerResize(f func(cols, rows int)) harnessOption {
 // terminal: it gets everything written to stdout and answers queries on
 // stdin, in order, like a real terminal.
 type harness struct {
-	t        *testing.T
-	term     *Terminal
-	real     *vt.Terminal
-	stdin    *bufPipe
-	out      *chunkReader // the container's output
-	toCont   *syncBuffer  // the container's input
-	stdout   *syncBuffer
-	closedIn atomic.Int32
-	stalled  atomic.Int32  // writes waiting for a stalled container input
-	done     chan struct{} // closed when Run returned
-	err      error         // Run's result, after done
+	t         *testing.T
+	term      *Terminal
+	real      *vt.Terminal
+	stdin     *bufPipe
+	out       *chunkReader // the session's output
+	sessionIn *syncBuffer  // the session's input
+	stdout    *syncBuffer
+	closedIn  atomic.Int32
+	stalled   atomic.Int32  // writes waiting for a stalled session input
+	done      chan struct{} // closed when Run returned
+	err       error         // Run's result, after done
 
 	mu         sync.Mutex
 	cols, rows int
@@ -96,15 +96,15 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 		o(&hc)
 	}
 	h := &harness{
-		t:        t,
-		stdin:    newBufPipe(1 << 20),
-		out:      newChunkReader(),
-		toCont:   &syncBuffer{},
-		stdout:   &syncBuffer{},
-		done:     make(chan struct{}),
-		cols:     cols,
-		rows:     rows,
-		onResize: hc.onResize,
+		t:         t,
+		stdin:     newBufPipe(1 << 20),
+		out:       newChunkReader(),
+		sessionIn: &syncBuffer{},
+		stdout:    &syncBuffer{},
+		done:      make(chan struct{}),
+		cols:      cols,
+		rows:      rows,
+		onResize:  hc.onResize,
 	}
 	var vtOpts []vt.TerminalOption
 	if !hc.silent {
@@ -113,15 +113,15 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 	h.real = newVT(t, cols, rows, vtOpts...)
 	feed(t, h.real, hc.host)
 	h.term = New(Config{
-		Stdin:        h.stdin,
-		Stdout:       stdoutWriter{h},
-		ContainerIn:  gatedWriter{h, hc.gate},
-		ContainerOut: h.out,
-		CloseInput:   func() error { h.closedIn.Add(1); return nil },
-		Resize:       h.recordResize,
-		Size:         h.size,
-		Environ:      []string{"TERM=xterm-256color"},
-		NoShadow:     hc.noShadow,
+		Stdin:      h.stdin,
+		Stdout:     stdoutWriter{h},
+		SessionIn:  gatedWriter{h, hc.gate},
+		SessionOut: h.out,
+		CloseInput: func() error { h.closedIn.Add(1); return nil },
+		Resize:     h.recordResize,
+		Size:       h.size,
+		Environ:    []string{"TERM=xterm-256color"},
+		NoShadow:   hc.noShadow,
 	})
 	h.term.timing = hc.timing
 	// stdoutWriter isn't a TTY, so detection would find no colours.
@@ -143,7 +143,7 @@ func (w stdoutWriter) Write(p []byte) (int, error) {
 	return w.h.real.Write(p)
 }
 
-// gatedWriter is the container's input: it takes nothing while gate is
+// gatedWriter is the session's input: it takes nothing while gate is
 // open.
 type gatedWriter struct {
 	h    *harness
@@ -155,7 +155,7 @@ func (w gatedWriter) Write(p []byte) (int, error) {
 		w.h.stalled.Add(1)
 		<-w.gate
 	}
-	return w.h.toCont.Write(p)
+	return w.h.sessionIn.Write(p)
 }
 
 func (h *harness) stop() {
@@ -199,7 +199,7 @@ func (h *harness) resize(cols, rows int) {
 	h.term.Resize()
 }
 
-// app writes container output and waits until the pump handled it.
+// app writes session output and waits until the pump handled it.
 func (h *harness) app(s string) {
 	h.t.Helper()
 	h.out.send(h.t, s)
@@ -208,11 +208,11 @@ func (h *harness) app(s string) {
 // keys types on the local terminal.
 func (h *harness) keys(s string) { _, _ = h.stdin.Write([]byte(s)) }
 
-// waitContainer waits until the container's input is exactly want.
-func (h *harness) waitContainer(want string) {
+// waitSessionInput waits until the session's input is exactly want.
+func (h *harness) waitSessionInput(want string) {
 	h.t.Helper()
-	require.Eventually(h.t, func() bool { return h.toCont.String() == want }, 5*time.Second, time.Millisecond,
-		"the container's input never became %q", want)
+	require.Eventually(h.t, func() bool { return h.sessionIn.String() == want }, 5*time.Second, time.Millisecond,
+		"the session's input never became %q", want)
 }
 
 // waitScreen waits until the real terminal's screen contains s.

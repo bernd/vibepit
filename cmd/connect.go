@@ -168,15 +168,15 @@ func runSSHTerminal(ctx context.Context, p sshTerminalParams) error {
 	// Create the Terminal only once the shell runs: only Run releases it,
 	// and a prompt needs Run. The pipe holds the shell's output until then.
 	t := overlay.New(overlay.Config{
-		Stdin:        p.stdin.Session(),
-		Stdout:       p.stdout,
-		ContainerIn:  stdinPipe,
-		ContainerOut: outR,
-		CloseInput:   stdinPipe.Close,
-		Resize:       func(cols, rows int) { sess.WindowChange(rows, cols) }, //nolint:errcheck
-		Size:         p.size,
-		Logf:         p.prompter.logf,
-		NoShadow:     p.prompter.onTerminal == nil,
+		Stdin:      p.stdin.Session(),
+		Stdout:     p.stdout,
+		SessionIn:  stdinPipe,
+		SessionOut: outR,
+		CloseInput: stdinPipe.Close,
+		Resize:     func(cols, rows int) { sess.WindowChange(rows, cols) }, //nolint:errcheck
+		Size:       p.size,
+		Logf:       p.prompter.logf,
+		NoShadow:   p.prompter.onTerminal == nil,
 	})
 	if p.prompter.onTerminal != nil {
 		p.prompter.onTerminal(t)

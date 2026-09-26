@@ -110,15 +110,15 @@ func TestCutTurnsSynchronizedOutputOff(t *testing.T) {
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
 
-func TestShadowAnswersGoToTheContainerWhileDetached(t *testing.T) {
+func TestShadowAnswersGoToTheSessionWhileDetached(t *testing.T) {
 	h := newHarness(t, 20, 5)
 	h.detach()
 	h.app("\x1b[6n")
-	h.waitContainer("\x1b[1;1R")
+	h.waitSessionInput("\x1b[1;1R")
 	h.term.leave(false)
 	assert.True(t, h.snapshotted(), "a replayed query would be answered twice")
 	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, "\x1b[1;1R", h.toCont.String(), "answered exactly once")
+	assert.Equal(t, "\x1b[1;1R", h.sessionIn.String(), "answered exactly once")
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
 
@@ -243,9 +243,9 @@ func TestLateBarrierReplyIsStripped(t *testing.T) {
 	h.detach()
 	h.term.leave(false)
 	h.keys("a\x1b[0nb")
-	h.waitContainer("ab")
+	h.waitSessionInput("ab")
 	h.keys("\x1b[0n")
-	h.waitContainer("ab\x1b[0n")
+	h.waitSessionInput("ab\x1b[0n")
 }
 
 func TestDetachWhileTheSessionEnds(t *testing.T) {
@@ -274,5 +274,5 @@ func TestNudgeKeepsAResizeDuringItsGap(t *testing.T) {
 	h.resize(30, 8) // SIGWINCH in the nudge's gap
 	<-nudged
 	log := h.resizeLog()
-	assert.Equal(t, "30x8", log[len(log)-1], "the container ends at the real size")
+	assert.Equal(t, "30x8", log[len(log)-1], "the session is left at the real size")
 }

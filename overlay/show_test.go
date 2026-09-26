@@ -99,10 +99,10 @@ func TestShowAnswersQueriesWhilePromptingOnce(t *testing.T) {
 	h := newHarness(t, 20, 6)
 	h.prompt(func() {
 		h.app("\x1b[6n")
-		h.waitContainer("\x1b[1;1R")
+		h.waitSessionInput("\x1b[1;1R")
 	})
 	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, "\x1b[1;1R", h.toCont.String(), "answered once")
+	assert.Equal(t, "\x1b[1;1R", h.sessionIn.String(), "answered once")
 	assert.True(t, h.snapshotted(), "a replay would make the real terminal answer again")
 }
 
@@ -138,10 +138,10 @@ func TestShowKeepsTheKittyStack(t *testing.T) {
 func TestShowKeysGoToThePrompt(t *testing.T) {
 	h := newHarness(t, 20, 6)
 	h.keys("before")
-	h.waitContainer("before")
+	h.waitSessionInput("before")
 	h.prompt(nil)
 	h.keys("after")
-	h.waitContainer("beforeafter")
+	h.waitSessionInput("beforeafter")
 }
 
 func TestShowPassesOnFocusChanges(t *testing.T) {
@@ -164,7 +164,7 @@ func TestShowPassesOnFocusChanges(t *testing.T) {
 				h.keys("\x1b[O")
 			})
 			h.keys("after")
-			h.waitContainer(tt.want + "after")
+			h.waitSessionInput(tt.want + "after")
 		})
 	}
 }
@@ -193,7 +193,7 @@ func TestShowRestoresWhenTheProgramPanics(t *testing.T) {
 	assert.NotContains(t, screenText(h.real), "PROMPT")
 	assertSameTerminal(t, h.term.shadow, h.real)
 	h.keys("k")
-	h.waitContainer("k")
+	h.waitSessionInput("k")
 }
 
 func TestShowCancelled(t *testing.T) {
@@ -208,7 +208,7 @@ func TestShowCancelled(t *testing.T) {
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
 
-func TestShowEndsWhenTheContainerExits(t *testing.T) {
+func TestShowEndsWhenTheSessionExits(t *testing.T) {
 	h := newHarness(t, 20, 6)
 	h.app("$ ")
 	done := h.show(context.Background(), promptModel)
@@ -343,7 +343,7 @@ func TestShowReplaysBelowHostOutput(t *testing.T) {
 			assert.False(t, h.snapshotted(), "raw replay")
 			h.app("date\r\nnow\r\n$ ")
 			assert.Equal(t, tt.want, screenText(h.real))
-			assert.Empty(t, h.toCont.String(), "the position reply isn't the app's input")
+			assert.Empty(t, h.sessionIn.String(), "the position reply isn't the app's input")
 		})
 	}
 }

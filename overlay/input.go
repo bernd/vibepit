@@ -24,18 +24,18 @@ const (
 type inputMode uint8
 
 const (
-	toContainer inputMode = iota
-	draining              // T1 to T2: still the container's, watching for the barrier reply
+	toSession inputMode = iota
+	draining            // T1 to T2: still the session's, watching for the barrier reply
 	toPrompt
 )
 
-// inputMux is the only reader of stdin. Input goes to the container except
+// inputMux is the only reader of stdin. Input goes to the session except
 // while a prompt owns it, and it changes hands at exact bytes: at the
 // barrier reply (T2) and under the caller's lock (T3).
 type inputMux struct {
-	src       io.Reader
-	container io.Writer
-	done      chan struct{}
+	src     io.Reader
+	session io.Writer
+	done    chan struct{}
 
 	mu         sync.Mutex
 	mode       inputMode
@@ -44,7 +44,7 @@ type inputMux struct {
 	barrier    chan struct{} // closed at the barrier reply
 	stripUntil time.Time     // until then, drop one barrier reply
 	lastInput  time.Time     // the latest input other than reports
-	appFocus   byte          // the latest focus report the container got: 'I', 'O' or 0
+	appFocus   byte          // the latest focus report the session got: 'I', 'O' or 0
 	// promptFocus is the latest focus report the current prompt got,
 	// which Release passes on to the app.
 	promptFocus byte
@@ -64,9 +64,9 @@ type posWait struct {
 // query in time.
 var errPositionTimeout = errors.New("overlay: terminal did not answer the cursor position query")
 
-// newInputMux routes src to container until a prompt takes the input.
-func newInputMux(src io.Reader, container io.Writer) *inputMux {
-	return &inputMux{src: src, container: container, done: make(chan struct{})}
+// newInputMux routes src to session until a prompt takes the input.
+func newInputMux(src io.Reader, session io.Writer) *inputMux {
+	return &inputMux{src: src, session: session, done: make(chan struct{})}
 }
 
 // Done is closed when stdin has ended.
@@ -78,7 +78,7 @@ func (m *inputMux) Run() error {
 	for {
 		n, err := m.src.Read(buf)
 		if n > 0 && m.route(buf[:n]) {
-			m.waitContainer()
+			m.waitSession()
 		}
 		if err != nil {
 			m.mu.Lock()
@@ -101,7 +101,7 @@ func (m *inputMux) Run() error {
 }
 
 // route sends p to the owner of the input. It reports whether the input
-// still belongs to the container.
+// still belongs to the session.
 func (m *inputMux) route(p []byte) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,7 +114,7 @@ func (m *inputMux) route(p []byte) bool {
 		p = m.scanPosition(p, now)
 		_, focus = reports(p)
 	}
-	if m.mode == toContainer && !now.Before(m.stripUntil) {
+	if m.mode == toSession && !now.Before(m.stripUntil) {
 		m.send(p, focus)
 		return true
 	}
@@ -151,14 +151,14 @@ func (m *inputMux) route(p []byte) bool {
 	return m.mode != toPrompt
 }
 
-// roomWaiter is a container input that queues writes instead of blocking.
+// roomWaiter is a session input that queues writes instead of blocking.
 type roomWaiter interface{ waitRoom() }
 
-// waitContainer is the stdin pump's backpressure: it waits, outside the
-// lock, until a queueing container input has room. The prompt's input
-// never waits for the container.
-func (m *inputMux) waitContainer() {
-	if w, ok := m.container.(roomWaiter); ok {
+// waitSession is the stdin pump's backpressure: it waits, outside the
+// lock, until a queueing session input has room. The prompt's input
+// never waits for the session.
+func (m *inputMux) waitSession() {
+	if w, ok := m.session.(roomWaiter); ok {
 		w.waitRoom()
 	}
 }
@@ -168,14 +168,14 @@ func (m *inputMux) reply() {
 	switch m.mode {
 	case draining:
 		// T2: the terminal answers in order, so every reply it owed the
-		// app has already gone to the container.
+		// app has already gone to the session.
 		m.mode = toPrompt
 		close(m.barrier)
 	case toPrompt:
 		// The prompt's queries are filtered out, so this answers a DSR 5n
 		// the app sent before the cut. The first CSI 0n went to the
 		// barrier; the bytes are the same, so the app still gets one.
-		_, _ = m.container.Write([]byte(barrierReply))
+		_, _ = m.session.Write([]byte(barrierReply))
 	default:
 		// The late reply to a barrier query that timed out.
 		m.stripUntil = time.Time{}
@@ -203,7 +203,7 @@ func (m *inputMux) send(p []byte, focus byte) {
 	if focus != 0 {
 		m.appFocus = focus
 	}
-	_, _ = m.container.Write(p)
+	_, _ = m.session.Write(p)
 }
 
 func (m *inputMux) flushHeldLocked() {
@@ -213,7 +213,7 @@ func (m *inputMux) flushHeldLocked() {
 	}
 }
 
-// Drain starts T1. Input stays with the container until the barrier
+// Drain starts T1. Input stays with the session until the barrier
 // reply, which AwaitBarrier waits for. Call it before the barrier query
 // goes out.
 func (m *inputMux) Drain() {
@@ -293,7 +293,7 @@ func (m *inputMux) AwaitSilence(ctx context.Context, quiet, limit time.Duration)
 }
 
 // Release is T3: it runs leave while no input can be routed, then hands
-// input back to the container. When the barrier reply is still pending,
+// input back to the session. When the barrier reply is still pending,
 // strip drops one that arrives within that time, so it can't reach the
 // app. When the app takes focus reports (focusReports), the latest one the
 // prompt got goes to the app, unless the app already had that focus.
@@ -303,7 +303,7 @@ func (m *inputMux) Release(strip time.Duration, focusReports bool, leave func())
 	leave()
 	pending := m.mode == draining
 	m.flushHeldLocked()
-	m.mode = toContainer
+	m.mode = toSession
 	if focusReports && m.promptFocus != 0 && m.promptFocus != m.appFocus {
 		m.write([]byte{0x1b, '[', m.promptFocus})
 	}

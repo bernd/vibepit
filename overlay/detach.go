@@ -164,7 +164,7 @@ func (t *Terminal) writeToGroundLocked(p []byte) (int, bool, error) {
 
 // leave is T3. Holding t.mu, and the inputMux lock through Release, it
 // writes the leave sequence, attaches output and hands input back, so no
-// container output and no input slips in between. drawn tells whether the
+// session output and no input slips in between. drawn tells whether the
 // enter sequence was written.
 func (t *Terminal) leave(drawn bool) {
 	t.mu.Lock()

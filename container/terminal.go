@@ -95,15 +95,15 @@ func buildAttachOptions(opts []AttachOption) attachOptions {
 // newSessionTerminal connects a hijacked session to the local terminal.
 func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.Writer, size func() (int, int, error), resizeFn func(height, width uint), o attachOptions) *overlay.Terminal {
 	return overlay.New(overlay.Config{
-		Stdin:        stdin,
-		Stdout:       stdout,
-		ContainerIn:  resp.Conn,
-		ContainerOut: resp.Reader,
-		CloseInput:   resp.CloseWrite,
-		Resize:       func(cols, rows int) { resizeFn(uint(rows), uint(cols)) },
-		Size:         size,
-		Logf:         o.logf,
-		NoShadow:     o.onTerminal == nil,
+		Stdin:      stdin,
+		Stdout:     stdout,
+		SessionIn:  resp.Conn,
+		SessionOut: resp.Reader,
+		CloseInput: resp.CloseWrite,
+		Resize:     func(cols, rows int) { resizeFn(uint(rows), uint(cols)) },
+		Size:       size,
+		Logf:       o.logf,
+		NoShadow:   o.onTerminal == nil,
 	})
 }
 

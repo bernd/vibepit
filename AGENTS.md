@@ -171,13 +171,13 @@ or wasm2go.
 ### Overlay (`overlay/`)
 
 Shows a Bubble Tea program over a `run` or `connect` session in any
-terminal. A shadow `vt.Terminal` sees every container byte but never sits
-between the container and the screen. `Terminal.Show` stops forwarding
-output at a byte where the shadow's parser is at ground, hands stdin to the
-prompt at the terminal's reply to a DSR 5n barrier query, and restores the
-screen by replaying the output logged meanwhile or from the shadow.
-`inputMux` is the only reader of stdin. `NewFilter` passes only the prompt
-output the restore can undo. Used by `container.runTTYSession` and
+terminal. A shadow `vt.Terminal` sees every session byte but never sits
+between the session and the screen. `Terminal.Show` stops forwarding output
+at a byte where the shadow's parser is at ground, hands stdin to the prompt
+at the terminal's reply to a DSR 5n barrier query, and restores the screen
+by replaying the output logged meanwhile or from the shadow. `inputMux` is
+the only reader of stdin. `NewFilter` passes only the prompt output the
+restore can undo. Used by `container.runTTYSession` and
 `cmd.runSSHTerminal`; `cmd/prompt.go` shows the approve screen through it.
 Only `overlay` imports `vt` on the host side.
 
