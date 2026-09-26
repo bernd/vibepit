@@ -1567,7 +1567,7 @@ LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
   The `ward` package stays in the tree, unused.
 - **Stderr goes through the overlay.** `vibed` writes its own diagnostics
   (for example `create session: ...`) to the SSH stderr stream even with a
-  PTY. Stdout and stderr share one pipe into `ContainerOut`, so neither
+  PTY. Stdout and stderr share one pipe into `SessionOut`, so neither
   lands on a prompt. The pipe closes after `session.Wait`, which ends
   `Run`.
 - **Stdin hand-off.** One goroutine reads `os.Stdin` for the whole
