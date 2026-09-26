@@ -37,9 +37,12 @@ type inputMux struct {
 	session io.Writer
 	done    chan struct{}
 
-	mu         sync.Mutex
-	mode       inputMode
-	held       int // leading bytes of barrierReply seen and not routed yet
+	mu   sync.Mutex
+	mode inputMode
+	held int // leading bytes of barrierReply seen and not routed yet
+	// owed counts the app's DSR 5n queries the terminal hasn't answered.
+	// Their replies come before the barrier's and are the app's.
+	owed       int
 	prompt     *bufPipe
 	barrier    chan struct{} // closed at the barrier reply
 	stripUntil time.Time     // until then, drop one barrier reply
@@ -114,7 +117,7 @@ func (m *inputMux) route(p []byte) bool {
 		p = m.scanPosition(p, now)
 		_, focus = reports(p)
 	}
-	if m.mode == toSession && !now.Before(m.stripUntil) {
+	if m.mode == toSession && m.owed == 0 && !now.Before(m.stripUntil) {
 		m.send(p, focus)
 		return true
 	}
@@ -165,6 +168,14 @@ func (m *inputMux) waitSession() {
 
 // reply handles a complete barrier reply.
 func (m *inputMux) reply() {
+	if m.owed > 0 {
+		// The app's reply. Before the leave it comes ahead of the barrier's;
+		// after it, a late barrier reply may come first, but the bytes are
+		// the same.
+		m.owed--
+		_, _ = m.session.Write([]byte(barrierReply))
+		return
+	}
 	switch m.mode {
 	case draining:
 		// The handoff: the terminal answers in order, so every reply it owed
@@ -213,6 +224,16 @@ func (m *inputMux) flushHeldLocked() {
 	}
 }
 
+// ExpectAppReplies counts n DSR 5n queries the app sent to the terminal.
+// Call it before they go out. An app reply split across reads while input
+// is the session's isn't recognized and passes as is, so the count stays
+// too high until a barrier timeout resets it.
+func (m *inputMux) ExpectAppReplies(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.owed += n
+}
+
 // Drain is input's side of the cut. Input stays with the session until the
 // barrier reply, which AwaitBarrier waits for. Call it before the barrier
 // query goes out.
@@ -233,6 +254,12 @@ func (m *inputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.
 	barrier, prompt := m.barrier, m.prompt
 	m.mu.Unlock()
 	if err := m.await(ctx, barrier, timeout, ErrBarrierTimeout); err != nil {
+		if errors.Is(err, ErrBarrierTimeout) {
+			// The terminal may not answer DSR 5n at all.
+			m.mu.Lock()
+			m.owed = 0
+			m.mu.Unlock()
+		}
 		return nil, err
 	}
 	return prompt, nil

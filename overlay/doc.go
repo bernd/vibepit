@@ -18,7 +18,9 @@
 //     The cut ends by writing the barrier query, DSR 5n.
 //   - The handoff: the terminal's reply to the barrier query, CSI 0n,
 //     moves input to the prompt at that byte. Terminals answer in order,
-//     so every reply the app was owed has reached it by then. Only now is
+//     so every reply the app was owed has reached it by then; the CSI 0n
+//     replies to the app's own DSR 5n queries come first and are the
+//     app's, counted from the shadow's answers. Only now is
 //     the prompt drawn. A terminal that didn't answer twice in a row gets
 //     no more barrier queries; input then moves after a pause in typing.
 //   - The leave: after the prompt exits, the screen is restored, and

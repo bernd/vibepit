@@ -183,6 +183,25 @@ func TestShowBarrierTimeout(t *testing.T) {
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
 
+func TestShowHandoffWaitsForTheAppsBarrierReplies(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	// The terminal is slow: the app's DSR 5n and 6n are unanswered at the
+	// cut, so their replies come before the barrier's CSI 0n.
+	h.holdReplies()
+	h.app("\x1b[5n\x1b[6n")
+	done := h.show(context.Background(), promptModel)
+	require.Eventually(t, func() bool { return strings.Count(h.stdout.String(), barrierQuery) == 2 },
+		5*time.Second, time.Millisecond, "the barrier query went out")
+	replies := h.releaseReplies()
+	require.True(t, strings.HasSuffix(replies, barrierReply))
+	// The prompt would take the CPR for Alt+F3.
+	h.waitSessionInput(strings.TrimSuffix(replies, barrierReply))
+	h.waitScreen("PROMPT")
+	h.keys("x")
+	require.NoError(t, h.result(done))
+}
+
 func TestShowRestoresWhenTheProgramPanics(t *testing.T) {
 	h := newHarness(t, 20, 6)
 	h.app("$ ")

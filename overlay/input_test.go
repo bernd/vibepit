@@ -58,6 +58,7 @@ func TestInputMuxBarrier(t *testing.T) {
 	tests := []struct {
 		name        string
 		chunks      []string
+		owed        int // the app's DSR 5n queries unanswered at the cut
 		wantSession string
 		wantPrompt  string
 	}{
@@ -69,10 +70,13 @@ func TestInputMuxBarrier(t *testing.T) {
 		{name: "escape key before the reply", chunks: []string{"\x1b", "\x1b[0n"}, wantSession: "\x1b"},
 		{name: "arrow key split before the reply", chunks: []string{"\x1b[", "A\x1b[0nq"}, wantSession: "\x1b[A", wantPrompt: "q"},
 		{name: "app DSR 5n in flight gets one reply", chunks: []string{"\x1b[0n", "\x1b[0n"}, wantSession: "\x1b[0n"},
+		{name: "app DSR 5n owed", chunks: []string{"\x1b[0n\x1b[1;3Ra\x1b[0nb"}, owed: 1, wantSession: "\x1b[0n\x1b[1;3Ra", wantPrompt: "b"},
+		{name: "app DSR 5n owed twice", chunks: []string{"\x1b[0n", "\x1b[0n", "\x1b[0nb"}, owed: 2, wantSession: "\x1b[0n\x1b[0n", wantPrompt: "b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newMuxHarness(t)
+			h.mux.ExpectAppReplies(tt.owed)
 			h.mux.Drain()
 			for _, c := range tt.chunks {
 				h.src.send(t, c)
@@ -89,6 +93,28 @@ func TestInputMuxBarrier(t *testing.T) {
 			assert.Empty(t, string(rest), "nothing else reached the prompt")
 		})
 	}
+}
+
+func TestInputMuxOwedReplyWhileAttached(t *testing.T) {
+	h := newMuxHarness(t)
+	h.mux.ExpectAppReplies(1)
+	h.src.send(t, "a\x1b[0nb")
+	in := h.barrier(t)
+	assert.Equal(t, "a\x1b[0nb", h.sessionIn.String(), "the app's reply passed, the count went back to zero")
+	h.src.send(t, "c")
+	assert.Equal(t, "c", readN(t, in, 1))
+}
+
+func TestInputMuxBarrierTimeoutResetsOwedReplies(t *testing.T) {
+	h := newMuxHarness(t)
+	h.mux.ExpectAppReplies(1)
+	h.mux.Drain()
+	_, err := h.mux.AwaitBarrier(context.Background(), time.Millisecond)
+	require.ErrorIs(t, err, ErrBarrierTimeout)
+	h.mux.Release(0, false, func() {})
+	in := h.barrier(t)
+	h.src.send(t, "c")
+	assert.Equal(t, "c", readN(t, in, 1), "the next barrier reply is the handoff")
 }
 
 func TestInputMuxPromptGetsEscapeRightAway(t *testing.T) {

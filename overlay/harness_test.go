@@ -87,6 +87,40 @@ type harness struct {
 	cols, rows int
 	resizes    []string
 	onResize   func(cols, rows int)
+	holding    bool   // the stand-in's replies wait for releaseReplies
+	held       []byte // replies held back, in order
+}
+
+// answer sends the stand-in's replies to stdin, or holds them back like a
+// slow terminal.
+func (h *harness) answer(b []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.holding {
+		h.held = append(h.held, b...)
+		return
+	}
+	_, _ = h.stdin.Write(b)
+}
+
+// holdReplies makes the stand-in hold its replies back until
+// releaseReplies.
+func (h *harness) holdReplies() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.holding = true
+}
+
+// releaseReplies sends the held replies to stdin in one read and returns
+// them.
+func (h *harness) releaseReplies() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.holding = false
+	held := string(h.held)
+	h.held = nil
+	_, _ = h.stdin.Write([]byte(held))
+	return held
 }
 
 func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
@@ -108,7 +142,7 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 	}
 	var vtOpts []vt.TerminalOption
 	if !hc.silent {
-		vtOpts = append(vtOpts, vt.WithWritePty(func(b []byte) { _, _ = h.stdin.Write(b) }))
+		vtOpts = append(vtOpts, vt.WithWritePty(h.answer))
 	}
 	h.real = newVT(t, cols, rows, vtOpts...)
 	feed(t, h.real, hc.host)

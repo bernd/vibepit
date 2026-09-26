@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -313,14 +314,21 @@ func (t *Terminal) failLocked(err error) {
 
 // flushAnswersLocked sends the shadow's answers to the session while
 // detached. While attached the real terminal answers the same queries, so
-// the shadow's answers are dropped.
+// the shadow's answers are dropped; its answers to DSR 5n tell input which
+// CSI 0n replies are the app's and not the barrier's. The shadow answers
+// before the output reaches the terminal.
 func (t *Terminal) flushAnswersLocked() {
 	if len(t.answers) == 0 {
 		return
 	}
-	if !t.attached {
+	switch {
+	case !t.attached:
 		_, _ = t.sessionIn.Write(t.answers)
 		t.answered = true
+	case !t.barrierUnsupportedLocked():
+		if n := bytes.Count(t.answers, []byte(barrierReply)); n > 0 {
+			t.in.ExpectAppReplies(n)
+		}
 	}
 	t.answers = t.answers[:0]
 }
