@@ -111,6 +111,7 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 	// Stop before the shutdown prompt: it may take the proxy down.
 	prompter.stop()
 	restoreTerminal()
+	prompter.report()
 
 	if waitErr != nil {
 		// A forced detach (keepalive timeout across a suspend/resume, lost

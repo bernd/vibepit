@@ -31,6 +31,11 @@ func Error(format string, args ...any) {
 	writeStatus(os.Stderr, "error", errorStyle, format, args...)
 }
 
+// Warn prints a right-aligned bold orange "warning" followed by a message to stderr.
+func Warn(format string, args ...any) {
+	writeStatus(os.Stderr, "warning", errorStyle, format, args...)
+}
+
 // Debug prints a right-aligned bold purple "debug" followed by a message to stdout.
 func Debug(format string, args ...any) {
 	writeStatus(os.Stdout, "debug", debugStyle, format, args...)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -142,6 +141,15 @@ type blockPrompter struct {
 	onTerminal func(*overlay.Terminal)          // starts prompting on the session's terminal; nil without --prompt
 	logf       func(format string, args ...any) // the terminal's diagnostics
 	stop       func()                           // ends polling and closes an open prompt; always safe to call
+	notes      *promptNotes                     // what prompting couldn't show; nil without --prompt
+}
+
+// report prints the notes collected during the session. Call it after stop,
+// once the session gave the terminal back.
+func (bp *blockPrompter) report() {
+	for _, line := range bp.notes.Lines() {
+		tui.Warn("%s", line)
+	}
 }
 
 // attachOptions hands the hooks to a container attach.
@@ -170,7 +178,7 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 	if err != nil {
 		return noBlockPrompter, fmt.Errorf("--prompt: %w", err)
 	}
-	logger, logPath := openPromptLog(session.SessionID)
+	notes := &promptNotes{}
 
 	var (
 		mu       sync.Mutex
@@ -188,12 +196,12 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
 			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, entry)))
 		}
-		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(logger, show))
+		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show))
 	}
-	tui.Status("Prompting", "for blocked connections (log: %s)", logPath)
 	return &blockPrompter{
 		onTerminal: onTerminal,
-		logf:       logger.Printf,
+		logf:       notes.Printf,
+		notes:      notes,
 		stop: func() {
 			mu.Lock()
 			stopped = true
@@ -207,14 +215,14 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 	}, nil
 }
 
-// loggedPrompt logs why a prompt failed or wasn't shown: the session owns
-// the terminal, so the prompt log is the only place for it. A prompt ended
-// by the session ending isn't a failure.
-func loggedPrompt(logger *log.Logger, prompt promptFunc) promptFunc {
+// loggedPrompt notes why a prompt failed or wasn't shown: the session owns
+// the terminal, so it's reported after the session. A prompt ended by the
+// session ending isn't a failure.
+func loggedPrompt(logf func(format string, args ...any), prompt promptFunc) promptFunc {
 	return func(ctx context.Context, e proxy.LogEntry) error {
 		err := prompt(ctx, e)
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, overlay.ErrClosed) {
-			logger.Printf("prompt for %s: %v", tui.SanitizeText(e.Target().String()), err)
+			logf("prompt for %s: %v", tui.SanitizeText(e.Target().String()), err)
 		}
 		return err
 	}

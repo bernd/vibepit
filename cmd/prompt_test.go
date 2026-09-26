@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -280,6 +278,7 @@ func TestStartBlockPrompter(t *testing.T) {
 			assert.Empty(t, bp.attachOptions(), "no prompter, no attach options")
 			assert.Nil(t, bp.onTerminal, "no prompter, no terminal hook")
 			assert.Nil(t, bp.logf)
+			assert.Empty(t, bp.notes.Lines(), "no prompter, nothing to report")
 			bp.stop()
 			assert.Equal(t, tt.wantLookups, lookups.Load())
 			if tt.wantErr == "" {
@@ -301,15 +300,19 @@ func TestLoggedPrompt(t *testing.T) {
 		{name: "shown"},
 		{name: "cancelled", err: context.Canceled},
 		{name: "session ended", err: fmt.Errorf("show: %w", overlay.ErrClosed)},
-		{name: "unavailable", err: fmt.Errorf("%w: trap", overlay.ErrUnavailable), wantLog: "prompt for evil[2J.com:443: overlay: unavailable: trap\n"},
-		{name: "barrier timeout", err: overlay.ErrBarrierTimeout, wantLog: "prompt for evil[2J.com:443: overlay: terminal did not answer the barrier query\n"},
+		{name: "unavailable", err: fmt.Errorf("%w: trap", overlay.ErrUnavailable), wantLog: "prompt for evil[2J.com:443: overlay: unavailable: trap"},
+		{name: "barrier timeout", err: overlay.ErrBarrierTimeout, wantLog: "prompt for evil[2J.com:443: overlay: terminal did not answer the barrier query"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			prompt := loggedPrompt(log.New(&buf, "", 0), func(context.Context, proxy.LogEntry) error { return tt.err })
+			var notes promptNotes
+			prompt := loggedPrompt(notes.Printf, func(context.Context, proxy.LogEntry) error { return tt.err })
 			assert.Equal(t, tt.err, prompt(context.Background(), entry))
-			assert.Equal(t, tt.wantLog, buf.String())
+			if tt.wantLog == "" {
+				assert.Empty(t, notes.Lines())
+			} else {
+				assert.Equal(t, []string{tt.wantLog}, notes.Lines())
+			}
 		})
 	}
 }

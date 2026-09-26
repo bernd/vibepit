@@ -102,9 +102,8 @@ Behavior details:
   begins. If the terminal doesn't answer, the prompt is skipped and shown
   on the next block of that target. After two misses, vibepit instead
   switches input to the prompt after a short pause in typing.
-- When a prompt can't be shown, the reason is written to the prompt log,
-  `$XDG_STATE_HOME/vibepit/prompt-logs/<session>.log` (usually under
-  `~/.local/state/`). `--prompt` prints its path at startup.
+- When a prompt can't be shown, or your terminal lacks something prompts
+  rely on, vibepit prints a warning once the session ends.
 - When the agent uses the whole screen (for example an editor), or the
   terminal is resized while the prompt shows, vibepit redraws the screen
   from its own copy. Lines that scrolled off in the meantime are then
