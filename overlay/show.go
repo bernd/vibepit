@@ -29,8 +29,8 @@ func (t *Terminal) Show(ctx context.Context, model tea.Model) error {
 	return t.runPrompt(ctx, in, model)
 }
 
-// awaitBarrier is T2. After barrierTimeoutsBeforeDegraded timeouts in a
-// row, the session waits for input silence instead.
+// awaitBarrier is the handoff. After barrierTimeoutsBeforeDegraded timeouts in
+// a row, the session waits for input silence instead.
 func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 	ctx, cancel := t.untilEnd(ctx, nil)
 	defer cancel()
@@ -65,7 +65,7 @@ func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 }
 
 // runPrompt writes the enter sequence, runs the program and always ends
-// with T3.
+// with the leave.
 func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model) (err error) {
 	t.mu.Lock()
 	_, _ = io.WriteString(t.cfg.Stdout, enterSeq(enterFor(t.cut)))

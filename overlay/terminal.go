@@ -15,8 +15,8 @@ import (
 	"github.com/charmbracelet/colorprofile"
 )
 
-// barrierTimeoutsBeforeDegraded consecutive barrier timeouts switch T2 to
-// waiting for input silence.
+// barrierTimeoutsBeforeDegraded consecutive barrier timeouts switch the
+// handoff to waiting for input silence.
 const barrierTimeoutsBeforeDegraded = 2
 
 // Config connects a Terminal to the local terminal and the session.
@@ -41,14 +41,15 @@ type Config struct {
 	NoShadow bool
 }
 
-// timing holds the spec's budgets; tests shorten them.
+// timing holds the waits and limits of the alignment, the cut and the
+// handoff; tests shorten them.
 type timing struct {
 	positionWait time.Duration // Run: wait for the cursor position reply
-	groundWait   time.Duration // T1: longest wait for ground before a forced cut
-	groundBytes  int           // T1: most bytes forwarded while waiting for ground
-	barrierWait  time.Duration // T2: wait for the barrier reply
-	silence      time.Duration // T2 without barrier support: input quiet time
-	silenceMax   time.Duration // T2 without barrier support: longest wait for quiet
+	groundWait   time.Duration // cut: longest wait for ground before a forced cut
+	groundBytes  int           // cut: most bytes forwarded while waiting for ground
+	barrierWait  time.Duration // handoff: wait for the barrier reply
+	silence      time.Duration // handoff without barrier support: input quiet time
+	silenceMax   time.Duration // handoff without barrier support: longest wait for quiet
 	lateStrip    time.Duration // after a barrier or position timeout: drop a late reply
 	nudgeGap     time.Duration // between the two resizes of a repaint nudge
 	logMax       int           // raw log cap
@@ -91,8 +92,8 @@ type Terminal struct {
 	shadowErr       error // set: prompts are unavailable
 	cols, rows      int
 	attached        bool
-	detach          *detachReq // a T1 waiting for ground
-	cut             *cutState  // from T1 to T3
+	detach          *detachReq // a cut waiting for ground
+	cut             *cutState  // from the cut to the leave
 	log             rawLog     // output since the cut
 	answers         []byte     // the shadow's answers during the current call
 	answered        bool       // the shadow answered a query while detached
@@ -106,7 +107,7 @@ type Terminal struct {
 	snapshot func(*vt.Terminal, *cutState, entered) ([]byte, bool, error)
 }
 
-// detachReq is a pending T1: the pump cuts at the next byte where the
+// detachReq is a pending cut: the pump cuts at the next byte where the
 // shadow is at ground.
 type detachReq struct {
 	done      chan struct{}
@@ -368,7 +369,7 @@ func (t *Terminal) size() (int, int) {
 
 func (t *Terminal) isDone() bool { return isClosed(t.done) }
 
-// barrierUnsupportedLocked tells whether T2 waits for input silence
+// barrierUnsupportedLocked tells whether the handoff waits for input silence
 // instead of the barrier reply. The count stops once it is reached.
 func (t *Terminal) barrierUnsupportedLocked() bool {
 	return t.barrierTimeouts >= barrierTimeoutsBeforeDegraded

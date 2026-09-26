@@ -13,8 +13,8 @@ import (
 // scroll region, the cursor and its visibility dirty, as a prompt might.
 const promptDraw = "\x1b[1;1H\x1b[1;35mPROMPT\x1b[3;4r\x1b[?25l\x1b[2;2Hx"
 
-// throughPrompt feeds real what the real terminal gets from T1 until the
-// program exits: the T1 writes, the enter sequence and prompt output.
+// throughPrompt feeds real what the real terminal gets from the cut until
+// the program exits: the cut's writes, the enter sequence and prompt output.
 func throughPrompt(t *testing.T, real *vt.Terminal, c *cutState) entered {
 	t.Helper()
 	if c.modes[modeSync] {
@@ -168,7 +168,7 @@ func TestSnapshotLeaveWritesModesOutsideDOnlyWhenChanged(t *testing.T) {
 	assert.Contains(t, s, "\x1b[?2031h")
 	assert.Contains(t, s, "\x1b[?1000h")
 	for _, k := range append(drawModes, modeIRM) {
-		assert.Contains(t, s, modeSeq(k, c.modes[k]), "the prompt changed set D")
+		assert.Contains(t, s, modeSeq(k, c.modes[k]), "the prompt changed this mode")
 	}
 }
 

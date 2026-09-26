@@ -21,7 +21,7 @@ type modeKey struct {
 var (
 	modeIRM  = modeKey{4, true}
 	modeSync = modeKey{2026, false}
-	// drawModes are the set-D modes except IRM, which the raw leave writes
+	// drawModes are the prompt's modes except IRM, which the raw leave writes
 	// after the cursor, because the pending-wrap reprint must not insert.
 	drawModes = []modeKey{{20, true}, {5, false}, {6, false}, {7, false}, {25, false}, modeSync}
 )
@@ -31,8 +31,9 @@ var (
 // switch.
 var skipReconcile = map[uint16]bool{3: true, 47: true, 1047: true, 1048: true, 1049: true}
 
-// inD reports whether the prompt may change mode k: the draw modes and IRM.
-func inD(k modeKey) bool {
+// promptChanges reports whether mode k is in the prompt's state: the draw
+// modes and IRM.
+func promptChanges(k modeKey) bool {
 	return k == modeIRM || slices.Contains(drawModes, k)
 }
 
@@ -49,9 +50,9 @@ const (
 	clearScreen   = "\x1b[2J\x1b[H"
 )
 
-// cutState is the real terminal's state at the cut (T1), read from the
-// shadow. The prompt changes only set D, so everything else stays the
-// real terminal's known state until the leave.
+// cutState is the real terminal's state at the cut, read from the shadow.
+// The prompt changes nothing outside the prompt's state, so everything
+// else stays the real terminal's known state until the leave.
 type cutState struct {
 	forced      bool // no ground within the budget; CAN was written
 	barrierSent bool
@@ -62,8 +63,8 @@ type cutState struct {
 	cursor      vt.CursorStyle
 }
 
-// cutExtras restore the set-D state the modes don't cover. The Modes
-// extra is left out: the leave writes set-D modes itself.
+// cutExtras restore the part of the prompt's state the modes don't cover.
+// The Modes extra is left out: the leave writes those modes itself.
 var cutExtras = vt.Extras{ScrollRegion: true, Cursor: true, Style: true, Hyperlink: true, Protection: true, Charsets: true}
 
 func captureCut(sh *vt.Terminal) (*cutState, error) {
@@ -130,10 +131,10 @@ type entered struct {
 
 func enterFor(c *cutState) entered { return entered{kitty: true, promptScreen: !c.alt} }
 
-// enterSeq changes only set D: the prompt's screen when the app is on the
-// primary one, kitty keyboard, the drawing modes, the scroll region and
-// the pen. It clears the screen the prompt draws on in both cases:
-// Bubble Tea's renderer assumes a clear screen.
+// enterSeq changes only the prompt's state: the prompt's screen when the app
+// is on the primary one, kitty keyboard, the drawing modes, the scroll region
+// and the pen. It clears the screen the prompt draws on in both cases: Bubble
+// Tea's renderer assumes a clear screen.
 func enterSeq(e entered) string {
 	var s strings.Builder
 	if e.promptScreen {
@@ -162,11 +163,11 @@ func leaveScreen(e entered) string {
 }
 
 // rawLeave restores the real terminal to the cut and replays the output
-// logged since: leave the prompt's screen, set-D modes except IRM, the pen
+// logged since: leave the prompt's screen, its modes except IRM, the pen
 // reset and the cut extras, IRM, the log. DECOM and DECSTBM come before
 // the cursor, because both home it; IRM comes after it, because the
 // pending-wrap reprint must not insert. With nothing entered it undoes
-// T1's writes, which is the leave after a barrier timeout.
+// the cut's writes, which is the leave after a barrier timeout.
 func rawLeave(c *cutState, e entered, log []byte) []byte {
 	var b bytes.Buffer
 	b.WriteString(leaveScreen(e))
@@ -191,11 +192,12 @@ var snapshotExtras = func() vt.Extras {
 // snapshotLeave rebuilds the real terminal from the shadow without
 // assuming anything about it beyond the cut. The order follows
 // snapshotLeave in vt/internal/ghostty/restore_test.go: leave the prompt's
-// screen, match the screen, write the set-D modes and those the app
+// screen, match the screen, write the prompt's modes and those the app
 // changed, reset the pen, clear, the formatter output. Then come the
 // title, working directory and cursor style, which the formatter doesn't
-// emit, and the continuation of an unfinished sequence. resync reports that the continuation was
-// unavailable, so the caller must drop output up to the next ground.
+// emit, and the continuation of an unfinished sequence. resync reports
+// that the continuation was unavailable, so the caller must drop output
+// up to the next ground.
 func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error) {
 	// Synchronized output off, so the real terminal draws the snapshot.
 	if err := sh.SetMode(2026, false, false); err != nil {
@@ -236,12 +238,13 @@ func snapshotLeave(sh *vt.Terminal, c *cutState, e entered) ([]byte, bool, error
 		if !m.ANSI && skipReconcile[m.Mode] {
 			continue
 		}
-		// Outside set D the real terminal still has the cut's value. The
-		// shadow's value for a mode the app never set is libghostty's
-		// default, not the real terminal's: writing it would turn off key
-		// auto-repeat (8) or cursor blinking (12), and enabling a report
-		// mode (1004, 2031, 2033, 2048) again would send a second report.
-		if !inD(k) && m.Value == c.modes[k] {
+		// Outside the prompt's state the real terminal still has the cut's
+		// value. The shadow's value for a mode the app never set is
+		// libghostty's default, not the real terminal's: writing it would turn
+		// off key auto-repeat (8) or cursor blinking (12), and enabling a
+		// report mode (1004, 2031, 2033, 2048) again would send a second
+		// report.
+		if !promptChanges(k) && m.Value == c.modes[k] {
 			continue
 		}
 		b.WriteString(modeSeq(k, m.Value))

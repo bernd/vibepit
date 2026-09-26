@@ -12,7 +12,7 @@ import (
 // can aborts the escape sequence a terminal is in the middle of.
 const can = 0x18
 
-// detachAt is T1: it stops forwarding output at a byte where the shadow's
+// detachAt is the cut: it stops forwarding output at a byte where the shadow's
 // parser is at ground, or after the budget with a forced cut. Without an
 // error the terminal is detached, and the caller must end with leave.
 func (t *Terminal) detachAt(ctx context.Context) error {
@@ -67,16 +67,16 @@ func (t *Terminal) detachAt(ctx context.Context) error {
 	return req.err
 }
 
-// endDetachLocked finishes the pending T1; err says why no cut happened.
+// endDetachLocked finishes the pending cut; err says why no cut happened.
 func (t *Terminal) endDetachLocked(err error) {
 	t.detach.err = err
 	close(t.detach.done)
 	t.detach = nil
 }
 
-// cutLocked is T1 at the current byte: capture the cut, stop forwarding,
-// and send the barrier query. After a forced cut, CAN aborts the sequence
-// the real terminal is in the middle of.
+// cutLocked makes the cut at the current byte: capture the cut, stop
+// forwarding, and send the barrier query. After a forced cut, CAN aborts the
+// sequence the real terminal is in the middle of.
 func (t *Terminal) cutLocked(forced bool) {
 	c, err := captureCut(t.shadow)
 	if err != nil {
@@ -162,10 +162,11 @@ func (t *Terminal) writeToGroundLocked(p []byte) (int, bool, error) {
 	return n, ground, nil
 }
 
-// leave is T3. Holding t.mu, and the inputMux lock through Release, it
-// writes the leave sequence, attaches output and hands input back, so no
-// session output and no input slips in between. drawn tells whether the
-// enter sequence was written.
+// leave restores the screen and switches back to the session. Holding
+// t.mu, and the inputMux lock through Release, it writes the leave
+// sequence, attaches output and hands input back, so no session output and
+// no input slips in between. drawn tells whether the enter sequence was
+// written.
 func (t *Terminal) leave(drawn bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

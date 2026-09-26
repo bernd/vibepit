@@ -36,7 +36,7 @@ func newMuxHarness(t *testing.T) *muxHarness {
 	return h
 }
 
-// barrier drains and completes T2 with a lone barrier reply.
+// barrier drains and completes the handoff with a lone barrier reply.
 func (h *muxHarness) barrier(t *testing.T) io.Reader {
 	t.Helper()
 	h.mux.Drain()
@@ -133,7 +133,7 @@ func TestInputMuxReleaseRunsLeaveUnderLock(t *testing.T) {
 	close(proceed)
 	<-released
 	require.True(t, <-routed)
-	assert.Equal(t, "k", h.sessionIn.String(), "input after T3 goes to the session")
+	assert.Equal(t, "k", h.sessionIn.String(), "input after the leave goes to the session")
 }
 
 func TestInputMuxReleaseFlushesHeldBytes(t *testing.T) {

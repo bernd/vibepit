@@ -25,13 +25,13 @@ type inputMode uint8
 
 const (
 	toSession inputMode = iota
-	draining            // T1 to T2: still the session's, watching for the barrier reply
+	draining            // cut to handoff: still the session's, watching for the barrier reply
 	toPrompt
 )
 
 // inputMux is the only reader of stdin. Input goes to the session except
 // while a prompt owns it, and it changes hands at exact bytes: at the
-// barrier reply (T2) and under the caller's lock (T3).
+// barrier reply (the handoff) and under the caller's lock (the leave).
 type inputMux struct {
 	src     io.Reader
 	session io.Writer
@@ -167,8 +167,8 @@ func (m *inputMux) waitSession() {
 func (m *inputMux) reply() {
 	switch m.mode {
 	case draining:
-		// T2: the terminal answers in order, so every reply it owed the
-		// app has already gone to the session.
+		// The handoff: the terminal answers in order, so every reply it owed
+		// the app has already gone to the session.
 		m.mode = toPrompt
 		close(m.barrier)
 	case toPrompt:
@@ -213,9 +213,9 @@ func (m *inputMux) flushHeldLocked() {
 	}
 }
 
-// Drain starts T1. Input stays with the session until the barrier
-// reply, which AwaitBarrier waits for. Call it before the barrier query
-// goes out.
+// Drain is input's side of the cut. Input stays with the session until the
+// barrier reply, which AwaitBarrier waits for. Call it before the barrier
+// query goes out.
 func (m *inputMux) Drain() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -226,7 +226,7 @@ func (m *inputMux) Drain() {
 	m.barrier = make(chan struct{})
 }
 
-// AwaitBarrier is T2: it waits for the barrier reply and returns the
+// AwaitBarrier is the handoff: it waits for the barrier reply and returns the
 // prompt's input. It fails with ErrBarrierTimeout after timeout.
 func (m *inputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.Reader, error) {
 	m.mu.Lock()
@@ -261,7 +261,7 @@ func (m *inputMux) await(ctx context.Context, reply <-chan struct{}, timeout tim
 	return err
 }
 
-// AwaitSilence is T2 for a terminal that doesn't answer the barrier
+// AwaitSilence is the handoff for a terminal that doesn't answer the barrier
 // query: input moves to the prompt after quiet without input, or after
 // limit, so typing that never pauses can't hold the prompt back. Mouse and
 // focus reports don't count as input: the terminal sends them while the
@@ -292,11 +292,11 @@ func (m *inputMux) AwaitSilence(ctx context.Context, quiet, limit time.Duration)
 	}
 }
 
-// Release is T3: it runs leave while no input can be routed, then hands
-// input back to the session. When the barrier reply is still pending,
-// strip drops one that arrives within that time, so it can't reach the
-// app. When the app takes focus reports (focusReports), the latest one the
-// prompt got goes to the app, unless the app already had that focus.
+// Release is input's side of the leave: it runs leave while no input can be
+// routed, then hands input back to the session. When the barrier reply is
+// still pending, strip drops one that arrives within that time, so it can't
+// reach the app. When the app takes focus reports (focusReports), the latest
+// one the prompt got goes to the app, unless the app already had that focus.
 func (m *inputMux) Release(strip time.Duration, focusReports bool, leave func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
