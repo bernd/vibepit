@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,23 @@ func TestApproveScreen_Deny(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.Denied, "deny is recorded in the proxy")
 	assert.False(t, httpAL.Allows("api.example.com", "443"))
+
+	_, cmd = s.Update(msg, w)
+	require.NotNil(t, cmd)
+	assert.IsType(t, tea.QuitMsg{}, cmd())
+}
+
+func TestApproveScreen_DenyOnOlderProxy(t *testing.T) {
+	// A proxy from before /deny answers 404. Nothing else can record the
+	// decision, so the prompt closes; this client won't ask again.
+	f := makeApproveSetup(t, blockedEntry)
+	s, w := f.s, f.w
+	s.client = testControlClient(t, http.NotFoundHandler())
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'n', Text: "n"}, w)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	require.IsType(t, decisionResultMsg{}, msg)
+	require.NoError(t, msg.(decisionResultMsg).err)
 
 	_, cmd = s.Update(msg, w)
 	require.NotNil(t, cmd)

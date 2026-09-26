@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -107,12 +108,29 @@ func (c *ControlClient) Check(entry proxy.LogEntry) (CheckResult, error) {
 }
 
 // Deny records that the user refused the entry's target, so other clients
-// stop prompting for it.
+// stop prompting for it. An older proxy without /deny can't record it; the
+// refusal then stays with this client, which doesn't ask twice anyway.
 func (c *ControlClient) Deny(entry proxy.LogEntry) error {
-	return c.post("/deny", map[string]string{
+	err := c.post("/deny", map[string]string{
 		"source": string(entry.Source),
 		"target": entry.Target().String(),
 	}, nil)
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+// statusError is a control API response other than 200 OK.
+type statusError struct {
+	method, path string
+	code         int
+	status       string
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("%s %s: %s", e.method, e.path, e.status)
 }
 
 func (c *ControlClient) postAllow(path string, entries []string) ([]string, error) {
@@ -137,7 +155,7 @@ func (c *ControlClient) post(path string, body, dest any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("POST %s: %s", path, resp.Status)
+		return &statusError{method: "POST", path: path, code: resp.StatusCode, status: resp.Status}
 	}
 	if dest == nil {
 		return nil
