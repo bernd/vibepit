@@ -411,6 +411,11 @@ func (m *inputMux) AwaitPosition(ctx context.Context, timeout, strip time.Durati
 // watching after it. A possible reply prefix waits across reads only until
 // AwaitPosition gives up. A late reply must arrive in one read, so a held
 // ESC can't delay the Escape key.
+//
+// xterm sends F3 with modifiers as CSI 1 ; m R, the same bytes as a reply,
+// so such a key typed while watching is taken for one. Watching stops at
+// the first match, so at most one key is lost; letting a late reply
+// through instead would give the app a key nobody typed.
 func (m *inputMux) scanPosition(p []byte, now time.Time) []byte {
 	w := m.pos
 	late := !w.until.IsZero()
