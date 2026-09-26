@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -114,7 +115,7 @@ func readN(t *testing.T, r io.Reader, n int) string {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatalf("reading %d bytes timed out", n)
+		require.FailNow(t, fmt.Sprintf("reading %d bytes timed out", n))
 	}
 	return string(buf)
 }

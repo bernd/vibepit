@@ -351,7 +351,7 @@ func TestApproveScreen_RendersThroughPromptFilter(t *testing.T) {
 			case err := <-filteredDone:
 				require.NoError(t, err)
 			case <-time.After(10 * time.Second):
-				t.Fatal("the prompt didn't take the key")
+				require.FailNow(t, "the prompt didn't take the key")
 			}
 			assert.True(t, tp.http.Allows("api.example.com", "443"))
 			directProg.Kill()

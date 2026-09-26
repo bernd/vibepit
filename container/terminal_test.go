@@ -110,6 +110,6 @@ func TestNewSessionTerminal(t *testing.T) {
 	case err := <-runDone:
 		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run didn't end with the container output")
+		require.FailNow(t, "Run didn't end with the container output")
 	}
 }

@@ -134,6 +134,6 @@ func generateArgs(t *testing.T, out string) []string {
 		}
 		return args
 	}
-	t.Fatal("doc.go has no go:generate line")
+	require.FailNow(t, "doc.go has no go:generate line")
 	return nil
 }

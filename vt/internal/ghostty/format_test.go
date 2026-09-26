@@ -1,6 +1,7 @@
 package ghostty
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,7 +35,7 @@ func scenarioInput(t *testing.T, name string) string {
 			return s.input
 		}
 	}
-	t.Fatalf("no scenario %q", name)
+	require.FailNow(t, fmt.Sprintf("no scenario %q", name))
 	return ""
 }
 

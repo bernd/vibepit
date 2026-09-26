@@ -54,7 +54,7 @@ func TestRunEndsWithTheOutput(t *testing.T) {
 	case <-h.done:
 		assert.NoError(t, h.err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run didn't return")
+		require.FailNow(t, "Run didn't return")
 	}
 	assert.Zero(t, h.closedIn.Load(), "stdin is still open")
 }
@@ -67,7 +67,7 @@ func TestStdinEOFClosesTheSessionInput(t *testing.T) {
 	assert.Equal(t, positionQuery+"bye", h.stdout.String(), "output flows until it ends")
 	select {
 	case <-h.done:
-		t.Fatal("Run returned before the output ended")
+		require.FailNow(t, "Run returned before the output ended")
 	default:
 	}
 }
@@ -120,7 +120,7 @@ func TestAStalledSessionInputNeverStallsOutput(t *testing.T) {
 	select {
 	case <-left:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the leave waited for the session")
+		require.FailNow(t, "the leave waited for the session")
 	}
 	assert.Contains(t, screenText(h.real), "more")
 	release()

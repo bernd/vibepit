@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/vt"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -198,7 +199,7 @@ func (h *harness) stop() {
 	select {
 	case <-h.done:
 	case <-time.After(10 * time.Second):
-		h.t.Error("Run didn't return")
+		assert.Fail(h.t, "Run didn't return")
 	}
 }
 
@@ -270,7 +271,7 @@ func (h *harness) result(ch <-chan error) error {
 	case err := <-ch:
 		return err
 	case <-time.After(10 * time.Second):
-		h.t.Fatal("the call didn't return")
+		require.FailNow(h.t, "the call didn't return")
 		return nil
 	}
 }

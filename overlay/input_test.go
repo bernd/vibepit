@@ -30,7 +30,7 @@ func newMuxHarness(t *testing.T) *muxHarness {
 		select {
 		case <-h.mux.Done():
 		case <-time.After(5 * time.Second):
-			t.Error("Run didn't return")
+			assert.Fail(t, "Run didn't return")
 		}
 	})
 	return h
@@ -153,7 +153,7 @@ func TestInputMuxReleaseRunsLeaveUnderLock(t *testing.T) {
 	go func() { routed <- h.src.push("k") }()
 	select {
 	case <-routed:
-		t.Fatal("input was routed while leave ran")
+		require.FailNow(t, "input was routed while leave ran")
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(proceed)

@@ -141,18 +141,18 @@ func TestRunBlockPrompter(t *testing.T) {
 	case e := <-prompted:
 		assert.Equal(t, "new.com", e.Domain)
 	case <-time.After(time.Second):
-		t.Fatal("no prompt for new.com")
+		require.FailNow(t, "no prompt for new.com")
 	}
 
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("poller did not stop on cancel")
+		require.FailNow(t, "poller did not stop on cancel")
 	}
 	select {
 	case e := <-prompted:
-		t.Fatalf("unexpected extra prompt for %s", e.Domain)
+		require.FailNow(t, fmt.Sprintf("unexpected extra prompt for %s", e.Domain))
 	default:
 	}
 }
@@ -186,7 +186,7 @@ func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
 	case e := <-prompted:
 		assert.Equal(t, "new.com", e.Domain, "history from before the poller started must not be replayed")
 	case <-time.After(time.Second):
-		t.Fatal("no prompt for new.com")
+		require.FailNow(t, "no prompt for new.com")
 	}
 }
 
@@ -257,7 +257,7 @@ func TestRunBlockPrompter_BurstPastTail(t *testing.T) {
 		case e := <-prompted:
 			seen[e.Domain] = true
 		case <-time.After(2 * time.Second):
-			t.Fatalf("only %d of %d targets prompted", len(seen), n)
+			require.FailNow(t, fmt.Sprintf("only %d of %d targets prompted", len(seen), n))
 		}
 	}
 }

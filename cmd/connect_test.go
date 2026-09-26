@@ -475,7 +475,7 @@ func TestStdinHandoff(t *testing.T) {
 		case err := <-errCh:
 			assert.ErrorIs(t, err, io.EOF)
 		case <-time.After(2 * time.Second):
-			t.Fatal("session read still blocked after Stop")
+			require.FailNow(t, "session read still blocked after Stop")
 		}
 	})
 
@@ -555,7 +555,7 @@ func TestRunSSHTerminal(t *testing.T) {
 			case err := <-done:
 				require.NoError(t, err)
 			case <-time.After(10 * time.Second):
-				t.Fatalf("session did not end; output: %q", out.String())
+				require.FailNow(t, fmt.Sprintf("session did not end; output: %q", out.String()))
 			}
 			assert.Contains(t, out.String(), "size=30 100")
 			assert.Equal(t, tt.prompt, gotTerminal.Load())
@@ -571,7 +571,7 @@ func TestRunSSHTerminal(t *testing.T) {
 			case err := <-readErr:
 				assert.ErrorIs(t, err, io.EOF)
 			case <-time.After(2 * time.Second):
-				t.Fatal("stdin hand-off not stopped after the session ended")
+				require.FailNow(t, "stdin hand-off not stopped after the session ended")
 			}
 			ch <- []byte("y\n")
 			buf := make([]byte, 16)
@@ -659,6 +659,6 @@ func TestRunSSHTerminal_ContextCancelled(t *testing.T) {
 	case err := <-done:
 		assert.ErrorIs(t, err, context.Canceled)
 	case <-time.After(5 * time.Second):
-		t.Fatal("runSSHTerminal did not return after cancel")
+		require.FailNow(t, "runSSHTerminal did not return after cancel")
 	}
 }
