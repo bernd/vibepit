@@ -48,8 +48,16 @@ type LogEntry struct {
 
 // Allowable reports whether allowing the entry's target would unblock it.
 // A proxy from before causes were logged sends none; its blocks may be.
+// Some targets, e.g. IPv6 literals, can't be put on the allowlist.
 func (e LogEntry) Allowable() bool {
-	return e.Action == ActionBlock && (e.Cause == CauseAllowlist || e.Cause == "")
+	if e.Action != ActionBlock || (e.Cause != CauseAllowlist && e.Cause != "") {
+		return false
+	}
+	validate := ValidateHTTPEntry
+	if e.Source == SourceDNS {
+		validate = ValidateDNSEntry
+	}
+	return validate(e.Target().String()) == nil
 }
 
 type DomainStats struct {

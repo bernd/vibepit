@@ -37,6 +37,7 @@ func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 			entry: proxy.LogEntry{
 				ID:     uint64(i + 1),
 				Domain: fmt.Sprintf("domain%d.com", i),
+				Port:   "443",
 				Action: proxy.ActionBlock,
 				Source: proxy.SourceProxy,
 			},

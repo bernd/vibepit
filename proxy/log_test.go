@@ -170,21 +170,23 @@ func TestEntriesAfter(t *testing.T) {
 
 func TestLogEntryAllowable(t *testing.T) {
 	tests := []struct {
-		name   string
-		action Action
-		cause  Cause
-		want   bool
+		name  string
+		entry LogEntry
+		want  bool
 	}{
-		{"allowlist miss", ActionBlock, CauseAllowlist, true},
-		{"block without cause", ActionBlock, "", true},
-		{"blocked IP", ActionBlock, CauseBlockedIP, false},
-		{"resolve failed", ActionBlock, CauseResolveFailed, false},
-		{"allowed", ActionAllow, "", false},
+		{"allowlist miss", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Cause: CauseAllowlist}, true},
+		{"block without cause", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock}, true},
+		{"dns allowlist miss", LogEntry{Domain: "a.com", Source: SourceDNS, Action: ActionBlock, Cause: CauseAllowlist}, true},
+		{"IPv4 literal", LogEntry{Domain: "192.0.2.1", Port: "443", Source: SourceProxy, Action: ActionBlock, Cause: CauseAllowlist}, true},
+		// The allowlist can't hold an IPv6 literal, so allowing would fail.
+		{"IPv6 literal", LogEntry{Domain: "2001:db8::1", Port: "443", Source: SourceProxy, Action: ActionBlock, Cause: CauseAllowlist}, false},
+		{"blocked IP", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Cause: CauseBlockedIP}, false},
+		{"resolve failed", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Cause: CauseResolveFailed}, false},
+		{"allowed", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionAllow}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := LogEntry{Action: tt.action, Cause: tt.cause}
-			assert.Equal(t, tt.want, e.Allowable())
+			assert.Equal(t, tt.want, tt.entry.Allowable())
 		})
 	}
 }
