@@ -137,7 +137,8 @@ func allowEntry(client *ControlClient, session *SessionInfo, entry proxy.LogEntr
 		return statusTemp, nil
 	}
 	if err := persist(config.DefaultProjectPath(session.ProjectDir), []string{value}); err != nil {
-		return statusNone, err
+		// Leading with the live allow: the footer may cut the rest off.
+		return statusNone, fmt.Errorf("allowed for this session, not saved: %w", err)
 	}
 	return statusSaved, nil
 }

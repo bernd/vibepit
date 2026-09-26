@@ -116,6 +116,23 @@ func TestApproveScreen_Allow(t *testing.T) {
 	}
 }
 
+func TestApproveScreen_SaveErrorSaysTheAllowWorked(t *testing.T) {
+	f := makeApproveSetup(t, blockedEntry)
+	s, w := f.s, f.w
+	// A directory in place of the config file makes the save fail.
+	require.NoError(t, os.Remove(f.projectPath))
+	require.NoError(t, os.Mkdir(f.projectPath, 0o755))
+
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'A', Text: "A"}, w)
+	require.NotNil(t, cmd)
+	_, cmd = s.Update(cmd(), w)
+	assert.Nil(t, cmd, "the error stays on screen")
+	assert.True(t, f.proxy.http.Allows("api.example.com", "443"))
+	view := w.View().Content
+	assert.NotContains(t, view, "connection error")
+	assert.Contains(t, view, "allowed for this session")
+}
+
 func TestApproveScreen_Deny(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w
