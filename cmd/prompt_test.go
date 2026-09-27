@@ -192,40 +192,36 @@ func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
 
 func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
 	tests := []struct {
-		name  string
-		err   error
-		reask bool
+		name    string
+		err     error
+		fails   int // prompts that fail with err before one succeeds
+		prompts int // prompts shown in all
 	}{
-		{"barrier timeout", fmt.Errorf("show: %w", overlay.ErrBarrierTimeout), true},
-		{"program error", errors.New("program failed"), true},
-		{"prompts unavailable", fmt.Errorf("show: %w", overlay.ErrUnavailable), false},
+		{"barrier timeouts don't count as tries", fmt.Errorf("show: %w", overlay.ErrBarrierTimeout), maxPromptTries + 2, maxPromptTries + 3},
+		{"program errors until the tries are used up", errors.New("program failed"), maxPromptTries + 2, maxPromptTries},
+		{"program error once", errors.New("program failed"), 1, 2},
+		{"prompts unavailable", fmt.Errorf("show: %w", overlay.ErrUnavailable), 1, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tp := newTestProxy(t)
-			prompted := make(chan proxy.LogEntry, 10)
+			prompted := make(chan proxy.LogEntry, 20)
 			var calls atomic.Int32
 			go runBlockPrompter(t.Context(), tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
 				prompted <- e
-				if calls.Add(1) == 1 {
+				if int(calls.Add(1)) <= tt.fails {
 					return tt.err
 				}
 				return nil
 			})
 			time.Sleep(20 * time.Millisecond)
 			block := proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy}
-			tp.log.Add(block)
-			select {
-			case <-prompted:
-			case <-time.After(time.Second):
-				require.FailNow(t, "no first prompt")
-			}
-			if tt.reask {
+			for i := range tt.prompts {
 				tp.log.Add(block)
 				select {
 				case <-prompted:
 				case <-time.After(time.Second):
-					require.FailNow(t, "no second prompt")
+					require.FailNow(t, fmt.Sprintf("no prompt %d", i+1))
 				}
 			}
 			tp.log.Add(block)
