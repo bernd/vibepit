@@ -28,7 +28,6 @@ type HTTPProxy struct {
 type filterResult struct {
 	action  Action
 	cause   Cause
-	reason  string
 	rewrite string // non-empty when host.vibepit should be rewritten to gateway
 }
 
@@ -148,7 +147,7 @@ func (p *HTTPProxy) logEntry(hostname, port string, action Action, cause Cause, 
 // block logs and returns a block with its cause.
 func (p *HTTPProxy) block(hostname, port string, cause Cause, reason string) filterResult {
 	p.logEntry(hostname, port, ActionBlock, cause, reason)
-	return filterResult{action: ActionBlock, cause: cause, reason: reason}
+	return filterResult{action: ActionBlock, cause: cause}
 }
 
 // resolveAndCheckCIDR resolves the hostname to IPs and checks whether any

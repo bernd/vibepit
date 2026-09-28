@@ -36,8 +36,7 @@ func (t *Terminal) detachAt(ctx context.Context) error {
 	t.detach = req
 	switch ground, err := t.shadow.AtGround(); {
 	case err != nil:
-		t.failLocked(err)
-		t.endDetachLocked(fmt.Errorf("%w: %w", ErrUnavailable, err))
+		t.abortDetachLocked(err)
 	case ground:
 		t.cutLocked(false)
 	}
@@ -75,20 +74,24 @@ func (t *Terminal) endDetachLocked(err error) {
 	t.detach = nil
 }
 
+// abortDetachLocked finishes the pending cut after the shadow failed.
+func (t *Terminal) abortDetachLocked(err error) {
+	t.failLocked(err)
+	t.endDetachLocked(fmt.Errorf("%w: %w", ErrUnavailable, err))
+}
+
 // cutLocked makes the cut at the current byte: capture the cut, stop
 // forwarding, and send the barrier query. After a forced cut, CAN aborts the
 // sequence the real terminal is in the middle of.
 func (t *Terminal) cutLocked(forced bool) {
 	c, err := captureCut(t.shadow)
 	if err != nil {
-		t.failLocked(err)
-		t.endDetachLocked(fmt.Errorf("%w: %w", ErrUnavailable, err))
+		t.abortDetachLocked(err)
 		return
 	}
 	c.forced = forced
 	c.barrierSent = !t.barrierUnsupportedLocked()
 	t.cut = c
-	t.attached = false
 	t.log = rawLog{}
 	t.answered, t.resized = false, false
 	// Drain before the query goes out: a local terminal can answer before
@@ -100,7 +103,7 @@ func (t *Terminal) cutLocked(forced bool) {
 	}
 	if c.modes[modeSync] {
 		// The real terminal must not hold back drawing during the prompt.
-		b = append(b, "\x1b[?2026l"...)
+		b = append(b, modeSeq(modeSync, false)...)
 	}
 	if c.barrierSent {
 		b = append(b, barrierQuery...)
@@ -120,8 +123,7 @@ func (t *Terminal) advanceDetachLocked(p []byte) []byte {
 	}
 	switch {
 	case err != nil:
-		t.failLocked(err)
-		t.endDetachLocked(fmt.Errorf("%w: %w", ErrUnavailable, err))
+		t.abortDetachLocked(err)
 	case ground:
 		t.cutLocked(false)
 	case t.detach.forwarded >= t.timing.groundBytes:
@@ -185,11 +187,10 @@ func (t *Terminal) leave(drawn bool) {
 	t.in.Release(strip, t.reportsFocusLocked(), func() {
 		out, resync, reset := t.leaveBytesLocked(c, e, drawn)
 		_, _ = t.cfg.Stdout.Write(out)
-		t.attached = true
+		t.cut = nil
 		t.resyncing = resync
 		nudge = reset
 	})
-	t.cut = nil
 	t.log = rawLog{}
 	if nudge {
 		go t.nudge()
@@ -220,7 +221,7 @@ func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte,
 		if !errors.Is(err, vt.ErrOutOfMemory) {
 			t.failLocked(err)
 		}
-		t.logf("overlay: snapshot restore failed, resetting the terminal: %v", err)
+		t.cfg.Logf("overlay: snapshot restore failed, resetting the terminal: %v", err)
 	}
 	return resetLeave(e), false, true
 }

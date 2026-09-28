@@ -167,8 +167,9 @@ func TestSnapshotLeaveWritesModesOutsideDOnlyWhenChanged(t *testing.T) {
 	assert.Contains(t, s, "\x1b[?2048l")
 	assert.Contains(t, s, "\x1b[?2031h")
 	assert.Contains(t, s, "\x1b[?1000h")
-	for _, k := range append(drawModes, modeIRM) {
-		assert.Contains(t, s, modeSeq(k, c.modes[k]), "the prompt changed this mode")
+	assert.Contains(t, s, modeSeq(modeIRM, c.modes[modeIRM]), "the prompt changed this mode")
+	for _, m := range drawModes {
+		assert.Contains(t, s, modeSeq(m.key, c.modes[m.key]), "the prompt changed this mode")
 	}
 }
 

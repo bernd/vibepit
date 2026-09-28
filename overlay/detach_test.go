@@ -59,7 +59,7 @@ func TestDetachAtGroundIsImmediate(t *testing.T) {
 	h.detach()
 	assert.Equal(t, positionQuery+"ab"+barrierQuery, h.stdout.String())
 	h.locked(func(tm *Terminal) {
-		assert.False(t, tm.attached)
+		assert.NotNil(t, tm.cut)
 		assert.False(t, tm.cut.forced)
 		assert.True(t, tm.cut.barrierSent)
 	})

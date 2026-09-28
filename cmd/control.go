@@ -174,7 +174,7 @@ func (c *ControlClient) get(path string, dest any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", path, resp.Status)
+		return &statusError{method: "GET", path: path, code: resp.StatusCode, status: resp.Status}
 	}
 	return json.NewDecoder(resp.Body).Decode(dest)
 }

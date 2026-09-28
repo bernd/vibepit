@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/keygen"
 	"github.com/bernd/vibepit/overlay"
 	"github.com/bernd/vibepit/session"
@@ -509,8 +510,8 @@ func TestRunSSHTerminal(t *testing.T) {
 			prompter := noBlockPrompter
 			if tt.prompt {
 				prompter = &blockPrompter{
-					onTerminal: func(*overlay.Terminal) { gotTerminal.Store(true) },
-					stop:       func() {},
+					hooks: ctr.TerminalHooks{OnTerminal: func(*overlay.Terminal) { gotTerminal.Store(true) }},
+					stop:  func() {},
 				}
 			}
 
@@ -622,8 +623,8 @@ func TestRunSSHTerminal_ShellFails(t *testing.T) {
 		size:    func() (int, int, error) { return 80, 24, nil },
 		winch:   make(chan os.Signal),
 		prompter: &blockPrompter{
-			onTerminal: func(*overlay.Terminal) { gotTerminal.Store(true) },
-			stop:       func() {},
+			hooks: ctr.TerminalHooks{OnTerminal: func(*overlay.Terminal) { gotTerminal.Store(true) }},
+			stop:  func() {},
 		},
 	})
 	assert.ErrorContains(t, err, "start shell")

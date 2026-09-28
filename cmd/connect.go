@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -31,13 +30,21 @@ func ConnectCommand() *cli.Command {
 }
 
 func ConnectAction(ctx context.Context, cmd *cli.Command) error {
-	conn, info, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag), cmd.Bool(promptFlag))
+	debug := cmd.Root().Bool(debugFlag)
+	conn, sandbox, err := newSSHClient(ctx, debug)
 	if err != nil {
 		return err
 	}
 	defer conn.Close() //nolint:errcheck
 
-	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) { return info, nil })
+	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+		client, err := ctr.NewClient(ctr.WithDebug(debug))
+		if err != nil {
+			return nil, err
+		}
+		defer client.Close()
+		return sessionInfoForRunning(ctx, client, sandbox.SessionID, sandbox.ProjectDir)
+	})
 	if err != nil {
 		return err
 	}
@@ -167,7 +174,7 @@ func runSSHTerminal(ctx context.Context, p sshTerminalParams) error {
 	}
 	// Create the Terminal only once the shell runs: only Run releases it,
 	// and a prompt needs Run. The pipe holds the shell's output until then.
-	t := overlay.New(overlay.Config{
+	t := p.prompter.hooks.NewTerminal(overlay.Config{
 		Stdin:      p.stdin.Session(),
 		Stdout:     p.stdout,
 		SessionIn:  stdinPipe,
@@ -175,12 +182,7 @@ func runSSHTerminal(ctx context.Context, p sshTerminalParams) error {
 		CloseInput: stdinPipe.Close,
 		Resize:     func(cols, rows int) { sess.WindowChange(rows, cols) }, //nolint:errcheck
 		Size:       p.size,
-		Logf:       p.prompter.logf,
-		NoShadow:   p.prompter.onTerminal == nil,
 	})
-	if p.prompter.onTerminal != nil {
-		p.prompter.onTerminal(t)
-	}
 
 	waitCh := make(chan error, 1)
 	go func() {
@@ -312,7 +314,7 @@ func (h *stdinHandoff) Prompt() io.Reader {
 	defer h.mu.Unlock()
 	left := h.left
 	h.left = nil
-	return io.MultiReader(bytes.NewReader(left), &channelStdinReader{ch: h.ch})
+	return &channelStdinReader{ch: h.ch, buf: left}
 }
 
 type handoffSession struct{ h *stdinHandoff }
@@ -322,11 +324,6 @@ func (s handoffSession) Read(p []byte) (int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for len(h.left) == 0 {
-		select {
-		case <-h.stop:
-			return 0, io.EOF
-		default:
-		}
 		select {
 		case data, ok := <-h.ch:
 			if !ok {

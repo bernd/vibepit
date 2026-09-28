@@ -37,19 +37,12 @@ func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 	t.mu.Lock()
 	degraded := t.barrierUnsupportedLocked()
 	t.mu.Unlock()
-	var in io.Reader
-	var err error
 	if degraded {
-		in, err = t.in.AwaitSilence(ctx, t.timing.silence, t.timing.silenceMax)
-	} else {
-		in, err = t.in.AwaitBarrier(ctx, t.timing.barrierWait)
+		in, err := t.in.AwaitSilence(ctx, t.timing.silence, t.timing.silenceMax)
+		return in, t.closedErr(err)
 	}
-	if err != nil && t.isDone() {
-		err = ErrClosed
-	}
-	if degraded {
-		return in, err
-	}
+	in, err := t.in.AwaitBarrier(ctx, t.timing.barrierWait)
+	err = t.closedErr(err)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	switch {
@@ -58,7 +51,7 @@ func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 	case errors.Is(err, ErrBarrierTimeout):
 		t.barrierTimeouts++
 		if t.barrierUnsupportedLocked() {
-			t.logf("overlay: the terminal doesn't answer DSR 5n; prompts now take input after %v without typing, so a reply or key in flight may reach the wrong side", t.timing.silence)
+			t.cfg.Logf("overlay: the terminal doesn't answer DSR 5n; prompts now take input after %v without typing, so a reply or key in flight may reach the wrong side", t.timing.silence)
 		}
 	}
 	return in, err
@@ -82,7 +75,7 @@ func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model)
 		tea.WithOutput(NewFilter(t.cfg.Stdout)),
 		tea.WithWindowSize(cols, rows),
 		tea.WithColorProfile(t.profile),
-		tea.WithEnvironment(t.environ),
+		tea.WithEnvironment(t.cfg.Environ),
 		tea.WithoutSignalHandler(),
 	)
 	t.setProgram(p)
@@ -100,6 +93,14 @@ func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model)
 		return ErrClosed
 	case ctx.Err() != nil:
 		return ctx.Err()
+	}
+	return err
+}
+
+// closedErr is ErrClosed for a wait that failed because the session ended.
+func (t *Terminal) closedErr(err error) error {
+	if err != nil && t.isDone() {
+		return ErrClosed
 	}
 	return err
 }

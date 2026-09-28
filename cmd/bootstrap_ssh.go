@@ -8,13 +8,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"os"
 	"path/filepath"
-	"strconv"
 )
 
-// newSSHClient connects to the running sandbox for the current project.
-// With withControl it also looks up the control API port for the returned
-// SessionInfo; otherwise ControlPort is empty.
-func newSSHClient(ctx context.Context, debug, withControl bool) (*ssh.Client, *SessionInfo, error) {
+func newSSHClient(ctx context.Context, debug bool) (*ssh.Client, *ctr.RunningSession, error) {
 	client, err := ctr.NewClient(ctr.WithDebug(debug))
 	if err != nil {
 		return nil, nil, err
@@ -49,14 +45,6 @@ func newSSHClient(ctx context.Context, debug, withControl bool) (*ssh.Client, *S
 	if err != nil {
 		return nil, nil, fmt.Errorf("find SSH port: %w", err)
 	}
-	info := &SessionInfo{SessionID: sandbox.SessionID, ProjectDir: sandbox.ProjectDir}
-	if withControl {
-		controlPort, err := client.FindControlPort(ctx, proxyID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("find control port: %w", err)
-		}
-		info.ControlPort = strconv.Itoa(controlPort)
-	}
 
 	sessDir := sessionDir(sandbox.SessionID)
 	privateKey, err := os.ReadFile(filepath.Join(sessDir, SSHClientPrivFile))
@@ -86,5 +74,5 @@ func newSSHClient(ctx context.Context, debug, withControl bool) (*ssh.Client, *S
 		return nil, nil, fmt.Errorf("ssh connect: %w", err)
 	}
 
-	return conn, info, nil
+	return conn, sandbox, nil
 }

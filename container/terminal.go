@@ -6,7 +6,7 @@
 // between the host and a hijacked Docker connection. It is modelled after
 // the Docker CLI's hijackedIOStreamer (cli/command/container/hijack.go).
 // It forwards through an overlay.Terminal, which can show prompts over
-// the session (see WithTerminal).
+// the session (see TerminalHooks).
 //
 // The following gaps relative to the Docker CLI are known and deferred:
 //
@@ -62,39 +62,32 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
-// AttachOption configures an interactive session started by
-// AttachAndStartSession or ExecSession.
-type AttachOption func(*attachOptions)
-
-type attachOptions struct {
-	onTerminal func(*overlay.Terminal)
-	logf       func(format string, args ...any)
+// TerminalHooks let the caller show prompts over an interactive session
+// started by AttachAndStartSession or ExecSession. The zero value runs the
+// session without a shadow terminal, so it can't prompt.
+type TerminalHooks struct {
+	// OnTerminal gets the session's terminal before any data flows.
+	OnTerminal func(*overlay.Terminal)
+	// Logf receives the terminal's diagnostics. The session owns the
+	// screen, so they can't go to stderr.
+	Logf func(format string, args ...any)
 }
 
-// WithTerminal passes the session's terminal to fn before any data flows,
-// so the caller can show prompts over the session. Without it the session
-// runs without a shadow terminal and can't prompt.
-func WithTerminal(fn func(*overlay.Terminal)) AttachOption {
-	return func(o *attachOptions) { o.onTerminal = fn }
-}
-
-// WithLogf receives the session terminal's diagnostics. The session owns
-// the screen, so they can't go to stderr.
-func WithLogf(fn func(format string, args ...any)) AttachOption {
-	return func(o *attachOptions) { o.logf = fn }
-}
-
-func buildAttachOptions(opts []AttachOption) attachOptions {
-	var o attachOptions
-	for _, opt := range opts {
-		opt(&o)
+// NewTerminal creates the session's terminal from cfg and hands it to
+// OnTerminal. Without OnTerminal the terminal has no shadow.
+func (h TerminalHooks) NewTerminal(cfg overlay.Config) *overlay.Terminal {
+	cfg.Logf = h.Logf
+	cfg.NoShadow = h.OnTerminal == nil
+	t := overlay.New(cfg)
+	if h.OnTerminal != nil {
+		h.OnTerminal(t)
 	}
-	return o
+	return t
 }
 
 // newSessionTerminal connects a hijacked session to the local terminal.
-func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.Writer, size func() (int, int, error), resizeFn func(height, width uint), o attachOptions) *overlay.Terminal {
-	return overlay.New(overlay.Config{
+func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.Writer, size func() (int, int, error), resizeFn func(height, width uint), hooks TerminalHooks) *overlay.Terminal {
+	return hooks.NewTerminal(overlay.Config{
 		Stdin:      stdin,
 		Stdout:     stdout,
 		SessionIn:  resp.Conn,
@@ -102,8 +95,6 @@ func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.
 		CloseInput: resp.CloseWrite,
 		Resize:     func(cols, rows int) { resizeFn(uint(rows), uint(cols)) },
 		Size:       size,
-		Logf:       o.logf,
-		NoShadow:   o.onTerminal == nil,
 	})
 }
 
@@ -112,7 +103,7 @@ func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.
 // handles SIGWINCH for terminal resizing. The resizeFn is called with
 // (height, width) whenever the terminal changes size. The function blocks
 // until the container-side stream ends, then returns any error.
-func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint), opts attachOptions) error {
+func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint), hooks TerminalHooks) error {
 	fd := int(os.Stdin.Fd())
 
 	oldState, err := term.MakeRaw(fd)
@@ -122,10 +113,7 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 	defer term.Restore(fd, oldState)
 
 	size := func() (int, int, error) { return term.GetSize(fd) }
-	t := newSessionTerminal(resp, os.Stdin, os.Stdout, size, resizeFn, opts)
-	if opts.onTerminal != nil {
-		opts.onTerminal(t)
-	}
+	t := newSessionTerminal(resp, os.Stdin, os.Stdout, size, resizeFn, hooks)
 
 	// Set initial terminal size with retry. The container/exec process may
 	// not be ready to accept a resize immediately after attach.

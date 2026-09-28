@@ -164,10 +164,9 @@ func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc
 // blockPrompter is the prompting set up for one attach: the hooks that hand
 // it the session's terminal, and a stop function.
 type blockPrompter struct {
-	onTerminal func(*overlay.Terminal)          // starts prompting on the session's terminal; nil without --prompt
-	logf       func(format string, args ...any) // the terminal's diagnostics
-	stop       func()                           // ends polling and closes an open prompt; always safe to call
-	notes      *promptNotes                     // what prompting couldn't show; nil without --prompt
+	hooks ctr.TerminalHooks // start prompting on the session's terminal; zero without --prompt
+	stop  func()            // ends polling and closes an open prompt; always safe to call
+	notes *promptNotes      // what prompting couldn't show; nil without --prompt
 }
 
 // report prints the notes collected during the session. Call it after stop,
@@ -176,14 +175,6 @@ func (bp *blockPrompter) report() {
 	for _, line := range bp.notes.Lines() {
 		tui.Warn("%s", line)
 	}
-}
-
-// attachOptions hands the hooks to a container attach.
-func (bp *blockPrompter) attachOptions() []ctr.AttachOption {
-	if bp.onTerminal == nil {
-		return nil
-	}
-	return []ctr.AttachOption{ctr.WithTerminal(bp.onTerminal), ctr.WithLogf(bp.logf)}
 }
 
 var noBlockPrompter = &blockPrompter{stop: func() {}}
@@ -225,9 +216,8 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show))
 	}
 	return &blockPrompter{
-		onTerminal: onTerminal,
-		logf:       notes.Printf,
-		notes:      notes,
+		hooks: ctr.TerminalHooks{OnTerminal: onTerminal, Logf: notes.Printf},
+		notes: notes,
 		stop: func() {
 			mu.Lock()
 			stopped = true
@@ -248,7 +238,7 @@ func loggedPrompt(logf func(format string, args ...any), prompt promptFunc) prom
 	return func(ctx context.Context, e proxy.LogEntry) error {
 		err := prompt(ctx, e)
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, overlay.ErrClosed) {
-			logf("prompt for %s: %v", tui.SanitizeText(e.Target().String()), err)
+			logf("prompt for %s: %v", e.Target(), err)
 		}
 		return err
 	}

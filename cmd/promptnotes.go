@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"sync"
+
+	"github.com/bernd/vibepit/tui"
 )
 
 // maxPromptNotes is how many of the latest notes a session keeps.
@@ -10,22 +13,23 @@ const maxPromptNotes = 32
 
 // promptNotes collects what prompting couldn't show while the session owns
 // the terminal, to print once the session ended. It keeps the latest
-// maxPromptNotes lines in a ring. The zero value is ready; a nil
-// *promptNotes holds nothing.
+// maxPromptNotes lines. The zero value is ready; a nil *promptNotes holds
+// nothing.
 type promptNotes struct {
 	mu    sync.Mutex
-	lines [maxPromptNotes]string
-	next  int // where the next line goes
-	count int // lines held, up to maxPromptNotes
+	lines []string
 }
 
+// Printf sanitizes the note: it may carry sandbox-controlled text, e.g. a
+// blocked domain in an error.
 func (n *promptNotes) Printf(format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
+	line := tui.SanitizeText(fmt.Sprintf(format, args...))
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.lines[n.next] = line
-	n.next = (n.next + 1) % maxPromptNotes
-	n.count = min(n.count+1, maxPromptNotes)
+	n.lines = append(n.lines, line)
+	if len(n.lines) > maxPromptNotes {
+		n.lines = n.lines[1:]
+	}
 }
 
 // Lines returns the notes held, oldest first.
@@ -35,10 +39,5 @@ func (n *promptNotes) Lines() []string {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	var lines []string
-	start := (n.next - n.count + maxPromptNotes) % maxPromptNotes
-	for i := range n.count {
-		lines = append(lines, n.lines[(start+i)%maxPromptNotes])
-	}
-	return lines
+	return slices.Clone(n.lines)
 }

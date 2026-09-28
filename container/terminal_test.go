@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,16 +47,11 @@ func TestWatchResizeSignalsStopsOnDone(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestBuildAttachOptions(t *testing.T) {
-	var got []string
-	o := buildAttachOptions([]AttachOption{
-		WithTerminal(func(*overlay.Terminal) { got = append(got, "terminal") }),
-		WithLogf(func(string, ...any) { got = append(got, "log") }),
-	})
-	o.onTerminal(nil)
-	o.logf("x")
-	assert.Equal(t, []string{"terminal", "log"}, got)
-	assert.Nil(t, buildAttachOptions(nil).onTerminal)
+func TestTerminalHooksNewTerminal(t *testing.T) {
+	var got *overlay.Terminal
+	hooks := TerminalHooks{OnTerminal: func(t *overlay.Terminal) { got = t }}
+	st := hooks.NewTerminal(overlay.Config{Stdin: strings.NewReader(""), Stdout: io.Discard, SessionIn: io.Discard, SessionOut: strings.NewReader("")})
+	assert.Same(t, st, got)
 }
 
 // lockedBuffer is a bytes.Buffer the session goroutines can share.
@@ -86,7 +82,7 @@ func TestNewSessionTerminal(t *testing.T) {
 	st := newSessionTerminal(resp, stdinR, stdout,
 		func() (int, int, error) { return 80, 24, nil },
 		func(height, width uint) { resized = append(resized, [2]uint{height, width}) },
-		buildAttachOptions(nil))
+		TerminalHooks{})
 	runDone := make(chan error, 1)
 	go func() { runDone <- st.Run(context.Background()) }()
 
@@ -103,7 +99,7 @@ func TestNewSessionTerminal(t *testing.T) {
 	st.Resize()
 	assert.Equal(t, [][2]uint{{24, 80}}, resized, "Docker takes the height first")
 
-	assert.ErrorIs(t, st.Show(context.Background(), nil), overlay.ErrUnavailable, "no shadow without WithTerminal")
+	assert.ErrorIs(t, st.Show(context.Background(), nil), overlay.ErrUnavailable, "no shadow without OnTerminal")
 
 	require.NoError(t, server.Close())
 	select {

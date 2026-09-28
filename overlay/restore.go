@@ -18,12 +18,26 @@ type modeKey struct {
 	ansi bool
 }
 
+// promptMode is a mode the prompt draws with, and its value there.
+type promptMode struct {
+	key modeKey
+	on  bool
+}
+
 var (
 	modeIRM  = modeKey{4, true}
 	modeSync = modeKey{2026, false}
-	// drawModes are the prompt's modes except IRM, which the raw leave writes
-	// after the cursor, because the pending-wrap reprint must not insert.
-	drawModes = []modeKey{{20, true}, {5, false}, {6, false}, {7, false}, {25, false}, modeSync}
+	// drawModes are the prompt's modes except IRM, which is off for the
+	// prompt. The raw leave writes IRM after the cursor, because the
+	// pending-wrap reprint must not insert.
+	drawModes = []promptMode{
+		{modeKey{20, true}, false},
+		{modeKey{5, false}, false},
+		{modeKey{6, false}, false},
+		{modeKey{7, false}, true},
+		{modeKey{25, false}, true},
+		{modeSync, false},
+	}
 )
 
 // skipReconcile are DEC modes a restore must not write: DECCOLM clears the
@@ -34,7 +48,7 @@ var skipReconcile = map[uint16]bool{3: true, 47: true, 1047: true, 1048: true, 1
 // promptChanges reports whether mode k is in the prompt's state: the draw
 // modes and IRM.
 func promptChanges(k modeKey) bool {
-	return k == modeIRM || slices.Contains(drawModes, k)
+	return k == modeIRM || slices.ContainsFunc(drawModes, func(m promptMode) bool { return m.key == k })
 }
 
 const (
@@ -144,7 +158,10 @@ func enterSeq(e entered) string {
 	if e.kitty {
 		s.WriteString("\x1b[>0u")
 	}
-	s.WriteString("\x1b[4l\x1b[20l\x1b[?5l\x1b[?6l\x1b[?7h\x1b[?25h\x1b[?2026l")
+	s.WriteString(modeSeq(modeIRM, false))
+	for _, m := range drawModes {
+		s.WriteString(modeSeq(m.key, m.on))
+	}
 	s.WriteString(penReset)
 	s.WriteString(clearScreen)
 	return s.String()
@@ -170,9 +187,10 @@ func leaveScreen(e entered) string {
 // the cut's writes, which is the leave after a barrier timeout.
 func rawLeave(c *cutState, e entered, log []byte) []byte {
 	var b bytes.Buffer
+	b.Grow(len(log) + 256)
 	b.WriteString(leaveScreen(e))
-	for _, k := range drawModes {
-		b.WriteString(modeSeq(k, c.modes[k]))
+	for _, m := range drawModes {
+		b.WriteString(modeSeq(m.key, c.modes[m.key]))
 	}
 	b.WriteString(penReset)
 	b.Write(c.extras)

@@ -81,9 +81,7 @@ type Terminal struct {
 	timing    timing
 	in        *inputMux
 	sessionIn *sessionInput
-	environ   []string
 	profile   colorprofile.Profile
-	logf      func(format string, args ...any)
 	done      chan struct{} // closed when Run returns
 
 	showMu sync.Mutex // one Show at a time; finish takes it to wait for one
@@ -96,9 +94,8 @@ type Terminal struct {
 	shadow          *vt.Terminal
 	shadowErr       error // set: prompts are unavailable
 	cols, rows      int
-	attached        bool
 	detach          *detachReq // a cut waiting for ground
-	cut             *cutState  // from the cut to the leave
+	cut             *cutState  // from the cut to the leave; set: detached
 	log             rawLog     // output since the cut
 	answers         []byte     // the shadow's answers during the current call
 	answered        bool       // the shadow answered a query while detached
@@ -106,7 +103,6 @@ type Terminal struct {
 	resyncing       bool       // drop output up to the next ground
 	misaligned      bool       // the shadow's cursor may not be the real one's
 	prog            *tea.Program
-	closed          bool
 	barrierTimeouts int
 	// snapshot is snapshotLeave; tests replace it to inject failures.
 	snapshot func(*vt.Terminal, *cutState, entered) ([]byte, bool, error)
@@ -142,22 +138,19 @@ func (l *rawLog) append(p []byte, max int) {
 // New sets up a Terminal. A shadow that can't be created only turns
 // prompts off.
 func New(cfg Config) *Terminal {
+	if cfg.Environ == nil {
+		cfg.Environ = os.Environ()
+	}
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
+	}
 	t := &Terminal{
 		cfg:      cfg,
 		timing:   defaultTiming,
 		done:     make(chan struct{}),
-		environ:  cfg.Environ,
-		logf:     cfg.Logf,
-		attached: true,
 		snapshot: snapshotLeave,
 	}
-	if t.environ == nil {
-		t.environ = os.Environ()
-	}
-	if t.logf == nil {
-		t.logf = func(string, ...any) {}
-	}
-	t.profile = colorprofile.Detect(cfg.Stdout, t.environ)
+	t.profile = colorprofile.Detect(cfg.Stdout, cfg.Environ)
 	t.sessionIn = newSessionInput(cfg.SessionIn)
 	t.in = newInputMux(cfg.Stdin, t.sessionIn)
 	t.cols, t.rows = t.size()
@@ -174,7 +167,7 @@ func New(cfg Config) *Terminal {
 	)
 	if err != nil {
 		t.shadowErr = err
-		t.logf("overlay: no shadow terminal, prompts disabled: %v", err)
+		t.cfg.Logf("overlay: no shadow terminal, prompts disabled: %v", err)
 		return t
 	}
 	t.shadow = sh
@@ -191,7 +184,7 @@ func (t *Terminal) Run(ctx context.Context) error {
 	go func() {
 		defer close(inDone)
 		if err := t.in.Run(); err != nil {
-			t.logf("overlay: stdin: %v", err)
+			t.cfg.Logf("overlay: stdin: %v", err)
 		}
 		t.sessionIn.flush()
 		if t.cfg.CloseInput != nil {
@@ -219,7 +212,8 @@ func (t *Terminal) Run(ctx context.Context) error {
 }
 
 // finish ends the session for Show. A prompt that is showing is cancelled
-// and restores the screen before Run returns.
+// and restores the screen before Run returns. Output that still arrives
+// passes through without the shadow.
 func (t *Terminal) finish() {
 	close(t.done)
 	t.sessionIn.close()
@@ -227,7 +221,9 @@ func (t *Terminal) finish() {
 	defer t.showMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.closed = true
+	if t.shadowErr == nil {
+		t.shadowErr = ErrClosed
+	}
 	if t.shadow != nil {
 		_ = t.shadow.Close()
 	}
@@ -250,7 +246,7 @@ func (t *Terminal) align(ctx context.Context) {
 	row, col, err := t.in.AwaitPosition(ctx, t.timing.positionWait, t.timing.lateStrip)
 	if err != nil {
 		t.misaligned = true
-		t.logf("overlay: no cursor position from the terminal, prompts restore the screen from the shadow: %v", err)
+		t.cfg.Logf("overlay: no cursor position from the terminal, prompts restore the screen from the shadow: %v", err)
 		return
 	}
 	t.shadowWriteLocked(fmt.Appendf(nil, "\x1b[%d;%dH", row, col))
@@ -287,7 +283,7 @@ func (t *Terminal) output(p []byte) {
 	t.shadowWriteLocked(p)
 	switch {
 	case len(p) == 0:
-	case t.attached:
+	case t.cut == nil:
 		_, _ = t.cfg.Stdout.Write(p)
 	default:
 		t.log.append(p, t.timing.logMax)
@@ -311,9 +307,7 @@ func (t *Terminal) failLocked(err error) {
 		return
 	}
 	t.shadowErr = err
-	if !t.closed {
-		t.logf("overlay: shadow terminal failed, prompts disabled: %v", err)
-	}
+	t.cfg.Logf("overlay: shadow terminal failed, prompts disabled: %v", err)
 }
 
 // flushAnswersLocked sends the shadow's answers to the session while
@@ -326,7 +320,7 @@ func (t *Terminal) flushAnswersLocked() {
 		return
 	}
 	switch {
-	case !t.attached:
+	case t.cut != nil:
 		_, _ = t.sessionIn.Write(t.answers)
 		t.answered = true
 	case !t.barrierUnsupportedLocked():
@@ -353,7 +347,7 @@ func (t *Terminal) Resize() {
 		}
 		t.flushAnswersLocked()
 	}
-	if changed && !t.attached {
+	if changed && t.cut != nil {
 		// The log was written for the old geometry.
 		t.resized = true
 	}
@@ -392,7 +386,7 @@ func (t *Terminal) noteLateBarrierLocked() {
 	t.timing.barrierWait = max(t.timing.barrierWait, 2*d)
 	if t.barrierTimeouts > 0 {
 		t.barrierTimeouts = 0
-		t.logf("overlay: the terminal answered DSR 5n after %v; prompts wait up to %v for it", d.Round(time.Millisecond), t.timing.barrierWait)
+		t.cfg.Logf("overlay: the terminal answered DSR 5n after %v; prompts wait up to %v for it", d.Round(time.Millisecond), t.timing.barrierWait)
 	}
 }
 

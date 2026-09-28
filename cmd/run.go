@@ -46,7 +46,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		}
 		defer prompter.stop()
 		tui.Status("Attaching", "to running session in %s", projectRoot)
-		err = client.ExecSession(ctx, existing.ContainerID, prompter.attachOptions()...)
+		err = client.ExecSession(ctx, existing.ContainerID, prompter.hooks)
 		prompter.stop()
 		prompter.report()
 		return err
@@ -83,7 +83,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	err = client.AttachAndStartSession(ctx, sandboxContainer, prompter.attachOptions()...)
+	err = client.AttachAndStartSession(ctx, sandboxContainer, prompter.hooks)
 	prompter.stop()
 	prompter.report()
 	return err

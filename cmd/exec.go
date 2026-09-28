@@ -27,7 +27,7 @@ func ExecCommand() *cli.Command {
 }
 
 func ExecAction(ctx context.Context, cmd *cli.Command) error {
-	conn, _, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag), false)
+	conn, _, err := newSSHClient(ctx, cmd.Root().Bool(debugFlag))
 	if err != nil {
 		return err
 	}

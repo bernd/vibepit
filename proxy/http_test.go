@@ -144,7 +144,9 @@ func TestHTTPProxy(t *testing.T) {
 
 		result := p.checkRequest("example.com", "443")
 		assert.Equal(t, ActionBlock, result.action)
-		assert.Equal(t, "DNS resolution failed during CIDR check", result.reason)
+		entries := log.Entries()
+		require.NotEmpty(t, entries)
+		assert.Equal(t, "DNS resolution failed during CIDR check", entries[len(entries)-1].Reason)
 	})
 }
 
