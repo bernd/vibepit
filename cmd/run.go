@@ -36,6 +36,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
+		warnIgnoredMemoryFlag(cmd)
 		tui.Status("Attaching", "to running session in %s", projectRoot)
 		return client.ExecSession(ctx, existing.ContainerID)
 	}

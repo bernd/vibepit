@@ -42,6 +42,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
+		warnIgnoredMemoryFlag(cmd)
 		tui.Status("Session", "already running for %s", projectRoot)
 		return nil
 	}

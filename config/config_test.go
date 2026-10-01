@@ -498,7 +498,13 @@ func TestMemoryLimit(t *testing.T) {
 		{name: "project overrides global", global: "8g", project: "512m", want: 512 << 20},
 		{name: "cli overrides config", global: "8g", project: "4g", cli: "16g", want: 16 << 30},
 		{name: "invalid value", cli: "lots", wantErr: true},
-		{name: "zero is invalid", cli: "0", wantErr: true},
+		{name: "zero means unlimited", cli: "0", want: 0},
+		{name: "project zero overrides global limit", global: "8g", project: "0", want: 0},
+		{name: "cli zero overrides project limit", global: "8g", project: "4g", cli: "0", want: 0},
+		{name: "negative is invalid", cli: "-1g", wantErr: true},
+		{name: "below docker minimum is invalid", cli: "4m", wantErr: true},
+		{name: "bare number below minimum is invalid", cli: "512", wantErr: true},
+		{name: "docker minimum is valid", cli: "6m", want: 6 << 20},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -515,4 +521,114 @@ func TestMemoryLimit(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestReplaceYAMLListSection(t *testing.T) {
+	tests := []struct {
+		name    string
+		before  string
+		entries []string
+		want    string
+	}{
+		{
+			name:    "replaces block list and keeps other keys and comments",
+			before:  "# header\npresets:\n  - default\n  - pkg-go\n\n# cap\nmemory: 8g\n\nallow-host-ports:\n  - 3000\n",
+			entries: []string{"default", "pkg-node"},
+			want:    "# header\npresets:\n  - default\n  - pkg-node\n\n# cap\nmemory: 8g\n\nallow-host-ports:\n  - 3000\n",
+		},
+		{
+			name:    "keeps item indentation",
+			before:  "presets:\n    - default\nmemory: 8g\n",
+			entries: []string{"pkg-go"},
+			want:    "presets:\n    - pkg-go\nmemory: 8g\n",
+		},
+		{
+			name:    "fills an empty key",
+			before:  "presets:\nmemory: 8g\n",
+			entries: []string{"default"},
+			want:    "presets:\n  - default\nmemory: 8g\n",
+		},
+		{
+			name:    "replaces commented placeholder",
+			before:  "# presets:\n#   - default\n#   - pkg-go\n\nmemory: 8g\n",
+			entries: []string{"pkg-node"},
+			want:    "presets:\n  - pkg-node\n\nmemory: 8g\n",
+		},
+		{
+			name:    "appends when section is missing",
+			before:  "memory: 8g\n",
+			entries: []string{"default"},
+			want:    "memory: 8g\n\npresets:\n  - default\n",
+		},
+		{
+			name:    "quotes values that look like aliases",
+			before:  "presets:\n  - default\n",
+			entries: []string{"*weird"},
+			want:    "presets:\n  - \"*weird\"\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := replaceYAMLListSection([]byte(tt.before), "presets", tt.entries)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+
+	t.Run("flow style falls back to re-encode and keeps other keys", func(t *testing.T) {
+		got, err := replaceYAMLListSection([]byte("presets: [default]\nmemory: 8g\n"), "presets", []string{"pkg-go"})
+		require.NoError(t, err)
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		require.NoError(t, os.WriteFile(path, got, 0o644))
+		cfg := &ProjectConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Equal(t, []string{"pkg-go"}, cfg.Presets)
+		assert.Equal(t, "8g", cfg.Memory)
+	})
+
+	t.Run("comment between items falls back to re-encode", func(t *testing.T) {
+		got, err := replaceYAMLListSection([]byte("presets:\n  - default\n  # note\n  - pkg-go\nmemory: 8g\n"), "presets", []string{"pkg-node"})
+		require.NoError(t, err)
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "network.yaml")
+		require.NoError(t, os.WriteFile(path, got, 0o644))
+		cfg := &ProjectConfig{}
+		require.NoError(t, loadFile(path, cfg))
+		assert.Equal(t, []string{"pkg-node"}, cfg.Presets)
+		assert.Equal(t, "8g", cfg.Memory)
+	})
+
+	t.Run("empty entries remove the section", func(t *testing.T) {
+		got, err := replaceYAMLListSection([]byte("presets:\n  - default\nmemory: 8g\n"), "presets", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "memory: 8g\n", string(got))
+	})
+}
+
+func TestWriteProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".vibepit", "network.yaml")
+
+	require.NoError(t, writeProjectConfig(path, []string{"default", "pkg-go"}))
+
+	cfg := &ProjectConfig{}
+	require.NoError(t, loadFile(path, cfg))
+	assert.Equal(t, []string{"default", "pkg-go"}, cfg.Presets)
+	assert.Empty(t, cfg.AllowHTTP)
+	assert.Empty(t, cfg.AllowDNS)
+
+	// Reconfiguring the freshly written file must land in the active presets
+	// block, not in one of the commented placeholders.
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	updated, err := replaceYAMLListSection(data, "presets", []string{"pkg-node"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, updated, 0o600))
+	cfg = &ProjectConfig{}
+	require.NoError(t, loadFile(path, cfg))
+	assert.Equal(t, []string{"pkg-node"}, cfg.Presets)
+	assert.Contains(t, string(updated), "# allow-http:")
 }

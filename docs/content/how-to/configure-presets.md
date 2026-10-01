@@ -123,7 +123,14 @@ memory: 16g
 
 `memory` works in both the global and the project config. The `--memory` CLI
 flag overrides both, and the project value overrides the global one. If none is
-set, the container has no memory limit.
+set, the container has no memory limit. Set `memory: 0` (or `--memory 0`) to
+lift a limit that a lower-precedence config imposes. The smallest accepted
+limit is `6m`; a bare number is interpreted as bytes.
+
+The limit is applied when the sandbox container is created. Running
+`vibepit run --memory` against a session that is already running attaches to
+the existing container and warns that the flag was ignored; use `vibepit down`
+first to apply a new limit.
 
 ## Global config
 

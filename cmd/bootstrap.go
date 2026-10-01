@@ -124,6 +124,14 @@ func sandboxFlags() []cli.Flag {
 	}
 }
 
+// warnIgnoredMemoryFlag tells the user that --memory has no effect on a
+// session that is already running: the limit is fixed at container creation.
+func warnIgnoredMemoryFlag(cmd *cli.Command) {
+	if cmd.IsSet(memoryFlag) {
+		tui.Warn("--%s is ignored for an already running session; run 'vibepit down' first to apply it", memoryFlag)
+	}
+}
+
 // resolveProjectAndUser resolves the project root from the CLI arguments,
 // validates it, and returns the current user and container image name.
 func resolveProjectAndUser(cmd *cli.Command) (string, *userInfo, error) {
@@ -194,6 +202,13 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	cfg, err := config.Load(globalPath, projectPath)
 	if err != nil {
 		return nil, cleanups, fmt.Errorf("config: %w", err)
+	}
+
+	// Reject a bad --memory (or global config) value before the interactive
+	// setup runs, so the user doesn't click through the preset selector only
+	// to have startup abort afterwards.
+	if _, err := cfg.MemoryLimit(cmd.String(memoryFlag)); err != nil {
+		return nil, cleanups, err
 	}
 
 	if cmd.Bool(reconfigureFlag) {

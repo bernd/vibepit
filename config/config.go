@@ -139,11 +139,22 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 	}, nil
 }
 
+// minMemoryLimit mirrors the smallest memory limit the Docker daemon accepts.
+// Values below it are rejected at container creation, long after the network
+// and proxy container have been set up, so reject them up front instead.
+const minMemoryLimit = 6 << 20
+
 // MemoryLimit returns the sandbox memory limit in bytes, or 0 for no limit.
 // The CLI value takes precedence over project config, which takes precedence
-// over global config.
+// over global config. An explicit "0" at any level disables a limit set at a
+// lower-precedence level.
 func (c *Config) MemoryLimit(cliMemory string) (int64, error) {
-	memory := cmp.Or(cliMemory, c.Project.Memory, c.Global.Memory)
+	return ParseMemoryLimit(cmp.Or(cliMemory, c.Project.Memory, c.Global.Memory))
+}
+
+// ParseMemoryLimit parses a docker-style memory size (e.g. "512m", "8g") into
+// bytes. Empty and "0" both mean no limit and return 0.
+func ParseMemoryLimit(memory string) (int64, error) {
 	if memory == "" {
 		return 0, nil
 	}
@@ -151,8 +162,14 @@ func (c *Config) MemoryLimit(cliMemory string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid memory limit %q: %w", memory, err)
 	}
-	if limit <= 0 {
-		return 0, fmt.Errorf("invalid memory limit %q: must be positive", memory)
+	switch {
+	case limit == 0:
+		return 0, nil
+	case limit < 0:
+		return 0, fmt.Errorf("invalid memory limit %q: must not be negative", memory)
+	case limit < minMemoryLimit:
+		return 0, fmt.Errorf("invalid memory limit %q: must be at least %s (values without a unit suffix are bytes; use m or g)",
+			memory, units.BytesSize(minMemoryLimit))
 	}
 	return limit, nil
 }

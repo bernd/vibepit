@@ -2,7 +2,9 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,8 +31,10 @@ func RunFirstTimeSetup(projectDir, projectConfigPath string) ([]string, error) {
 	return selected, writeProjectConfig(projectConfigPath, selected)
 }
 
-// RunReconfigure re-runs the interactive preset selector, preserving existing
-// allow-http and allow-dns entries from the project config.
+// RunReconfigure re-runs the interactive preset selector and rewrites only the
+// presets section of the project config. Every other key (allow-http,
+// allow-dns, allow-host-ports, memory, ...) and all comments are left as they
+// are, so settings the template writer doesn't know about survive.
 func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 	var cfg ProjectConfig
 	if err := loadFile(projectConfigPath, &cfg); err != nil {
@@ -49,17 +53,24 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 		return nil, err
 	}
 
-	return selected, writeReconfiguredProjectConfig(projectConfigPath, selected, cfg.AllowHTTP, cfg.AllowDNS)
+	data, err := os.ReadFile(projectConfigPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return selected, writeProjectConfig(projectConfigPath, selected)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read project config: %w", err)
+	}
+
+	updated, err := replaceYAMLListSection(data, "presets", selected)
+	if err != nil {
+		return nil, err
+	}
+	return selected, os.WriteFile(projectConfigPath, updated, 0o600)
 }
 
+// writeProjectConfig writes a fresh config file with the given presets and
+// commented-out placeholder sections for the other keys.
 func writeProjectConfig(path string, presets []string) error {
-	return writeReconfiguredProjectConfig(path, presets, nil, nil)
-}
-
-// writeReconfiguredProjectConfig writes the config file with new presets while
-// preserving existing allow-http and allow-dns entries. When allowHTTP and allowDNS
-// are nil, commented-out placeholder sections are written instead.
-func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []string, allowDNS []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
@@ -69,11 +80,11 @@ func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []s
 	writePresetsSection(&sb, presets)
 	writeYAMLListSection(&sb,
 		"# Additional domains to allow HTTP access for this project.",
-		"allow-http", allowHTTP,
+		"allow-http", nil,
 		[]string{"api.openai.com:443", "api.anthropic.com:443"})
 	writeYAMLListSection(&sb,
 		"# Domains that only need DNS resolution (no HTTP proxy).",
-		"allow-dns", allowDNS,
+		"allow-dns", nil,
 		[]string{"internal.corp.example.com"})
 
 	return os.WriteFile(path, []byte(sb.String()), 0o600)
@@ -242,6 +253,126 @@ func appendYAMLListEntries(data []byte, sectionKey string, added []string) ([]by
 	default:
 		return nil, fmt.Errorf("%s: expected YAML list", sectionKey)
 	}
+}
+
+// replaceYAMLListSection replaces the whole list keyed by sectionKey with
+// entries. Like appendYAMLListEntries it edits lines in place where the shape
+// is simple (a block list of plain scalars on consecutive lines) and only
+// re-encodes the document for shapes where that isn't safe. A missing section
+// is created the same way appendYAMLListEntries creates one.
+func replaceYAMLListSection(data []byte, sectionKey string, entries []string) ([]byte, error) {
+	doc, root, err := parseProjectConfigYAML(data)
+	if err != nil {
+		return nil, err
+	}
+
+	keyNode, valNode := findYAMLMappingPair(root, sectionKey)
+	if keyNode == nil {
+		if len(entries) == 0 {
+			return data, nil
+		}
+		return appendYAMLListEntries(data, sectionKey, entries)
+	}
+
+	if len(entries) > 0 {
+		if out, ok := replaceBlockYAMLList(data, keyNode, valNode, entries); ok {
+			return out, nil
+		}
+		valNode.Kind = yaml.SequenceNode
+		valNode.Tag = "!!seq"
+		valNode.Value = ""
+		valNode.Style = 0
+		valNode.Content = nil
+		for _, d := range entries {
+			valNode.Content = append(valNode.Content, newYAMLStringScalar(d))
+		}
+		return encodeYAMLDocument(doc)
+	}
+
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i] == keyNode {
+			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+			break
+		}
+	}
+	return encodeYAMLDocument(doc)
+}
+
+// replaceBlockYAMLList swaps the items of an existing block list for entries
+// by editing lines. It handles two shapes: a `key:` line with nothing after
+// the colon (implicit null), and a block list whose items are plain scalars
+// on consecutive lines directly below the key. Anything else (flow style,
+// comments between items, multi-line scalars) reports false so the caller can
+// fall back to re-encoding.
+func replaceBlockYAMLList(data []byte, keyNode, valNode *yaml.Node, entries []string) ([]byte, bool) {
+	if keyNode.Line <= 0 {
+		return nil, false
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	keyIdx := keyNode.Line - 1
+	if keyIdx < 0 || keyIdx >= len(lines) {
+		return nil, false
+	}
+
+	// [firstIdx, lastIdx] is the 0-based line span of the existing items.
+	firstIdx, lastIdx := keyIdx+1, keyIdx
+	indent := "  "
+
+	switch {
+	case valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null" &&
+		valNode.Value == "" && valNode.Line == keyNode.Line:
+		// Nothing to remove; new items go directly under the key line.
+
+	case valNode.Kind == yaml.SequenceNode:
+		if valNode.Style&yaml.FlowStyle != 0 || len(valNode.Content) == 0 {
+			return nil, false
+		}
+		first := valNode.Content[0]
+		if first.Line <= keyNode.Line {
+			return nil, false
+		}
+		for i, item := range valNode.Content {
+			if item.Kind != yaml.ScalarNode ||
+				item.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 ||
+				item.Line != first.Line+i {
+				return nil, false
+			}
+		}
+		firstIdx = first.Line - 1
+		lastIdx = firstIdx + len(valNode.Content) - 1
+		if lastIdx >= len(lines) {
+			return nil, false
+		}
+		for _, l := range lines[firstIdx : lastIdx+1] {
+			if !strings.HasPrefix(strings.TrimLeft(l, " \t"), "-") {
+				return nil, false
+			}
+		}
+		itemLine := lines[firstIdx]
+		indent = itemLine[:len(itemLine)-len(strings.TrimLeft(itemLine, " \t"))]
+
+	default:
+		return nil, false
+	}
+
+	nl := lineEnding(lines[keyIdx])
+	if !strings.HasSuffix(lines[keyIdx], "\n") {
+		lines[keyIdx] += nl
+	}
+	if lastIdx >= keyIdx+1 && !strings.HasSuffix(lines[lastIdx], "\n") {
+		lines[lastIdx] += nl
+	}
+
+	inserted := make([]string, 0, len(entries))
+	for _, d := range entries {
+		inserted = append(inserted, fmt.Sprintf("%s- %s%s", indent, formatYAMLListValue(d), nl))
+	}
+
+	out := make([]string, 0, len(lines)-(lastIdx-firstIdx+1)+len(inserted))
+	out = append(out, lines[:firstIdx]...)
+	out = append(out, inserted...)
+	out = append(out, lines[lastIdx+1:]...)
+	return []byte(strings.Join(out, "")), true
 }
 
 func encodeYAMLDocument(doc *yaml.Node) ([]byte, error) {
