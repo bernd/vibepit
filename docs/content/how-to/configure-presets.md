@@ -111,6 +111,20 @@ sandbox, but `curl http://host.vibepit:8080` is blocked.
 `allow-host-ports` is a project config setting only — it is not available in the
 global config or via CLI flags.
 
+## Limit sandbox memory
+
+The `memory` setting caps the memory available to the sandbox container,
+equivalent to `docker run --memory`. Values use the same format, such as
+`512m` or `16g`:
+
+```yaml
+memory: 16g
+```
+
+`memory` works in both the global and the project config. The `--memory` CLI
+flag overrides both, and the project value overrides the global one. If none is
+set, the container has no memory limit.
+
 ## Global config
 
 Global settings apply to every project. The global config file is located at:
@@ -133,6 +147,8 @@ block-cidr:
 
 allow-cidr:
   - 100.64.0.0/10
+
+memory: 16g
 ```
 
 ## Where each setting comes from
@@ -148,6 +164,7 @@ uniformly — each key follows its own rules:
 | `block-cidr` | Global config only. Adds custom ranges to the default IP blocklist. |
 | `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges — see the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
 | `allow-host-ports` | Project config only. |
+| `memory` | CLI flag, else project config, else global config. |
 
 ## Further reading
 

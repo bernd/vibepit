@@ -37,6 +37,7 @@ const (
 const (
 	allowFlag       = "allow"
 	localFlag       = "local"
+	memoryFlag      = "memory"
 	presetFlag      = "preset"
 	reconfigureFlag = "reconfigure"
 )
@@ -54,6 +55,7 @@ type sessionInfra struct {
 	NetworkInfo      ctr.NetworkInfo
 	Merged           config.MergedConfig
 	ProxyContainerID string
+	MemoryLimit      int64
 }
 
 type infraOptions struct {
@@ -108,6 +110,11 @@ func sandboxFlags() []cli.Flag {
 			Name:    presetFlag,
 			Aliases: []string{"p"},
 			Usage:   "Additional presets to activate",
+		},
+		&cli.StringFlag{
+			Name:    memoryFlag,
+			Aliases: []string{"m"},
+			Usage:   "Memory limit for the sandbox container (e.g. 8g, 512m)",
 		},
 		&cli.BoolFlag{
 			Name:    reconfigureFlag,
@@ -210,6 +217,11 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	merged, err := cfg.Merge(cmd.StringSlice(allowFlag), cmd.StringSlice(presetFlag))
 	if err != nil {
 		return nil, cleanups, fmt.Errorf("config: %w", err)
+	}
+
+	memoryLimit, err := cfg.MemoryLimit(cmd.String(memoryFlag))
+	if err != nil {
+		return nil, cleanups, err
 	}
 
 	if err := client.EnsureVolume(ctx, homeVolumeName, u.UID, u.Username); err != nil {
@@ -362,6 +374,7 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		NetworkInfo:      netInfo,
 		Merged:           merged,
 		ProxyContainerID: proxyContainerID,
+		MemoryLimit:      memoryLimit,
 	}, cleanups, nil
 }
 
@@ -385,6 +398,7 @@ func (infra *sessionInfra) baseSandboxConfig(projectRoot string, u *userInfo) ct
 		UID:                 infra.UID,
 		User:                u.Username,
 		SessionID:           infra.SessionID,
+		Memory:              infra.MemoryLimit,
 	}
 }
 
