@@ -405,6 +405,63 @@ func TestShowRestoresFromTheShadowWhenTheCursorMoved(t *testing.T) {
 	assert.Empty(t, h.sessionIn.String(), "the position reply isn't the app's input")
 }
 
+// clearToCursor is what kitty's clear_terminal to_cursor_scroll and
+// Cmd+K in other terminals do without telling the app: the rows above the
+// cursor go to the scrollback and the cursor's row moves to the top.
+func clearToCursor(rows int) string { return fmt.Sprintf("\x1b[%dS\x1b[%dA", rows, rows) }
+
+func TestShowKeepsAClearTheTerminalDidItself(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the cut's cursor isn't the real one")
+	assert.Equal(t, "$", screenText(h.real))
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowKeepsAClearTheTerminalDidItselfBelowLaterOutput(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.prompt(func() {
+		require.Eventually(t, func() bool {
+			var first string
+			h.locked(func(tm *Terminal) { first = firstLine(tm.shadow) })
+			return first == "$"
+		}, 5*time.Second, time.Millisecond, "the shadow never followed the clear")
+		h.app("ls\r\nfile\r\n$ ")
+	})
+	assert.Equal(t, "$ ls\nfile\n$", screenText(h.real))
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowDoesNotShiftTheShadowAfterOutputBeforeThePositionReply(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.holdPositionReplies()
+	h.prompt(func() {
+		// Scrolls the shadow, so the clear's shift would push these lines
+		// off the screen.
+		h.app("ls\r\nfile\r\n$ ")
+		require.NotEmpty(t, h.releaseReplies())
+	})
+	assert.True(t, h.snapshotted())
+	assert.Equal(t, "three\nfour\nfive\n$ ls\nfile\n$", screenText(h.real), "repainted from the unshifted shadow")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowDoesNotShiftTheShadowWhenTheColumnMoved(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\n$ ")
+	feed(t, h.real, clearToCursor(2)+"\x1b[C")
+	h.prompt(nil)
+	assert.True(t, h.snapshotted())
+	assert.Equal(t, "one\ntwo\n$", screenText(h.real), "repainted from the unshifted shadow")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
 func TestShowWithoutAPositionReplyAtTheCutRestoresFromTheShadow(t *testing.T) {
 	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.positionWait = 50 * time.Millisecond }))
 	h.app("$ ")

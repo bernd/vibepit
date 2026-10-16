@@ -23,7 +23,10 @@
 //     app's, counted from the shadow's answers. Only now is the prompt
 //     drawn, behind a DSR 6n query: a resize may have moved the real
 //     cursor away from the shadow's, because terminals reflow
-//     differently, and the reply tells. A terminal that didn't answer
+//     differently, and the reply tells. A reply higher up in the same
+//     column means the terminal cleared the rows above the cursor on its
+//     own (kitty's clear_terminal, Cmd+K), and the shadow scrolls to
+//     follow. A terminal that didn't answer
 //     twice in a row gets no more barrier queries; input then moves
 //     after a pause in typing. A late reply brings them back, with a
 //     longer wait.

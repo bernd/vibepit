@@ -268,6 +268,30 @@ func (t *Terminal) cursorKnownLocked(c *cutState) bool {
 	return !t.misaligned
 }
 
+// followLocalClear makes the shadow follow a clear the real terminal did
+// without telling the app, such as kitty's clear_terminal to_cursor_scroll
+// or Cmd+K: row and col are the real cursor at the cut. Those clears move
+// the rows above the cursor into the scrollback and keep the column, so a
+// real cursor higher up in the same column means the shadow must scroll by
+// the difference, or the snapshot paints the cleared rows back.
+func (t *Terminal) followLocalClear(c *cutState, row, col int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// On the alternate screen there is no clear to follow, and after a
+	// forced cut the shadow is inside a sequence the shift would garble.
+	if t.shadowErr != nil || c.alt || c.forced || row >= c.row || col != c.col {
+		return
+	}
+	// Output since the cut may have scrolled the shadow, and the shift
+	// would then push it off the screen. Painting the cleared rows back
+	// loses nothing.
+	if len(t.log.buf) > 0 || t.log.overflow {
+		return
+	}
+	n := c.row - row
+	t.shadowWriteLocked(fmt.Appendf(nil, "\x1b[%dS\x1b[%dA", n, n))
+}
+
 // reportsFocusLocked tells whether the app takes focus reports (mode
 // 1004), so the ones the prompt got while it owned the input are the
 // app's too.

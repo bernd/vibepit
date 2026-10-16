@@ -83,6 +83,9 @@ func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model)
 		confirmed := make(chan bool, 1)
 		go func() {
 			row, col, err := t.in.AwaitPosition(context.Background(), wait, strip)
+			if err == nil {
+				t.followLocalClear(c, row, col)
+			}
 			confirmed <- err == nil && row == c.row && col == c.col
 		}()
 		defer func() { c.posConfirmed = <-confirmed }()
