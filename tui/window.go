@@ -57,8 +57,13 @@ func (w *Window) IntervalElapsed(interval time.Duration) bool {
 
 // Mutators for screens to update shared state.
 func (w *Window) SetFlash(msg string) {
+	w.SetFlashFor(msg, 2*time.Second)
+}
+
+// SetFlashFor shows msg for d, for messages that take longer to read.
+func (w *Window) SetFlashFor(msg string, d time.Duration) {
 	w.flash = msg
-	w.flashExp = time.Now().Add(2 * time.Second)
+	w.flashExp = time.Now().Add(d)
 }
 func (w *Window) SetHeader(info *HeaderInfo) {
 	w.header = info
@@ -157,18 +162,20 @@ func (w *Window) renderFooter() string {
 		left = screenStatus + windowStatus
 	}
 
-	// Right: screen keys + base keys
+	// Right: screen keys + base keys. Screens list their most important keys
+	// first, so drop from the end until the line fits and "q quit" stays visible.
 	var keys []string
 	for _, fk := range w.screen.FooterKeys(w) {
 		keys = append(keys, keyStyle.Render(fk.Key)+" "+descStyle.Render(fk.Desc))
 	}
-	keys = append(keys,
-		keyStyle.Render("q")+" "+descStyle.Render("quit"),
-	)
-
-	right := strings.Join(keys, "  ")
+	quit := keyStyle.Render("q") + " " + descStyle.Render("quit")
 
 	leftWidth := ansi.StringWidth(left)
+	right := strings.Join(append(keys, quit), "  ")
+	for len(keys) > 0 && leftWidth+2+ansi.StringWidth(right) > w.width {
+		keys = keys[:len(keys)-1]
+		right = strings.Join(append(keys, quit), "  ")
+	}
 	rightWidth := ansi.StringWidth(right)
 	gap := max(w.width-leftWidth-rightWidth, 2)
 

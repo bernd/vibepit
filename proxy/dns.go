@@ -47,8 +47,10 @@ func (s *DNSServer) handler() mdns.Handler {
 		domain := strings.TrimSuffix(strings.ToLower(r.Question[0].Name), ".")
 
 		// Synthetic response for host.vibepit — resolves to the proxy IP
-		// without upstream forwarding or CIDR validation.
-		if domain == "host.vibepit" && s.proxyIP != nil && r.Question[0].Qtype == mdns.TypeA {
+		// without upstream forwarding or CIDR validation. Other query types
+		// (resolvers send AAAA alongside A) get an empty answer instead of
+		// falling through to the allowlist and being logged as blocked.
+		if domain == "host.vibepit" && s.proxyIP != nil {
 			s.log.Add(LogEntry{
 				Time:   time.Now(),
 				Domain: domain,
@@ -57,15 +59,17 @@ func (s *DNSServer) handler() mdns.Handler {
 			})
 			m := new(mdns.Msg)
 			m.SetReply(r)
-			m.Answer = append(m.Answer, &mdns.A{
-				Hdr: mdns.RR_Header{
-					Name:   r.Question[0].Name,
-					Rrtype: mdns.TypeA,
-					Class:  mdns.ClassINET,
-					Ttl:    60,
-				},
-				A: s.proxyIP,
-			})
+			if r.Question[0].Qtype == mdns.TypeA {
+				m.Answer = append(m.Answer, &mdns.A{
+					Hdr: mdns.RR_Header{
+						Name:   r.Question[0].Name,
+						Rrtype: mdns.TypeA,
+						Class:  mdns.ClassINET,
+						Ttl:    60,
+					},
+					A: s.proxyIP,
+				})
+			}
 			w.WriteMsg(m)
 			return
 		}
@@ -77,6 +81,7 @@ func (s *DNSServer) handler() mdns.Handler {
 				Action: ActionBlock,
 				Source: SourceDNS,
 				Reason: "domain not in allowlist",
+				Code:   BlockNotAllowlisted,
 			})
 			m := new(mdns.Msg)
 			m.SetRcode(r, mdns.RcodeNameError)
@@ -100,6 +105,7 @@ func (s *DNSServer) handler() mdns.Handler {
 				Action: ActionBlock,
 				Source: SourceDNS,
 				Reason: "resolved IP in blocked CIDR range",
+				Code:   BlockCIDR,
 			})
 			m := new(mdns.Msg)
 			m.SetRcode(r, mdns.RcodeNameError)

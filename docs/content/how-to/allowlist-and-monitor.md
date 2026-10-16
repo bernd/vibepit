@@ -15,7 +15,26 @@ Launch the interactive monitor to inspect proxy traffic in real time:
 vibepit monitor
 ```
 
-The monitor displays a live stream of proxy log entries. Each line shows a
+The monitor has two tabs. Press **`tab`** to switch between them.
+
+**`HOSTS`** (the default) shows one row per host: each HTTP(S) `domain:port`
+and each DNS `domain` gets its own row. Rows show when the host was last seen,
+the source (`proxy` or `dns`), how many requests it made, and its status:
+
+- **`blocked`** — the most recent request was blocked, and the host has not
+  been allowed since.
+- **`allowed`** — the allowlist admits the host, either by an existing rule or
+  by one added since its last request, such as with `vibepit allow-http`.
+- **`allowed*`** — you allowed it from this monitor for this session.
+- **`saved`** — you allowed it from this monitor and saved it to your project
+  configuration.
+
+The most recently active hosts are at the top, so new blocks show up first.
+Press **`s`** to cycle the sort order between newest, host name, and count.
+Press **`enter`** on a row to show details such as first and last seen, the
+allowed/blocked counts, and why the host was blocked.
+
+**`LOGS`** shows the live stream of proxy log entries. Each line shows a
 timestamp, source (HTTP or DNS), domain, port (for HTTP entries), and whether
 the request was allowed or blocked:
 
@@ -24,15 +43,31 @@ the request was allowed or blocked:
 
 ### Allow domains from the monitor
 
-You can add allowlist entries directly from the monitor without leaving the TUI:
+You can add allowlist entries directly from the monitor without leaving the TUI,
+on either tab:
 
-1. Navigate to a blocked entry using the arrow keys.
+1. Navigate to a blocked host or entry using the arrow keys.
 2. Press **`a`** to allow the domain for the current session only.
 3. Press **`A`** (shift) to allow the domain **and** save it to your project
    configuration for future sessions.
 
-After allowing, the entry marker changes to reflect its new status, and the
+Nothing is selected until you press a navigation key. The selection then stays
+on the host or entry you picked while new traffic arrives. On the hosts tab it
+disappears after 6 seconds without a key press, because rows re-sort as traffic
+arrives and the allow keys must never act on a row that moved into place on its
+own. While the selection is on an expanded row, it stays until you collapse
+the row. Log lines never move, so the logs tab keeps its selection and scroll
+position while you read. Press **`esc`** to clear the selection right away;
+with nothing selected, `esc` returns to the session list.
+
+After allowing, the status or entry marker changes to reflect it, and the
 footer confirms the action.
+
+The allow keys are only offered for requests blocked because the domain is not
+in the allowlist. Requests blocked because the domain resolves to a blocked IP
+range, or could not be resolved, cannot be fixed with an allowlist entry. If a
+host you allowed keeps getting blocked for one of those reasons, its status
+switches back to `blocked` and its details show the reason.
 
 ## Add HTTP(S) allowlist entries
 

@@ -45,18 +45,115 @@ func TestLogBuffer(t *testing.T) {
 		assert.Equal(t, uint64(2), entries[1].ID)
 		assert.Equal(t, uint64(3), entries[2].ID)
 	})
+}
 
-	t.Run("stats counts per domain", func(t *testing.T) {
+func hostByDomain(t *testing.T, hosts []HostStats, domain string) HostStats {
+	t.Helper()
+	for _, h := range hosts {
+		if h.Domain == domain {
+			return h
+		}
+	}
+	t.Fatalf("host %q not found", domain)
+	return HostStats{}
+}
+
+func hostDomains(hosts []HostStats) []string {
+	var domains []string
+	for _, h := range hosts {
+		domains = append(domains, h.Domain)
+	}
+	return domains
+}
+
+func TestLogBufferHosts(t *testing.T) {
+	t0 := time.Date(2026, 10, 16, 20, 0, 0, 0, time.UTC)
+
+	t.Run("separates source and port", func(t *testing.T) {
 		buf := NewLogBuffer(100)
-		buf.Add(LogEntry{Domain: "a.com", Action: ActionAllow})
-		buf.Add(LogEntry{Domain: "a.com", Action: ActionAllow})
-		buf.Add(LogEntry{Domain: "a.com", Action: ActionBlock})
-		buf.Add(LogEntry{Domain: "b.com", Action: ActionBlock})
+		buf.Add(LogEntry{Time: t0, Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionAllow})
+		buf.Add(LogEntry{Time: t0, Domain: "a.com", Port: "80", Source: SourceProxy, Action: ActionAllow})
+		buf.Add(LogEntry{Time: t0, Domain: "a.com", Source: SourceDNS, Action: ActionAllow})
 
-		stats := buf.Stats()
-		assert.Equal(t, 2, stats["a.com"].Allowed)
-		assert.Equal(t, 1, stats["a.com"].Blocked)
-		assert.Equal(t, 1, stats["b.com"].Blocked)
+		assert.Len(t, buf.Hosts(), 3)
+	})
+
+	t.Run("counts and first/last", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		e := LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy}
+		e.Time, e.Action = t0, ActionBlock
+		buf.Add(e)
+		e.Time, e.Action = t0.Add(time.Second), ActionAllow
+		buf.Add(e)
+		e.Time, e.Action = t0.Add(2*time.Second), ActionAllow
+		buf.Add(e)
+
+		hosts := buf.Hosts()
+		require.Len(t, hosts, 1)
+		h := hosts[0]
+		assert.Equal(t, HostKey{Source: SourceProxy, Domain: "a.com", Port: "443"}, h.HostKey)
+		assert.Equal(t, 2, h.Allowed)
+		assert.Equal(t, 1, h.Blocked)
+		assert.Equal(t, t0, h.FirstSeen)
+		assert.Equal(t, ActionBlock, h.FirstAction)
+		assert.Equal(t, t0.Add(2*time.Second), h.LastSeen)
+		assert.Equal(t, ActionAllow, h.LastAction)
+	})
+
+	t.Run("last block details", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		cidrReason := "resolved IP 10.0.0.1 is in blocked CIDR range"
+		buf.Add(LogEntry{Time: t0, Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock,
+			Reason: "domain not in allowlist", Code: BlockNotAllowlisted})
+		buf.Add(LogEntry{Time: t0.Add(time.Second), Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock,
+			Reason: cidrReason, Code: BlockCIDR})
+		buf.Add(LogEntry{Time: t0.Add(2 * time.Second), Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionAllow})
+
+		h := buf.Hosts()[0]
+		assert.Equal(t, BlockCIDR, h.LastBlockCode)
+		assert.Equal(t, cidrReason, h.LastBlockReason)
+	})
+
+	t.Run("survives ring overwrite", func(t *testing.T) {
+		buf := NewLogBuffer(2)
+		for i := range 5 {
+			buf.Add(LogEntry{Time: t0, Domain: fmt.Sprintf("%d.com", i), Source: SourceDNS, Action: ActionBlock})
+		}
+
+		assert.Len(t, buf.Hosts(), 5)
+	})
+
+	t.Run("evicts least recently seen at cap", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		buf.maxHosts = 3
+		buf.Add(LogEntry{Time: t0.Add(3 * time.Second), Domain: "a.com", Source: SourceDNS})
+		buf.Add(LogEntry{Time: t0.Add(1 * time.Second), Domain: "b.com", Source: SourceDNS})
+		buf.Add(LogEntry{Time: t0.Add(2 * time.Second), Domain: "c.com", Source: SourceDNS})
+		buf.Add(LogEntry{Time: t0.Add(4 * time.Second), Domain: "d.com", Source: SourceDNS})
+
+		assert.ElementsMatch(t, []string{"a.com", "c.com", "d.com"}, hostDomains(buf.Hosts()))
+	})
+
+	t.Run("existing host at cap is updated, not evicted", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		buf.maxHosts = 2
+		buf.Add(LogEntry{Time: t0, Domain: "a.com", Source: SourceDNS, Action: ActionBlock})
+		buf.Add(LogEntry{Time: t0.Add(time.Second), Domain: "b.com", Source: SourceDNS, Action: ActionBlock})
+		buf.Add(LogEntry{Time: t0.Add(2 * time.Second), Domain: "a.com", Source: SourceDNS, Action: ActionBlock})
+
+		hosts := buf.Hosts()
+		assert.Len(t, hosts, 2)
+		a := hostByDomain(t, hosts, "a.com")
+		assert.Equal(t, 2, a.Allowed+a.Blocked)
+	})
+
+	t.Run("Hosts returns copies", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		buf.Add(LogEntry{Time: t0, Domain: "a.com", Source: SourceDNS, Action: ActionBlock})
+
+		hosts := buf.Hosts()
+		hosts[0].Blocked = 99
+		assert.Equal(t, 1, buf.Hosts()[0].Blocked)
 	})
 }
 

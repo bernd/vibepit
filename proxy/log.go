@@ -19,6 +19,16 @@ const (
 	SourceDNS   Source = "dns"
 )
 
+// BlockCode classifies why a request was blocked, so clients can tell blocks
+// that an allowlist entry would fix from ones it would not.
+type BlockCode string
+
+const (
+	BlockNotAllowlisted   BlockCode = "not_allowlisted"
+	BlockCIDR             BlockCode = "blocked_cidr"
+	BlockResolutionFailed BlockCode = "resolution_failed"
+)
+
 type LogEntry struct {
 	ID     uint64    `json:"id"`
 	Time   time.Time `json:"time"`
@@ -27,29 +37,59 @@ type LogEntry struct {
 	Action Action    `json:"action"`
 	Source Source    `json:"source"`
 	Reason string    `json:"reason,omitempty"`
+	Code   BlockCode `json:"code,omitempty"`
 }
 
-type DomainStats struct {
-	Allowed int `json:"allowed"`
-	Blocked int `json:"blocked"`
+// MaxHosts caps the per-host stats table. The sandbox can query an unbounded
+// number of unique names, so the table must not grow without limit.
+const MaxHosts = 2000
+
+// HostKey identifies a host in the stats table. DNS and proxy traffic for the
+// same domain are tracked separately because they need different allow rules.
+type HostKey struct {
+	Source Source `json:"source"`
+	Domain string `json:"domain"`
+	Port   string `json:"port,omitempty"`
+}
+
+func (e LogEntry) HostKey() HostKey {
+	return HostKey{Source: e.Source, Domain: e.Domain, Port: e.Port}
+}
+
+type HostStats struct {
+	HostKey
+	Allowed         int       `json:"allowed"`
+	Blocked         int       `json:"blocked"`
+	FirstSeen       time.Time `json:"first_seen"`
+	FirstAction     Action    `json:"first_action"`
+	LastSeen        time.Time `json:"last_seen"`
+	LastAction      Action    `json:"last_action"`
+	LastBlockReason string    `json:"last_block_reason,omitempty"`
+	LastBlockCode   BlockCode `json:"last_block_code,omitempty"`
+	// Allowlisted reports whether the allowlist admits the host at snapshot
+	// time. It covers runtime allows from any client, so it can be true
+	// while LastAction is still a block from before the allow.
+	Allowlisted bool `json:"allowlisted"`
 }
 
 type LogBuffer struct {
-	mu      sync.Mutex
-	entries []LogEntry
-	cap     int
-	pos     int
-	full    bool
-	nextID  uint64
-	stats   map[string]*DomainStats
+	mu       sync.Mutex
+	entries  []LogEntry
+	cap      int
+	pos      int
+	full     bool
+	nextID   uint64
+	hosts    map[HostKey]*HostStats
+	maxHosts int
 }
 
 func NewLogBuffer(capacity int) *LogBuffer {
 	return &LogBuffer{
-		entries: make([]LogEntry, capacity),
-		cap:     capacity,
-		nextID:  1,
-		stats:   make(map[string]*DomainStats),
+		entries:  make([]LogEntry, capacity),
+		cap:      capacity,
+		nextID:   1,
+		hosts:    make(map[HostKey]*HostStats),
+		maxHosts: MaxHosts,
 	}
 }
 
@@ -65,16 +105,43 @@ func (b *LogBuffer) Add(entry LogEntry) {
 		b.full = true
 	}
 
-	s, ok := b.stats[entry.Domain]
+	b.recordHostLocked(entry)
+}
+
+// recordHostLocked updates the per-host stats. Caller must hold b.mu.
+func (b *LogBuffer) recordHostLocked(entry LogEntry) {
+	key := entry.HostKey()
+	h, ok := b.hosts[key]
 	if !ok {
-		s = &DomainStats{}
-		b.stats[entry.Domain] = s
+		if len(b.hosts) >= b.maxHosts {
+			b.evictOldestHostLocked()
+		}
+		h = &HostStats{HostKey: key, FirstSeen: entry.Time, FirstAction: entry.Action}
+		b.hosts[key] = h
 	}
+	h.LastSeen = entry.Time
+	h.LastAction = entry.Action
 	switch entry.Action {
 	case ActionAllow:
-		s.Allowed++
+		h.Allowed++
 	case ActionBlock:
-		s.Blocked++
+		h.Blocked++
+		h.LastBlockReason = entry.Reason
+		h.LastBlockCode = entry.Code
+	}
+}
+
+// evictOldestHostLocked removes the least recently seen host. A linear scan is
+// fine: it only runs when a new host arrives while the table is full.
+func (b *LogBuffer) evictOldestHostLocked() {
+	var oldest *HostStats
+	for _, h := range b.hosts {
+		if oldest == nil || h.LastSeen.Before(oldest.LastSeen) {
+			oldest = h
+		}
+	}
+	if oldest != nil {
+		delete(b.hosts, oldest.HostKey)
 	}
 }
 
@@ -130,13 +197,14 @@ func (b *LogBuffer) entriesLocked() []LogEntry {
 	return result
 }
 
-func (b *LogBuffer) Stats() map[string]DomainStats {
+// Hosts returns a snapshot of the per-host stats in no particular order.
+func (b *LogBuffer) Hosts() []HostStats {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	result := make(map[string]DomainStats, len(b.stats))
-	for k, v := range b.stats {
-		result[k] = *v
+	result := make([]HostStats, 0, len(b.hosts))
+	for _, h := range b.hosts {
+		result = append(result, *h)
 	}
 	return result
 }
