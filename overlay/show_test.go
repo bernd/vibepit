@@ -417,6 +417,21 @@ func TestShowWithoutAPositionReplyAtTheCutRestoresFromTheShadow(t *testing.T) {
 	h.waitSessionInput("after")
 }
 
+func TestShowRestoresFromTheShadowAfterAFailedWrite(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	// The real terminal misses output that leaves its cursor where it
+	// was, so the position check can't tell.
+	h.failWrites(true)
+	h.app("ls")
+	h.app("\b\b")
+	h.failWrites(false)
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the real terminal lacks output")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	assert.Equal(t, 1, strings.Count(h.logs.String(), "\n"), "logged once: %s", h.logs.String())
+}
+
 func TestShowWithoutAPositionRestoresFromTheShadow(t *testing.T) {
 	h := newHarness(t, 20, 6, hostOutput("host1\r\nhost2\r\n"), silentTerminal(),
 		withTiming(func(tm *timing) { tm.barrierWait = time.Millisecond }))

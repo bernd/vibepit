@@ -118,7 +118,7 @@ func (t *Terminal) cutLocked(forced bool) {
 	if c.barrierSent {
 		b = append(b, barrierQuery...)
 	}
-	_, _ = t.cfg.Stdout.Write(b)
+	t.writeLocked(b)
 	t.endDetachLocked(nil)
 }
 
@@ -146,7 +146,7 @@ func (t *Terminal) shadowPositionLocked() (int, int, error) {
 func (t *Terminal) advanceDetachLocked(p []byte) []byte {
 	n, ground, err := t.writeToGroundLocked(p)
 	if n > 0 {
-		_, _ = t.cfg.Stdout.Write(p[:n])
+		t.writeLocked(p[:n])
 		t.detach.forwarded += n
 		p = p[n:]
 	}
@@ -215,7 +215,7 @@ func (t *Terminal) leave(drawn bool) {
 	var nudge bool
 	t.in.Release(strip, t.reportsFocusLocked(), func() {
 		out, resync, reset := t.leaveBytesLocked(c, e, drawn)
-		_, _ = t.cfg.Stdout.Write(out)
+		t.writeLocked(out)
 		t.cut = nil
 		t.resyncing = resync
 		nudge = reset
@@ -233,6 +233,7 @@ func (t *Terminal) leave(drawn bool) {
 func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte, bool, bool) {
 	raw := !c.forced && // the real terminal may show a replacement character
 		!t.log.overflow && // bytes are missing
+		!t.missed && // the real terminal lacks output the shadow has
 		!t.resized && // the log was written for another geometry
 		!t.answered && // a replayed query would be answered twice
 		t.cursorKnownLocked(c) && // the cut's cursor may be on another row

@@ -3,6 +3,7 @@ package overlay
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -80,6 +81,7 @@ type harness struct {
 	out       *chunkReader // the session's output
 	sessionIn *syncBuffer  // the session's input
 	stdout    *syncBuffer
+	logs      *syncBuffer // the terminal's diagnostics, one per line
 	closedIn  atomic.Int32
 	stalled   atomic.Int32  // writes waiting for a stalled session input
 	done      chan struct{} // closed when Run returned
@@ -92,6 +94,7 @@ type harness struct {
 	holding    bool   // the stand-in's replies wait for releaseReplies
 	held       []byte // replies held back, in order
 	posHeld    bool   // the stand-in's DSR 6n replies wait for releaseReplies
+	failing    bool   // writes to the stand-in fail
 }
 
 // answer sends the stand-in's replies to stdin, or holds them back like a
@@ -122,6 +125,13 @@ func (h *harness) holdPositionReplies() {
 	h.posHeld = true
 }
 
+// failWrites makes writes to the stand-in fail while on.
+func (h *harness) failWrites(on bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.failing = on
+}
+
 // releaseReplies sends the held replies to stdin in one read and returns
 // them.
 func (h *harness) releaseReplies() string {
@@ -146,6 +156,7 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 		out:       newChunkReader(),
 		sessionIn: &syncBuffer{},
 		stdout:    &syncBuffer{},
+		logs:      &syncBuffer{},
 		done:      make(chan struct{}),
 		cols:      cols,
 		rows:      rows,
@@ -166,6 +177,7 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 		Resize:     h.recordResize,
 		Size:       h.size,
 		Environ:    []string{"TERM=xterm-256color"},
+		Logf:       func(format string, args ...any) { fmt.Fprintf(h.logs, format+"\n", args...) },
 		NoShadow:   hc.noShadow,
 	})
 	h.term.timing = hc.timing
@@ -184,6 +196,12 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 type stdoutWriter struct{ h *harness }
 
 func (w stdoutWriter) Write(p []byte) (int, error) {
+	w.h.mu.Lock()
+	failing := w.h.failing
+	w.h.mu.Unlock()
+	if failing {
+		return 0, errors.New("write failed")
+	}
 	_, _ = w.h.stdout.Write(p)
 	return w.h.real.Write(p)
 }

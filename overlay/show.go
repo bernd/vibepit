@@ -71,7 +71,7 @@ func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model)
 		seq = positionQuery + seq
 		c.posAsked = true
 	}
-	_, _ = io.WriteString(t.cfg.Stdout, seq)
+	t.writeLocked([]byte(seq))
 	cols, rows := t.cols, t.rows
 	wait, strip := t.timing.positionWait, t.timing.lateStrip
 	t.mu.Unlock()
