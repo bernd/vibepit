@@ -393,6 +393,30 @@ func TestShowReplaysBelowHostOutput(t *testing.T) {
 	}
 }
 
+func TestShowRestoresFromTheShadowWhenTheCursorMoved(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ls\r\nfile\r\n$ ")
+	// The real terminal handled a resize differently, e.g. reflowed where
+	// the shadow didn't: its lines and cursor are two rows higher.
+	feed(t, h.real, "\x1b[2S\x1b[2A")
+	h.prompt(func() { h.app("date\r\nnow\r\n$ ") })
+	assert.True(t, h.snapshotted(), "the cut's cursor isn't the real one")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	assert.Empty(t, h.sessionIn.String(), "the position reply isn't the app's input")
+}
+
+func TestShowWithoutAPositionReplyAtTheCutRestoresFromTheShadow(t *testing.T) {
+	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.positionWait = 50 * time.Millisecond }))
+	h.app("$ ")
+	h.holdPositionReplies()
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the cut's cursor is unconfirmed")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	require.NotEmpty(t, h.releaseReplies(), "the reply comes after the prompt")
+	h.keys("after")
+	h.waitSessionInput("after")
+}
+
 func TestShowWithoutAPositionRestoresFromTheShadow(t *testing.T) {
 	h := newHarness(t, 20, 6, hostOutput("host1\r\nhost2\r\n"), silentTerminal(),
 		withTiming(func(tm *timing) { tm.barrierWait = time.Millisecond }))

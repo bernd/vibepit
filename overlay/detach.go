@@ -91,6 +91,16 @@ func (t *Terminal) cutLocked(forced bool) {
 	}
 	c.forced = forced
 	c.barrierSent = !t.barrierUnsupportedLocked()
+	// The handoff compares the cursor only after a barrier reply: replies
+	// to the app's own DSR 6n come before it. A forced cut leaves the
+	// shadow inside a sequence, and a terminal that didn't answer at the
+	// start won't now.
+	if c.barrierSent && !forced && !t.misaligned {
+		if c.row, c.col, err = t.shadowPositionLocked(); err != nil {
+			t.abortDetachLocked(err)
+			return
+		}
+	}
 	t.cut = c
 	t.log = rawLog{}
 	t.answered, t.resized = false, false
@@ -110,6 +120,25 @@ func (t *Terminal) cutLocked(forced bool) {
 	}
 	_, _ = t.cfg.Stdout.Write(b)
 	t.endDetachLocked(nil)
+}
+
+// shadowPositionLocked asks the shadow for its cursor position the way the
+// handoff asks the real terminal, so both answer in the same terms, origin
+// mode and a pending wrap included. The answer goes nowhere else. It
+// returns 0, 0 if the shadow didn't answer.
+func (t *Terminal) shadowPositionLocked() (int, int, error) {
+	if _, err := t.shadow.Write([]byte(positionQuery)); err != nil {
+		return 0, 0, err
+	}
+	reply := t.answers
+	t.answers = t.answers[:0]
+	if len(reply) == 0 {
+		return 0, 0, nil
+	}
+	if st, row, col := matchPosition(reply); st == posComplete {
+		return row, col, nil
+	}
+	return 0, 0, nil
 }
 
 // advanceDetachLocked forwards p up to the byte where the shadow reaches
@@ -206,7 +235,7 @@ func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte,
 		!t.log.overflow && // bytes are missing
 		!t.resized && // the log was written for another geometry
 		!t.answered && // a replayed query would be answered twice
-		!t.misaligned && // the cut's cursor may be on another row
+		t.cursorKnownLocked(c) && // the cut's cursor may be on another row
 		!(drawn && c.alt) // the prompt drew over the app's alternate screen
 	if raw {
 		return rawLeave(c, e, t.log.buf), false, false
@@ -224,6 +253,18 @@ func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte,
 		t.cfg.Logf("overlay: snapshot restore failed, resetting the terminal: %v", err)
 	}
 	return resetLeave(e), false, true
+}
+
+// cursorKnownLocked tells whether the shadow's cursor at the cut is the
+// real terminal's, which the raw leave writes back. A resize can move them
+// apart, because terminals reflow and pull back scrollback in different
+// ways, so the alignment at the start isn't enough once the real terminal
+// was asked.
+func (t *Terminal) cursorKnownLocked(c *cutState) bool {
+	if c.posAsked {
+		return c.posConfirmed
+	}
+	return !t.misaligned
 }
 
 // reportsFocusLocked tells whether the app takes focus reports (mode

@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -90,6 +91,7 @@ type harness struct {
 	onResize   func(cols, rows int)
 	holding    bool   // the stand-in's replies wait for releaseReplies
 	held       []byte // replies held back, in order
+	posHeld    bool   // the stand-in's DSR 6n replies wait for releaseReplies
 }
 
 // answer sends the stand-in's replies to stdin, or holds them back like a
@@ -97,7 +99,7 @@ type harness struct {
 func (h *harness) answer(b []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.holding {
+	if h.holding || h.posHeld && bytes.HasSuffix(b, []byte("R")) {
 		h.held = append(h.held, b...)
 		return
 	}
@@ -112,12 +114,20 @@ func (h *harness) holdReplies() {
 	h.holding = true
 }
 
+// holdPositionReplies makes the stand-in hold its DSR 6n replies back
+// until releaseReplies.
+func (h *harness) holdPositionReplies() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.posHeld = true
+}
+
 // releaseReplies sends the held replies to stdin in one read and returns
 // them.
 func (h *harness) releaseReplies() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.holding = false
+	h.holding, h.posHeld = false, false
 	held := string(h.held)
 	h.held = nil
 	_, _ = h.stdin.Write([]byte(held))

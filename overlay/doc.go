@@ -20,15 +20,19 @@
 //     moves input to the prompt at that byte. Terminals answer in order,
 //     so every reply the app was owed has reached it by then; the CSI 0n
 //     replies to the app's own DSR 5n queries come first and are the
-//     app's, counted from the shadow's answers. Only now is
-//     the prompt drawn. A terminal that didn't answer twice in a row gets
-//     no more barrier queries; input then moves after a pause in typing.
-//     A late reply brings them back, with a longer wait.
+//     app's, counted from the shadow's answers. Only now is the prompt
+//     drawn, behind a DSR 6n query: a resize may have moved the real
+//     cursor away from the shadow's, because terminals reflow
+//     differently, and the reply tells. A terminal that didn't answer
+//     twice in a row gets no more barrier queries; input then moves
+//     after a pause in typing. A late reply brings them back, with a
+//     longer wait.
 //   - The leave: after the prompt exits, the screen is restored, and
 //     output and input switch back to the session at once. The leave
 //     replays the logged output when that reproduces the screen exactly
-//     (raw replay), else rebuilds the screen from the shadow (snapshot),
-//     else resets the terminal and makes the app repaint.
+//     (raw replay), which needs the real cursor to be the shadow's, else
+//     rebuilds the screen from the shadow (snapshot), else resets the
+//     terminal and makes the app repaint.
 //
 // The prompt's state is what the prompt may change on the real terminal
 // and the leave restores: the prompt's screen, the kitty keyboard flags,

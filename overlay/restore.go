@@ -75,6 +75,12 @@ type cutState struct {
 	extras      []byte // scroll region, cursor, pen, hyperlink, protection, charsets
 	title, pwd  string
 	cursor      vt.CursorStyle
+	// row and col are the shadow's answer to DSR 6n at the cut, 1-based,
+	// or 0 when the real terminal won't be asked for its own.
+	row, col int
+	// posAsked: the real terminal was asked for its cursor position at
+	// the handoff. posConfirmed: its answer was the shadow's.
+	posAsked, posConfirmed bool
 }
 
 // cutExtras restore the part of the prompt's state the modes don't cover.
