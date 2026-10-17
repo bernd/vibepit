@@ -11,6 +11,7 @@ import (
 var (
 	statusStyle = lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
 	errorStyle  = lipgloss.NewStyle().Bold(true).Foreground(ColorOrange)
+	warnStyle   = lipgloss.NewStyle().Bold(true).Foreground(ColorYellow)
 	debugStyle  = lipgloss.NewStyle().Bold(true).Foreground(ColorPurple)
 )
 
@@ -29,6 +30,11 @@ func Status(verb string, format string, args ...any) {
 // Error prints a right-aligned bold orange "error" followed by a message to stderr.
 func Error(format string, args ...any) {
 	writeStatus(os.Stderr, "error", errorStyle, format, args...)
+}
+
+// Warn prints a right-aligned bold yellow "warning" followed by a message to stderr.
+func Warn(format string, args ...any) {
+	writeStatus(os.Stderr, "warning", warnStyle, format, args...)
 }
 
 // Debug prints a right-aligned bold purple "debug" followed by a message to stdout.

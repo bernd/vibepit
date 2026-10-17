@@ -2,9 +2,12 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -29,8 +32,10 @@ func RunFirstTimeSetup(projectDir, projectConfigPath string) ([]string, error) {
 	return selected, writeProjectConfig(projectConfigPath, selected)
 }
 
-// RunReconfigure re-runs the interactive preset selector, preserving existing
-// allow-http and allow-dns entries from the project config.
+// RunReconfigure re-runs the interactive preset selector and rewrites only the
+// presets section of the project config. Every other key (allow-http,
+// allow-dns, allow-host-ports, memory, ...) and all comments are left as they
+// are, so settings the template writer doesn't know about survive.
 func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 	var cfg ProjectConfig
 	if err := loadFile(projectConfigPath, &cfg); err != nil {
@@ -49,17 +54,24 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 		return nil, err
 	}
 
-	return selected, writeReconfiguredProjectConfig(projectConfigPath, selected, cfg.AllowHTTP, cfg.AllowDNS)
+	data, err := os.ReadFile(projectConfigPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return selected, writeProjectConfig(projectConfigPath, selected)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read project config: %w", err)
+	}
+
+	updated, err := replaceYAMLListSection(data, "presets", selected)
+	if err != nil {
+		return nil, err
+	}
+	return selected, os.WriteFile(projectConfigPath, updated, 0o600)
 }
 
+// writeProjectConfig writes a fresh config file with the given presets and
+// commented-out placeholder sections for the other keys.
 func writeProjectConfig(path string, presets []string) error {
-	return writeReconfiguredProjectConfig(path, presets, nil, nil)
-}
-
-// writeReconfiguredProjectConfig writes the config file with new presets while
-// preserving existing allow-http and allow-dns entries. When allowHTTP and allowDNS
-// are nil, commented-out placeholder sections are written instead.
-func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []string, allowDNS []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
@@ -69,11 +81,11 @@ func writeReconfiguredProjectConfig(path string, presets []string, allowHTTP []s
 	writePresetsSection(&sb, presets)
 	writeYAMLListSection(&sb,
 		"# Additional domains to allow HTTP access for this project.",
-		"allow-http", allowHTTP,
+		"allow-http",
 		[]string{"api.openai.com:443", "api.anthropic.com:443"})
 	writeYAMLListSection(&sb,
 		"# Domains that only need DNS resolution (no HTTP proxy).",
-		"allow-dns", allowDNS,
+		"allow-dns",
 		[]string{"internal.corp.example.com"})
 
 	return os.WriteFile(path, []byte(sb.String()), 0o600)
@@ -107,21 +119,13 @@ func writePresetsSection(sb *strings.Builder, presets []string) {
 	}
 }
 
-// writeYAMLListSection writes a named YAML list section. If entries is non-empty,
-// it writes the active section; otherwise it writes a commented-out placeholder
-// using the example values.
-func writeYAMLListSection(sb *strings.Builder, comment, key string, entries []string, examples []string) {
+// writeYAMLListSection writes a commented-out placeholder for a named YAML
+// list section using the example values.
+func writeYAMLListSection(sb *strings.Builder, comment, key string, examples []string) {
 	fmt.Fprintf(sb, "\n%s\n", comment)
-	if len(entries) > 0 {
-		fmt.Fprintf(sb, "%s:\n", key)
-		for _, d := range entries {
-			fmt.Fprintf(sb, "  - %s\n", formatYAMLListValue(d))
-		}
-	} else {
-		fmt.Fprintf(sb, "# %s:\n", key)
-		for _, d := range examples {
-			fmt.Fprintf(sb, "#   - %s\n", d)
-		}
+	fmt.Fprintf(sb, "# %s:\n", key)
+	for _, d := range examples {
+		fmt.Fprintf(sb, "#   - %s\n", d)
 	}
 }
 
@@ -213,10 +217,7 @@ func appendYAMLListEntries(data []byte, sectionKey string, added []string) ([]by
 		if out, ok := appendToExistingBlockYAMLList(data, valNode, added); ok {
 			return out, nil
 		}
-		valNode.Style = 0
-		for _, d := range added {
-			valNode.Content = append(valNode.Content, newYAMLStringScalar(d))
-		}
+		appendYAMLStringSeq(valNode, added)
 		return encodeYAMLDocument(doc)
 
 	case valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null":
@@ -230,18 +231,140 @@ func appendYAMLListEntries(data []byte, sectionKey string, added []string) ([]by
 				return out, nil
 			}
 		}
-		valNode.Kind = yaml.SequenceNode
-		valNode.Tag = "!!seq"
-		valNode.Value = ""
-		valNode.Style = 0
-		for _, d := range added {
-			valNode.Content = append(valNode.Content, newYAMLStringScalar(d))
-		}
+		appendYAMLStringSeq(valNode, added)
 		return encodeYAMLDocument(doc)
 
 	default:
 		return nil, fmt.Errorf("%s: expected YAML list", sectionKey)
 	}
+}
+
+// replaceYAMLListSection replaces the whole list keyed by sectionKey with
+// entries. Like appendYAMLListEntries it edits lines in place where the shape
+// is simple (a block list of plain scalars on consecutive lines) and only
+// re-encodes the document for shapes where that isn't safe. A missing section
+// is created the same way appendYAMLListEntries creates one. Empty entries
+// remove the section.
+func replaceYAMLListSection(data []byte, sectionKey string, entries []string) ([]byte, error) {
+	doc, root, err := parseProjectConfigYAML(data)
+	if err != nil {
+		return nil, err
+	}
+
+	i := findYAMLMappingIndex(root, sectionKey)
+	if i < 0 {
+		if len(entries) == 0 {
+			return data, nil
+		}
+		return appendYAMLListEntries(data, sectionKey, entries)
+	}
+	keyNode, valNode := root.Content[i], root.Content[i+1]
+
+	if out, ok := replaceBlockYAMLList(data, keyNode, valNode, entries); ok {
+		return out, nil
+	}
+
+	if len(entries) > 0 {
+		valNode.Content = nil
+		appendYAMLStringSeq(valNode, entries)
+		return encodeYAMLDocument(doc)
+	}
+
+	// The encoder attaches comments above a key to that key, which for the
+	// first key includes the file header. Hand them to the next key (or the
+	// document) so removing the section doesn't drop them.
+	if keyNode.HeadComment != "" {
+		if i+2 < len(root.Content) {
+			next := root.Content[i+2]
+			next.HeadComment = joinYAMLComments(keyNode.HeadComment, next.HeadComment)
+		} else {
+			doc.FootComment = joinYAMLComments(doc.FootComment, keyNode.HeadComment)
+		}
+	}
+	root.Content = slices.Delete(root.Content, i, i+2)
+	return encodeYAMLDocument(doc)
+}
+
+// appendYAMLStringSeq turns n into a block sequence (if it isn't one already)
+// and appends entries as string scalars.
+func appendYAMLStringSeq(n *yaml.Node, entries []string) {
+	n.Kind = yaml.SequenceNode
+	n.Tag = "!!seq"
+	n.Value = ""
+	n.Style = 0
+	for _, d := range entries {
+		n.Content = append(n.Content, newYAMLStringScalar(d))
+	}
+}
+
+func joinYAMLComments(first, second string) string {
+	if first == "" || second == "" {
+		return first + second
+	}
+	return first + "\n\n" + second
+}
+
+// replaceBlockYAMLList swaps the items of an existing block list for entries
+// by editing lines. It handles two shapes: a `key:` line with nothing after
+// the colon (implicit null), and a block list whose items are plain scalars
+// on consecutive lines directly below the key. Empty entries remove the key
+// line as well. Anything else (flow style, comments between items, multi-line
+// scalars) reports false so the caller can fall back to re-encoding.
+func replaceBlockYAMLList(data []byte, keyNode, valNode *yaml.Node, entries []string) ([]byte, bool) {
+	lines := strings.SplitAfter(string(data), "\n")
+	keyIdx := keyNode.Line - 1
+	if keyIdx < 0 || keyIdx >= len(lines) {
+		return nil, false
+	}
+
+	// [firstIdx, lastIdx] is the 0-based line span of the existing items.
+	firstIdx, lastIdx := keyIdx+1, keyIdx
+	indent := "  "
+
+	switch {
+	case valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null" &&
+		valNode.Value == "" && valNode.Line == keyNode.Line:
+		// Nothing to remove; new items go directly under the key line.
+
+	case valNode.Kind == yaml.SequenceNode:
+		if valNode.Style&yaml.FlowStyle != 0 || len(valNode.Content) == 0 {
+			return nil, false
+		}
+		first := valNode.Content[0]
+		if first.Line <= keyNode.Line {
+			return nil, false
+		}
+		for i, item := range valNode.Content {
+			if item.Kind != yaml.ScalarNode ||
+				item.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 ||
+				item.Line != first.Line+i {
+				return nil, false
+			}
+		}
+		firstIdx = first.Line - 1
+		lastIdx = firstIdx + len(valNode.Content) - 1
+		if lastIdx >= len(lines) {
+			return nil, false
+		}
+		for _, l := range lines[firstIdx : lastIdx+1] {
+			if !strings.HasPrefix(strings.TrimLeft(l, " \t"), "-") {
+				return nil, false
+			}
+		}
+		itemLine := lines[firstIdx]
+		indent = itemLine[:len(itemLine)-len(strings.TrimLeft(itemLine, " \t"))]
+		if !yamlItemEndsOnLine(lines, lastIdx, indent) {
+			return nil, false
+		}
+
+	default:
+		return nil, false
+	}
+
+	if len(entries) == 0 {
+		firstIdx = keyIdx
+	}
+	return spliceYAMLLines(lines, firstIdx, lastIdx+1, indent, entries), true
 }
 
 func encodeYAMLDocument(doc *yaml.Node) ([]byte, error) {
@@ -281,23 +404,47 @@ func appendToExistingBlockYAMLList(data []byte, section *yaml.Node, entries []st
 		return nil, false
 	}
 	indent := itemLine[:len(itemLine)-len(trimmedLeft)]
-
-	nl := lineEnding(lines[lineIndex])
-	if !strings.HasSuffix(lines[lineIndex], "\n") {
-		lines[lineIndex] += nl
+	if !yamlItemEndsOnLine(lines, lineIndex, indent) {
+		return nil, false
 	}
 
-	insertAt := lineIndex + 1
-	inserted := make([]string, 0, len(entries))
+	return spliceYAMLLines(lines, lineIndex+1, lineIndex+1, indent, entries), true
+}
+
+// yamlItemEndsOnLine reports whether the block list item starting on line idx
+// ends there. yaml.Node only records where a node starts, and a plain or
+// quoted scalar can continue on following lines indented deeper than its
+// dash, so any deeper-indented line after it (even a comment) counts as a
+// possible continuation.
+func yamlItemEndsOnLine(lines []string, idx int, indent string) bool {
+	for _, l := range lines[idx+1:] {
+		trimmed := strings.TrimLeft(l, " \t")
+		if strings.TrimSpace(trimmed) == "" {
+			continue
+		}
+		return len(l)-len(trimmed) <= len(indent)
+	}
+	return true
+}
+
+// spliceYAMLLines replaces lines[from:to] with one block list item per entry
+// at the given indent. The line before from is kept and gets a line ending if
+// it lacks one (last line of the file), whose style the new items reuse.
+func spliceYAMLLines(lines []string, from, to int, indent string, entries []string) []byte {
+	nl := "\n"
+	if from > 0 {
+		nl = lineEnding(lines[from-1])
+		if !strings.HasSuffix(lines[from-1], "\n") {
+			lines[from-1] += nl
+		}
+	}
+	out := make([]string, 0, len(lines)-(to-from)+len(entries))
+	out = append(out, lines[:from]...)
 	for _, d := range entries {
-		inserted = append(inserted, fmt.Sprintf("%s- %s%s", indent, formatYAMLListValue(d), nl))
+		out = append(out, fmt.Sprintf("%s- %s%s", indent, formatYAMLListValue(d), nl))
 	}
-
-	out := make([]string, 0, len(lines)+len(inserted))
-	out = append(out, lines[:insertAt]...)
-	out = append(out, inserted...)
-	out = append(out, lines[insertAt:]...)
-	return []byte(strings.Join(out, "")), true
+	out = append(out, lines[to:]...)
+	return []byte(strings.Join(out, ""))
 }
 
 func parseProjectConfigYAML(data []byte) (*yaml.Node, *yaml.Node, error) {
@@ -324,13 +471,23 @@ func parseProjectConfigYAML(data []byte) (*yaml.Node, *yaml.Node, error) {
 }
 
 func findYAMLMappingPair(root *yaml.Node, key string) (*yaml.Node, *yaml.Node) {
+	i := findYAMLMappingIndex(root, key)
+	if i < 0 {
+		return nil, nil
+	}
+	return root.Content[i], root.Content[i+1]
+}
+
+// findYAMLMappingIndex returns the index of key's key node in root.Content,
+// or -1 if the mapping has no such key.
+func findYAMLMappingIndex(root *yaml.Node, key string) int {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k := root.Content[i]
 		if k.Kind == yaml.ScalarNode && k.Value == key {
-			return k, root.Content[i+1]
+			return i
 		}
 	}
-	return nil, nil
+	return -1
 }
 
 // lineEnding returns the trailing newline sequence of a line so inserted lines
@@ -356,19 +513,7 @@ func insertAfterKeyLine(data []byte, keyLine int, added []string) ([]byte, bool)
 	if idx < 0 || idx >= len(lines) {
 		return nil, false
 	}
-	nl := lineEnding(lines[idx])
-	if !strings.HasSuffix(lines[idx], "\n") {
-		lines[idx] += nl
-	}
-	inserted := make([]string, 0, len(added))
-	for _, d := range added {
-		inserted = append(inserted, fmt.Sprintf("  - %s%s", formatYAMLListValue(d), nl))
-	}
-	out := make([]string, 0, len(lines)+len(inserted))
-	out = append(out, lines[:idx+1]...)
-	out = append(out, inserted...)
-	out = append(out, lines[idx+1:]...)
-	return []byte(strings.Join(out, "")), true
+	return spliceYAMLLines(lines, idx+1, idx+1, "  ", added), true
 }
 
 // replaceCommentedYAMLListSection finds a "# <key>:" placeholder header line

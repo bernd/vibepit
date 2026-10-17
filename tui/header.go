@@ -17,6 +17,7 @@ var (
 	ColorCyan      = lipgloss.Color("#00d4ff")
 	ColorPurple    = lipgloss.Color("#8b5cf6")
 	ColorOrange    = lipgloss.Color("#f97316")
+	ColorYellow    = lipgloss.Color("#facc15")
 	ColorField     = lipgloss.Color("#0099cc")
 	ColorError     = ColorPurple // lipgloss.Color("#ef4444") - this one is too similar to the orange
 	ColorHighlight = lipgloss.Color("#1e2d3d")

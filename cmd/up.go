@@ -42,6 +42,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
+		warnIgnoredSandboxFlags(cmd)
 		tui.Status("Session", "already running for %s", projectRoot)
 		return nil
 	}
@@ -99,6 +100,7 @@ func UpAction(ctx context.Context, cmd *cli.Command) error {
 	cleanups = append(cleanups, func() {
 		client.StopAndRemove(ctx, sandboxContainerID) //nolint:errcheck
 	})
+	reportSandboxMemory(ctx, client, sandboxContainerID, infra)
 
 	tui.Status("Starting", "sandbox container")
 	if err := client.StartContainer(ctx, sandboxContainerID); err != nil {

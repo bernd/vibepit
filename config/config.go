@@ -1,7 +1,6 @@
 package config
 
 import (
-	"cmp"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -139,11 +138,51 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 	}, nil
 }
 
-// MemoryLimit returns the sandbox memory limit in bytes, or 0 for no limit.
-// The CLI value takes precedence over project config, which takes precedence
-// over global config.
-func (c *Config) MemoryLimit(cliMemory string) (int64, error) {
-	memory := cmp.Or(cliMemory, c.Project.Memory, c.Global.Memory)
+// minMemoryLimit mirrors the smallest memory limit the Docker daemon accepts.
+// Values below it are rejected at container creation, long after the network
+// and proxy container have been set up, so reject them up front instead.
+const minMemoryLimit = 6 << 20
+
+// maxMemoryLimit bounds accepted values well below the int64 range.
+// go-units converts the parsed float to int64 unchecked, so an overflowing
+// value comes back negative on amd64 and saturated to MaxInt64 on arm64.
+const maxMemoryLimit = 1 << 60
+
+// Sources of the memory limit, as reported by MemoryLimit.
+const (
+	MemorySourceCLI     = "--memory flag"
+	MemorySourceProject = "project config"
+	MemorySourceGlobal  = "global config"
+)
+
+// MemoryLimit returns the sandbox memory limit in bytes, or 0 for no limit,
+// along with the source the value came from ("" when unset). The CLI value
+// takes precedence over project config, which takes precedence over global
+// config. An explicit "0" at any level disables a limit set at a
+// lower-precedence level.
+func (c *Config) MemoryLimit(cliMemory string) (int64, string, error) {
+	var memory, source string
+	switch {
+	case cliMemory != "":
+		memory, source = cliMemory, MemorySourceCLI
+	case c.Project.Memory != "":
+		memory, source = c.Project.Memory, MemorySourceProject
+	case c.Global.Memory != "":
+		memory, source = c.Global.Memory, MemorySourceGlobal
+	default:
+		return 0, "", nil
+	}
+	limit, err := ParseMemoryLimit(memory)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s: %w", source, err)
+	}
+	return limit, source, nil
+}
+
+// ParseMemoryLimit parses a docker-style memory size (e.g. "512m", "8g") into
+// bytes. Empty and a zero size ("0", "0g", ...) both mean no limit and
+// return 0.
+func ParseMemoryLimit(memory string) (int64, error) {
 	if memory == "" {
 		return 0, nil
 	}
@@ -151,10 +190,25 @@ func (c *Config) MemoryLimit(cliMemory string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid memory limit %q: %w", memory, err)
 	}
-	if limit <= 0 {
-		return 0, fmt.Errorf("invalid memory limit %q: must be positive", memory)
+	switch {
+	case limit == 0 && isZeroSize(memory):
+		return 0, nil
+	case limit < 0 || limit > maxMemoryLimit:
+		return 0, fmt.Errorf("invalid memory limit %q: must be at most %s",
+			memory, units.BytesSize(maxMemoryLimit))
+	case limit < minMemoryLimit:
+		return 0, fmt.Errorf("invalid memory limit %q: must be at least %s (values without a unit suffix are bytes; use m or g)",
+			memory, units.BytesSize(minMemoryLimit))
 	}
 	return limit, nil
+}
+
+// isZeroSize reports whether the number in a size string is zero. go-units
+// truncates fractional byte counts, so "0.5" also parses to 0, but it is a
+// typo for "0.5g" rather than a request to disable the limit.
+func isZeroSize(size string) bool {
+	rest := strings.TrimLeft(size, "0.")
+	return rest == "" || rest[0] < '0' || rest[0] > '9'
 }
 
 // dedup merges multiple string slices, removing duplicates while preserving order.

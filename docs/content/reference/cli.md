@@ -41,7 +41,7 @@ vibepit run [flags] [project-path]
 | `-L`, `--local` | bool | `false` | Use the local `vibepit:latest` image instead of the published one. Required when you [build a custom image](../how-to/troubleshooting.md#sandbox-image-not-found) for an unsupported UID/GID combination. |
 | `-a`, `--allow` | string (repeatable) | | Additional `domain:port` entries to allow through the proxy (e.g. `api.example.com:443`) |
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
-| `-m`, `--memory` | string | | Memory limit for the sandbox container (e.g. `16g`, `512m`). Overrides the `memory` config setting. |
+| `-m`, `--memory` | string | | Memory limit for the sandbox container (e.g. `16g`, `512m`; `0` for none). Overrides the `memory` config setting. |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
 
 ### Behavior
@@ -52,7 +52,8 @@ vibepit run [flags] [project-path]
 - `vibepit` refuses to run if the resolved project directory is your home
   directory.
 - If a session is already running for the same project directory, `vibepit`
-  attaches to it instead of starting a new one.
+  attaches to it instead of starting a new one. The flags above only apply when
+  a session starts, so `vibepit` warns that it ignores any that are set.
 - On first run in a project, `vibepit` launches an interactive setup flow to
   select network presets. Pass `--reconfigure` to re-run this selector later.
 - Entries passed with `--allow` and `--preset` are merged with any entries
@@ -105,7 +106,7 @@ vibepit up [flags] [project-path]
 | `-L`, `--local` | bool | `false` | Use the local `vibepit:latest` image instead of the published one. |
 | `-a`, `--allow` | string (repeatable) | | Additional `domain:port` entries to allow through the proxy (e.g. `api.example.com:443`) |
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
-| `-m`, `--memory` | string | | Memory limit for the sandbox container (e.g. `16g`, `512m`). Overrides the `memory` config setting. |
+| `-m`, `--memory` | string | | Memory limit for the sandbox container (e.g. `16g`, `512m`; `0` for none). Overrides the `memory` config setting. |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
 
 ### Behavior
@@ -119,7 +120,8 @@ vibepit up [flags] [project-path]
   host port.
 - Waits for the SSH daemon to accept connections before returning.
 - If a session is already running for the same project directory, prints a
-  message and exits without starting a new one.
+  message and exits without starting a new one. Any flags set are ignored, with
+  a warning.
 - If orphaned containers from a previous session are detected, exits with an
   error asking you to run `vibepit down` first.
 
@@ -282,6 +284,7 @@ Example output:
   Session   cq1abc2def3gh4ij
   Project   /home/user/my-project
   Sandbox   running: vibepit-sandbox-cq1abc2def3gh4ij (up 2m30s)
+   Memory   8GiB
     Proxy   running: vibepit-proxy-cq1abc2def3gh4ij (up 2m31s)
       API   127.0.0.1:41923
       SSH   127.0.0.1:52847

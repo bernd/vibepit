@@ -36,6 +36,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
+		warnIgnoredSandboxFlags(cmd)
 		tui.Status("Attaching", "to running session in %s", projectRoot)
 		return client.ExecSession(ctx, existing.ContainerID)
 	}
@@ -55,6 +56,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		tui.Status("Stopping", "sandbox container")
 		client.StopAndRemove(ctx, sandboxContainer)
 	}()
+	reportSandboxMemory(ctx, client, sandboxContainer, infra)
 
 	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
