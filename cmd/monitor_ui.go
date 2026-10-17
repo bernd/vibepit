@@ -349,7 +349,7 @@ func (s *monitorScreen) View(w *tui.Window) string {
 	if s.tab == tabLogs {
 		content = s.logs.render(s.allows)
 	} else {
-		content = s.hosts.render(s.allows, w.Width(), listHeight(w), time.Now())
+		content = s.hosts.render(s.allows, w.Width(), listHeight(w), w.Now())
 	}
 	return s.renderTabs() + "\n" + content
 }

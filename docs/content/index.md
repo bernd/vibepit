@@ -17,6 +17,7 @@ hide:
     </p>
     <div class="vp-landing__actions">
       <a class="md-button md-button--primary" href="tutorials/first-sandbox/">Get Started</a>
+      <a class="md-button" href="tutorials/demo/">Watch Demo</a>
       <a class="md-button" href="reference/cli/">CLI Reference</a>
       <a class="md-button" href="https://github.com/bernd/vibepit">GitHub</a>
     </div>

@@ -15,6 +15,8 @@ Launch the interactive monitor to inspect proxy traffic in real time:
 vibepit monitor
 ```
 
+<div class="vp-cast" data-cast="../../assets/casts/monitor.cast" data-poster="npt:0:13"></div>
+
 The monitor has two tabs. Press **`tab`** to switch between them.
 
 **`HOSTS`** (the default) shows one row per host: each HTTP(S) `domain:port`

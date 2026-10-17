@@ -46,11 +46,17 @@ markdown_extensions:
       anchor_linenums: true
 
 extra_css:
+  - vendor/asciinema-player-3.17.0/asciinema-player.css
   - stylesheets/theme.css
+
+extra_javascript:
+  - vendor/asciinema-player-3.17.0/asciinema-player.min.js
+  - javascripts/casts.js
 
 nav:
   - Home: index.md
   - Tutorials:
+      - Demo: tutorials/demo.md
       - First Sandbox: tutorials/first-sandbox.md
   - How-To Guides:
       - Monitor and Allowlist: how-to/allowlist-and-monitor.md

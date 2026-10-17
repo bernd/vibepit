@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve
+.PHONY: build test test-race test-integration clean release-build release-archive release-publish docs-install docs-build docs-serve docs-casts
 
 BINARY := vibepit
 VERSION ?= $(shell git describe --tags 2>/dev/null | sed 's/^v//')
@@ -86,3 +86,7 @@ docs-build:
 
 docs-serve:
 	uv run --project docs mkdocs serve
+
+# Records the asciinema demos from the real UI code.
+docs-casts:
+	go test -tags democast -count=1 -run TestDemoCasts ./cmd -args -cast-dir=$(CURDIR)/docs/content/assets/casts

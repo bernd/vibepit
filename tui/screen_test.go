@@ -2,6 +2,7 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -77,4 +78,25 @@ func TestWindow_ScreenSwitch(t *testing.T) {
 	updated, _ := w.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	win := updated.(*Window)
 	assert.IsType(t, &stubScreen{}, win.screen)
+}
+
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) Now() time.Time { return c.now }
+func (c *fakeClock) Tick() tea.Cmd  { return nil }
+
+func TestWindow_Clock(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, time.October, 17, 10, 41, 0, 0, time.UTC)}
+	w := NewWindow(&HeaderInfo{ProjectDir: "/test", SessionID: "abc123"}, &stubScreen{})
+	w.SetClock(clock)
+	assert.Equal(t, clock.now, w.Now())
+	assert.Nil(t, w.Init(), "ticks come from the clock")
+
+	w.SetFlashFor("hello", time.Second)
+	clock.now = clock.now.Add(500 * time.Millisecond)
+	w.Update(TickMsg{})
+	assert.Equal(t, "hello", w.Flash(), "flash expires on clock time")
+	clock.now = clock.now.Add(time.Second)
+	w.Update(TickMsg{})
+	assert.Empty(t, w.Flash())
 }

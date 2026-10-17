@@ -17,11 +17,30 @@ const TickInterval = 250 * time.Millisecond
 // increments the frame counter and expires flash messages.
 type TickMsg struct{}
 
+// Clock is the time source of a Window. The demo cast recorder replaces it to
+// drive the window on virtual time.
+type Clock interface {
+	Now() time.Time
+	// Tick returns a command that sends TickMsg after TickInterval.
+	Tick() tea.Cmd
+}
+
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
+
+func (wallClock) Tick() tea.Cmd {
+	return tea.Tick(TickInterval, func(time.Time) tea.Msg {
+		return TickMsg{}
+	})
+}
+
 // Window is the top-level tea.Model. It owns the shared frame (header,
 // footer, sizing, tick, flash/error) and delegates content to the active Screen.
 type Window struct {
 	header    *HeaderInfo
 	screen    Screen
+	clock     Clock
 	width     int
 	height    int
 	vpHeight  int
@@ -35,6 +54,7 @@ func NewWindow(header *HeaderInfo, screen Screen) *Window {
 	return &Window{
 		header: header,
 		screen: screen,
+		clock:  wallClock{},
 	}
 }
 
@@ -45,6 +65,10 @@ func (w *Window) VpHeight() int  { return w.vpHeight }
 func (w *Window) TickFrame() int { return w.tickFrame }
 func (w *Window) Flash() string  { return w.flash }
 func (w *Window) Err() error     { return w.err }
+
+// Now returns the current time of the window's clock. Screens use it instead
+// of time.Now so they follow a replaced clock.
+func (w *Window) Now() time.Time { return w.clock.Now() }
 
 // IntervalElapsed returns true if the given interval has elapsed since the last tick.
 func (w *Window) IntervalElapsed(interval time.Duration) bool {
@@ -63,11 +87,12 @@ func (w *Window) SetFlash(msg string) {
 // SetFlashFor shows msg for d, for messages that take longer to read.
 func (w *Window) SetFlashFor(msg string, d time.Duration) {
 	w.flash = msg
-	w.flashExp = time.Now().Add(d)
+	w.flashExp = w.Now().Add(d)
 }
 func (w *Window) SetHeader(info *HeaderInfo) {
 	w.header = info
 }
+func (w *Window) SetClock(c Clock)   { w.clock = c }
 func (w *Window) SetError(err error) { w.err = err }
 func (w *Window) ClearError()        { w.err = nil }
 
@@ -76,14 +101,8 @@ func (w *Window) headerHeight() int {
 	return strings.Count(h, "\n") + 1
 }
 
-func doTick() tea.Cmd {
-	return tea.Tick(TickInterval, func(time.Time) tea.Msg {
-		return TickMsg{}
-	})
-}
-
 func (w *Window) Init() tea.Cmd {
-	return doTick()
+	return w.clock.Tick()
 }
 
 func (w *Window) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -98,10 +117,10 @@ func (w *Window) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 		w.tickFrame++
-		if w.flash != "" && time.Now().After(w.flashExp) {
+		if w.flash != "" && w.Now().After(w.flashExp) {
 			w.flash = ""
 		}
-		cmds = append(cmds, doTick())
+		cmds = append(cmds, w.clock.Tick())
 	}
 
 	// Forward all messages to the active screen.
@@ -151,7 +170,7 @@ func (w *Window) renderFooter() string {
 	if w.err != nil {
 		windowStatus = lipgloss.NewStyle().Foreground(ColorError).
 			Render(fmt.Sprintf("connection error: %v", w.err))
-	} else if w.flash != "" && time.Now().Before(w.flashExp) {
+	} else if w.flash != "" && w.Now().Before(w.flashExp) {
 		windowStatus = lipgloss.NewStyle().Foreground(ColorOrange).Render(w.flash)
 	}
 
