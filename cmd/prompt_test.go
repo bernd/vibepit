@@ -20,8 +20,8 @@ func TestBlockWatcher_Next(t *testing.T) {
 	block := func(id uint64, src proxy.Source, domain, port string) proxy.LogEntry {
 		return proxy.LogEntry{ID: id, Source: src, Domain: domain, Port: port, Action: proxy.ActionBlock}
 	}
-	withCause := func(e proxy.LogEntry, c proxy.Cause) proxy.LogEntry {
-		e.Cause = c
+	withCode := func(e proxy.LogEntry, c proxy.BlockCode) proxy.LogEntry {
+		e.Code = c
 		return e
 	}
 	allow := func(id uint64, domain string) proxy.LogEntry {
@@ -60,10 +60,10 @@ func TestBlockWatcher_Next(t *testing.T) {
 		{
 			name: "skips blocks allowing can't undo",
 			batches: [][]proxy.LogEntry{{
-				withCause(block(1, proxy.SourceProxy, "a.com", "443"), proxy.CauseBlockedIP),
-				withCause(block(2, proxy.SourceProxy, "b.com", "443"), proxy.CauseResolveFailed),
-				withCause(block(3, proxy.SourceProxy, "c.com", "443"), proxy.CauseAllowlist),
-				withCause(block(4, proxy.SourceDNS, "d.com", ""), proxy.CauseBlockedIP),
+				withCode(block(1, proxy.SourceProxy, "a.com", "443"), proxy.BlockCIDR),
+				withCode(block(2, proxy.SourceProxy, "b.com", "443"), proxy.BlockResolutionFailed),
+				withCode(block(3, proxy.SourceProxy, "c.com", "443"), proxy.BlockNotAllowlisted),
+				withCode(block(4, proxy.SourceDNS, "d.com", ""), proxy.BlockCIDR),
 			}},
 			want:   [][]string{{"c.com:443"}},
 			cursor: 4,

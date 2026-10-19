@@ -109,6 +109,8 @@ entries interactively. From a separate terminal on the host:
 vibepit monitor
 ```
 
+<div class="vp-cast" data-cast="../../assets/casts/monitor.cast" data-poster="npt:0:13"></div>
+
 For details on using the monitor and managing the allowlist at runtime, see
 [Monitor and Allowlist](../how-to/allowlist-and-monitor.md).
 
@@ -187,6 +189,8 @@ Each connection opens a shell session inside the sandbox. If you disconnect
 (close the terminal, network drop), the shell session continues running. When
 you reconnect, the server presents a selector where you can reattach to the
 previous session or start a new one.
+
+<div class="vp-cast" data-cast="../../assets/casts/start.cast" data-poster="npt:0:28"></div>
 
 You can also run a single command without an interactive shell:
 

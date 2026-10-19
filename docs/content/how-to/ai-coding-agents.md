@@ -44,11 +44,12 @@ exactly what your agent needs:
     vibepit monitor
     ```
 
-4. Look for blocked requests. The monitor marks each request with `+` (allowed)
-   or `x` (blocked).
+4. Look for blocked hosts. The monitor's `HOSTS` tab lists every host the
+   agent contacted, with the most recently active at the top and a status of
+   `blocked` or `allowed`.
 
 5. Allow blocked domains directly from the monitor by navigating to a blocked
-   entry and pressing **`a`** (session only) or **`A`** (session + save to
+   host and pressing **`a`** (session only) or **`A`** (session + save to
    project config).
 
 6. Alternatively, allow domains from the command line:

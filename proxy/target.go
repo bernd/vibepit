@@ -17,7 +17,12 @@ type Target struct {
 
 // Target returns the entry's allow/deny target.
 func (e LogEntry) Target() Target {
-	return Target{Source: e.Source, Host: e.Domain, Port: e.Port}
+	return e.HostKey().Target()
+}
+
+// Target returns the host's allow/deny target.
+func (k HostKey) Target() Target {
+	return Target{Source: k.Source, Host: k.Domain, Port: k.Port}
 }
 
 // String brackets IPv6 hosts so ParseTarget can split the value again.

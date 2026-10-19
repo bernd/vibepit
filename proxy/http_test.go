@@ -150,43 +150,6 @@ func TestHTTPProxy(t *testing.T) {
 	})
 }
 
-func TestCheckRequestCause(t *testing.T) {
-	failingResolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(context.Context, string, string) (net.Conn, error) {
-			return nil, errors.New("resolver down")
-		},
-	}
-	tests := []struct {
-		name     string
-		host     string
-		resolver *net.Resolver
-		want     Cause
-	}{
-		{name: "not in allowlist", host: "evil.com", want: CauseAllowlist},
-		{name: "blocked IP", host: "10.0.0.1", want: CauseBlockedIP},
-		{name: "resolution failed", host: "example.com", resolver: failingResolver, want: CauseResolveFailed},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			al, err := NewHTTPAllowlist([]string{"10.0.0.1:443", "example.com:443"})
-			require.NoError(t, err)
-			log := NewLogBuffer(10)
-			p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), log, DefaultUpstreamDNS)
-			if tt.resolver != nil {
-				p.resolver = tt.resolver
-			}
-
-			result := p.checkRequest(tt.host, "443")
-			assert.Equal(t, ActionBlock, result.action)
-			assert.Equal(t, tt.want, result.cause)
-			entries := log.Entries()
-			require.Len(t, entries, 1)
-			assert.Equal(t, tt.want, entries[0].Cause)
-		})
-	}
-}
-
 func TestHTTPProxyBlockMessage(t *testing.T) {
 	al, err := NewHTTPAllowlist([]string{"10.0.0.1:80"})
 	require.NoError(t, err)
@@ -293,4 +256,70 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, "host-service", string(body))
 	})
+}
+
+func TestCheckRequestBlockCode(t *testing.T) {
+	failingResolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("resolver down")
+		},
+	}
+
+	tests := []struct {
+		name      string
+		allowlist []string
+		setup     func(p *HTTPProxy)
+		host      string
+		port      string
+		want      BlockCode
+	}{
+		{
+			name: "not in allowlist",
+			host: "evil.com",
+			port: "443",
+			want: BlockNotAllowlisted,
+		},
+		{
+			name:      "resolver failure",
+			allowlist: []string{"example.com:443"},
+			setup:     func(p *HTTPProxy) { p.resolver = failingResolver },
+			host:      "example.com",
+			port:      "443",
+			want:      BlockResolutionFailed,
+		},
+		{
+			name:      "blocked CIDR",
+			allowlist: []string{"10.0.0.1:443"},
+			host:      "10.0.0.1",
+			port:      "443",
+			want:      BlockCIDR,
+		},
+		{
+			name:  "allowed",
+			setup: func(p *HTTPProxy) { p.SetHostVibepit("127.0.0.1:8080", []int{8080}) },
+			host:  "host.vibepit",
+			port:  "8080",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			al, err := NewHTTPAllowlist(tt.allowlist)
+			require.NoError(t, err)
+			log := NewLogBuffer(100)
+			p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), log, DefaultUpstreamDNS)
+			if tt.setup != nil {
+				tt.setup(p)
+			}
+
+			result := p.checkRequest(tt.host, tt.port)
+			assert.Equal(t, tt.want, result.code)
+
+			entries := log.Entries()
+			require.NotEmpty(t, entries)
+			assert.Equal(t, tt.want, entries[len(entries)-1].Code)
+		})
+	}
 }

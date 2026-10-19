@@ -9,6 +9,7 @@ import (
 
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
+	units "github.com/docker/go-units"
 	"github.com/urfave/cli/v3"
 )
 
@@ -96,17 +97,22 @@ func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, proj
 		return fmt.Errorf("list session containers: %w", err)
 	}
 	for _, c := range containers {
-		status := client.ContainerStatus(ctx, c.ID)
-		startedAt := client.ContainerStartedAt(ctx, c.ID)
-		if !startedAt.IsZero() {
-			uptime := time.Since(startedAt).Truncate(time.Second)
+		summary := client.ContainerSummary(ctx, c.ID)
+		status := summary.Status
+		if !summary.StartedAt.IsZero() {
+			uptime := time.Since(summary.StartedAt).Truncate(time.Second)
 			status = fmt.Sprintf("%s: %s (up %s)", status, c.Name, uptime)
 		}
-		label := "Sandbox"
 		if c.Role == ctr.RoleProxy {
-			label = "Proxy"
+			tui.Status("Proxy", "%s", status)
+			continue
 		}
-		tui.Status(label, "%s", status)
+		tui.Status("Sandbox", "%s", status)
+		memory := "unknown"
+		if summary.MemoryLimitKnown {
+			memory = formatMemoryLimit(summary.MemoryLimit)
+		}
+		tui.Status("Memory", "%s", memory)
 	}
 
 	// Show ports published on the proxy container.
@@ -128,4 +134,13 @@ func printSessionStatus(ctx context.Context, client *ctr.Client, sessionID, proj
 	}
 
 	return nil
+}
+
+// formatMemoryLimit renders a memory limit in bytes for display; 0 means the
+// container has no limit.
+func formatMemoryLimit(limit int64) string {
+	if limit <= 0 {
+		return "unlimited"
+	}
+	return units.BytesSize(float64(limit))
 }

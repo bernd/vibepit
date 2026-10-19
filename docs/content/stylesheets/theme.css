@@ -198,7 +198,7 @@
 
 .vp-landing__actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
   margin-top: 1.25rem;
   max-width: 34rem;
@@ -419,6 +419,38 @@
   line-height: 1.45;
 }
 
+/* asciinema player theme. The recordings use the TUI's dark palette, so the
+   terminal stays dark in both color schemes. */
+.asciinema-player-theme-vibepit {
+  --term-color-foreground: var(--vp-ice-white);
+  --term-color-background: var(--vp-void-black);
+  --term-color-0: #1a2744;
+  --term-color-1: #f97316;
+  --term-color-2: #4ade80;
+  --term-color-3: #facc15;
+  --term-color-4: #0099cc;
+  --term-color-5: #8b5cf6;
+  --term-color-6: #00d4ff;
+  --term-color-7: #e0f7ff;
+  --term-color-8: #4a90a4;
+  --term-color-9: #fb923c;
+  --term-color-10: #86efac;
+  --term-color-11: #fde047;
+  --term-color-12: #7dd3fc;
+  --term-color-13: #a78bfa;
+  --term-color-14: #00f0f0;
+  --term-color-15: #ffffff;
+}
+
+.vp-cast {
+  margin: 0.7rem 0 1.2rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--vp-install-border);
+  overflow: hidden;
+  background: var(--vp-void-black);
+  box-shadow: var(--vp-landing-shadow);
+}
+
 @media screen and (max-width: 60em) {
   .vp-landing {
     grid-template-columns: 1fr;
@@ -455,10 +487,6 @@
 @media screen and (max-width: 46em) {
   .vp-landing {
     padding: 1rem;
-  }
-
-  .vp-landing__actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

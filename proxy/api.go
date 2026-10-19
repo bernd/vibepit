@@ -29,7 +29,7 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 		dnsAllowlist:  dnsAllowlist,
 	}
 	api.mux.HandleFunc("GET /logs", api.handleLogs)
-	api.mux.HandleFunc("GET /stats", api.handleStats)
+	api.mux.HandleFunc("GET /hosts", api.handleHosts)
 	api.mux.HandleFunc("GET /config", api.handleConfig)
 	api.mux.HandleFunc("POST /allow-http", api.handleAllowHTTP)
 	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
@@ -85,8 +85,19 @@ func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.log.EntriesAfter(afterID))
 }
 
-func (a *ControlAPI) handleStats(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, a.log.Stats())
+func (a *ControlAPI) handleHosts(w http.ResponseWriter, r *http.Request) {
+	hosts := a.log.Hosts()
+	for i := range hosts {
+		hosts[i].Allowlisted = a.allowlisted(hosts[i].HostKey)
+	}
+	writeJSON(w, hosts)
+}
+
+func (a *ControlAPI) allowlisted(k HostKey) bool {
+	if k.Source == SourceDNS {
+		return a.dnsAllowlist.Allows(k.Domain)
+	}
+	return a.httpAllowlist.Allows(k.Domain, k.Port)
 }
 
 func (a *ControlAPI) handleConfig(w http.ResponseWriter, r *http.Request) {

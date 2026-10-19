@@ -61,8 +61,8 @@ func TestDNSServer(t *testing.T) {
 		found := false
 		for _, e := range entries {
 			if e.Domain == "evil.com" && e.Action == ActionBlock && e.Source == SourceDNS {
-				assert.Equal(t, CauseAllowlist, e.Cause)
 				found = true
+				assert.Equal(t, BlockNotAllowlisted, e.Code)
 				break
 			}
 		}
@@ -70,7 +70,7 @@ func TestDNSServer(t *testing.T) {
 	})
 }
 
-func TestDNSServerBlockedIPCause(t *testing.T) {
+func TestDNSServerBlockedIPCode(t *testing.T) {
 	// The upstream answers with a private address, which the CIDR check
 	// must block.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -104,7 +104,7 @@ func TestDNSServerBlockedIPCause(t *testing.T) {
 	entries := log.Entries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, ActionBlock, entries[0].Action)
-	assert.Equal(t, CauseBlockedIP, entries[0].Cause)
+	assert.Equal(t, BlockCIDR, entries[0].Code)
 }
 
 func TestDNSHostVibepit(t *testing.T) {
@@ -149,6 +149,22 @@ func TestDNSHostVibepit(t *testing.T) {
 		r, _, err := c.Exchange(m, addr)
 		require.NoError(t, err)
 		assert.Equal(t, dns.RcodeSuccess, r.Rcode, "CIDR blocking should be bypassed")
+	})
+
+	t.Run("non-A host.vibepit queries get an empty answer, not a block", func(t *testing.T) {
+		m := new(dns.Msg)
+		m.SetQuestion("host.vibepit.", dns.TypeAAAA)
+
+		r, _, err := c.Exchange(m, addr)
+		require.NoError(t, err)
+		assert.Equal(t, dns.RcodeSuccess, r.Rcode)
+		assert.Empty(t, r.Answer)
+
+		entries := log.Entries()
+		require.NotEmpty(t, entries)
+		last := entries[len(entries)-1]
+		assert.Equal(t, "host.vibepit", last.Domain)
+		assert.Equal(t, ActionAllow, last.Action)
 	})
 
 	t.Run("host.vibepit is logged", func(t *testing.T) {

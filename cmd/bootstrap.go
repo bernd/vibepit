@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	embeddedproxy "github.com/bernd/vibepit/embed/proxy"
@@ -37,6 +38,7 @@ const (
 const (
 	allowFlag       = "allow"
 	localFlag       = "local"
+	memoryFlag      = "memory"
 	presetFlag      = "preset"
 	reconfigureFlag = "reconfigure"
 )
@@ -54,6 +56,8 @@ type sessionInfra struct {
 	NetworkInfo      ctr.NetworkInfo
 	Merged           config.MergedConfig
 	ProxyContainerID string
+	MemoryLimit      int64
+	MemorySource     string
 }
 
 type infraOptions struct {
@@ -109,11 +113,56 @@ func sandboxFlags() []cli.Flag {
 			Aliases: []string{"p"},
 			Usage:   "Additional presets to activate",
 		},
+		&cli.StringFlag{
+			Name:    memoryFlag,
+			Aliases: []string{"m"},
+			Usage:   "Memory limit for the sandbox container (e.g. 8g, 512m)",
+		},
 		&cli.BoolFlag{
 			Name:    reconfigureFlag,
 			Aliases: []string{"r"},
 			Usage:   "Re-run the network preset selector",
 		},
+	}
+}
+
+// warnIgnoredSandboxFlags tells the user that sandbox flags have no effect on
+// a session that is already running: they only apply when the session's
+// containers are created.
+func warnIgnoredSandboxFlags(cmd *cli.Command) {
+	if ignored := ignoredSandboxFlags(cmd); len(ignored) > 0 {
+		tui.Warn("ignoring %s for the already running session; run 'vibepit down' first to apply",
+			strings.Join(ignored, ", "))
+	}
+}
+
+func ignoredSandboxFlags(cmd *cli.Command) []string {
+	var ignored []string
+	for _, f := range sandboxFlags() {
+		if name := f.Names()[0]; cmd.IsSet(name) {
+			ignored = append(ignored, "--"+name)
+		}
+	}
+	return ignored
+}
+
+// reportSandboxMemory shows the memory limit the runtime actually applied to
+// the sandbox container. It can differ from the requested one: some setups
+// (e.g. rootless Docker on cgroup v1) discard the limit with only a warning.
+func reportSandboxMemory(ctx context.Context, client *ctr.Client, containerID string, infra *sessionInfra) {
+	if infra.MemoryLimit <= 0 {
+		return
+	}
+	requested := formatMemoryLimit(infra.MemoryLimit)
+	summary := client.ContainerSummary(ctx, containerID)
+	switch {
+	case !summary.MemoryLimitKnown:
+		tui.Warn("cannot verify the sandbox memory limit of %s (%s)", requested, infra.MemorySource)
+	case summary.MemoryLimit != infra.MemoryLimit:
+		tui.Warn("requested a sandbox memory limit of %s (%s), but the container runtime applied %s",
+			requested, infra.MemorySource, formatMemoryLimit(summary.MemoryLimit))
+	default:
+		tui.Status("Limiting", "sandbox memory to %s (%s)", requested, infra.MemorySource)
 	}
 }
 
@@ -187,6 +236,14 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	cfg, err := config.Load(globalPath, projectPath)
 	if err != nil {
 		return nil, cleanups, fmt.Errorf("config: %w", err)
+	}
+
+	// Resolve the memory limit before the interactive setup runs, so a bad
+	// value is rejected before the user clicks through the preset selector.
+	// Setup and reconfigure only touch presets, so the result stays valid.
+	memoryLimit, memorySource, err := cfg.MemoryLimit(cmd.String(memoryFlag))
+	if err != nil {
+		return nil, cleanups, err
 	}
 
 	if cmd.Bool(reconfigureFlag) {
@@ -362,6 +419,8 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		NetworkInfo:      netInfo,
 		Merged:           merged,
 		ProxyContainerID: proxyContainerID,
+		MemoryLimit:      memoryLimit,
+		MemorySource:     memorySource,
 	}, cleanups, nil
 }
 
@@ -385,6 +444,7 @@ func (infra *sessionInfra) baseSandboxConfig(projectRoot string, u *userInfo) ct
 		UID:                 infra.UID,
 		User:                u.Username,
 		SessionID:           infra.SessionID,
+		Memory:              infra.MemoryLimit,
 	}
 }
 

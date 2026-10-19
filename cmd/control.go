@@ -13,6 +13,10 @@ import (
 	"github.com/bernd/vibepit/proxy"
 )
 
+// ErrUnsupportedEndpoint means the proxy predates the endpoint, e.g. a session
+// started before the monitor binary was upgraded.
+var ErrUnsupportedEndpoint = errors.New("endpoint not supported by proxy")
+
 // ControlClient talks to a running proxy's control API over mTLS.
 type ControlClient struct {
 	http    *http.Client
@@ -59,12 +63,12 @@ func (c *ControlClient) LogsAfter(afterID uint64) ([]proxy.LogEntry, error) {
 	return entries, nil
 }
 
-func (c *ControlClient) Stats() (map[string]proxy.DomainStats, error) {
-	var stats map[string]proxy.DomainStats
-	if err := c.get("/stats", &stats); err != nil {
+func (c *ControlClient) Hosts() ([]proxy.HostStats, error) {
+	var hosts []proxy.HostStats
+	if err := c.get("/hosts", &hosts); err != nil {
 		return nil, err
 	}
-	return stats, nil
+	return hosts, nil
 }
 
 func (c *ControlClient) Config() (*config.MergedConfig, error) {
@@ -173,6 +177,9 @@ func (c *ControlClient) get(path string, dest any) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("GET %s: %s: %w", path, resp.Status, ErrUnsupportedEndpoint)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return &statusError{method: "GET", path: path, code: resp.StatusCode, status: resp.Status}
 	}

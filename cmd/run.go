@@ -38,6 +38,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if existing != nil {
+		warnIgnoredSandboxFlags(cmd)
 		prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
 			return sessionInfoForRunning(ctx, client, existing.SessionID, projectRoot)
 		})
@@ -67,6 +68,7 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 		tui.Status("Stopping", "sandbox container")
 		client.StopAndRemove(ctx, sandboxContainer)
 	}()
+	reportSandboxMemory(ctx, client, sandboxContainer, infra)
 
 	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
 		return &SessionInfo{

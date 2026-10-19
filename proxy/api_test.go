@@ -14,7 +14,7 @@ import (
 
 func TestControlAPI(t *testing.T) {
 	log := NewLogBuffer(100)
-	log.Add(LogEntry{Domain: "a.com", Action: ActionAllow, Source: SourceProxy})
+	log.Add(LogEntry{Domain: "a.com", Port: "443", Action: ActionAllow, Source: SourceProxy})
 	log.Add(LogEntry{Domain: "b.com", Action: ActionBlock, Source: SourceDNS})
 
 	mergedConfig := map[string]any{
@@ -39,15 +39,43 @@ func TestControlAPI(t *testing.T) {
 		assert.Len(t, entries, 2)
 	})
 
-	t.Run("GET /stats returns per-domain counts", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	t.Run("GET /hosts returns per-host stats", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/hosts", nil)
 		w := httptest.NewRecorder()
 		api.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var stats map[string]DomainStats
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &stats))
-		assert.Equal(t, 1, stats["a.com"].Allowed)
+		var hosts []HostStats
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &hosts))
+		require.Len(t, hosts, 2)
+		byDomain := map[string]HostStats{}
+		for _, h := range hosts {
+			byDomain[h.Domain] = h
+		}
+		require.Contains(t, byDomain, "b.com")
+		assert.Equal(t, SourceDNS, byDomain["b.com"].Source)
+		assert.Equal(t, 1, byDomain["b.com"].Blocked)
+		assert.True(t, byDomain["a.com"].Allowlisted)
+		assert.False(t, byDomain["b.com"].Allowlisted, "b.com is only in the HTTP allowlist")
+	})
+
+	t.Run("GET /hosts reflects runtime allows", func(t *testing.T) {
+		require.NoError(t, dnsAllowlist.Add([]string{"b.com"}))
+
+		req := httptest.NewRequest(http.MethodGet, "/hosts", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+
+		var hosts []HostStats
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &hosts))
+		for _, h := range hosts {
+			if h.Domain == "b.com" {
+				assert.True(t, h.Allowlisted)
+				assert.Equal(t, ActionBlock, h.LastAction, "the block predates the allow")
+				return
+			}
+		}
+		t.Fatal("b.com not found")
 	})
 
 	t.Run("GET /config returns merged config", func(t *testing.T) {

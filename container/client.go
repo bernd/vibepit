@@ -774,6 +774,7 @@ type SandboxContainerConfig struct {
 	DaemonHostPubPath   string   // host path to SSH host pub key
 	DaemonAuthorizedKey string   // SSH public key for client auth (set as VIBEPIT_SSH_PUBKEY env)
 	DaemonEntrypoint    []string // entrypoint override for daemon mode
+	Memory              int64    // memory limit in bytes; 0 means unlimited
 }
 
 // CreateSandboxContainer creates the sandboxed development container
@@ -860,6 +861,7 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		CapDrop:        []string{"ALL"},
 		SecurityOpt:    []string{"no-new-privileges"},
 		Tmpfs:          map[string]string{"/tmp": "exec"},
+		Resources:      container.Resources{Memory: cfg.Memory},
 	}
 
 	var networkingConfig *network.NetworkingConfig
@@ -896,6 +898,9 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, nil, cfg.Name)
 	if err != nil {
 		return "", fmt.Errorf("create sandbox container: %w", err)
+	}
+	for _, w := range resp.Warnings {
+		tui.Warn("container runtime: %s", w)
 	}
 
 	return resp.ID, nil
@@ -1005,32 +1010,55 @@ func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int
 	return string(b), nil
 }
 
-// ContainerStartedAt returns the time a container was started, as reported by
-// the container runtime. Returns the zero time if the container cannot be
-// inspected or has not been started.
-func (c *Client) ContainerStartedAt(ctx context.Context, containerID string) time.Time {
-	info, err := c.docker.ContainerInspect(ctx, containerID)
-	if err != nil || info.State == nil {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339Nano, info.State.StartedAt)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
 // ContainerStatus returns a short status string for a container (e.g. "running", "exited (1)").
 func (c *Client) ContainerStatus(ctx context.Context, containerID string) string {
+	return c.ContainerSummary(ctx, containerID).Status
+}
+
+// ContainerSummary holds the runtime state `vibepit status` shows for a
+// container, collected from a single inspect call.
+type ContainerSummary struct {
+	// Status is a short status string (e.g. "running", "exited (exit 1)"),
+	// or "unknown" if the container cannot be inspected.
+	Status string
+	// StartedAt is the zero time if unknown or not started.
+	StartedAt time.Time
+	// MemoryLimit is the applied memory limit in bytes; 0 means no limit.
+	// Only meaningful when MemoryLimitKnown is set: some runtimes omit
+	// HostConfig from inspect data, and that must not read as "unlimited".
+	MemoryLimit      int64
+	MemoryLimitKnown bool
+}
+
+// ContainerSummary inspects a container once and returns its status, start
+// time and memory limit.
+func (c *Client) ContainerSummary(ctx context.Context, containerID string) ContainerSummary {
 	info, err := c.docker.ContainerInspect(ctx, containerID)
 	if err != nil {
-		return "unknown"
+		return ContainerSummary{Status: "unknown"}
 	}
-	state := info.State
-	if state.ExitCode != 0 {
-		return fmt.Sprintf("%s (exit %d)", state.Status, state.ExitCode)
+	return summarizeContainer(info)
+}
+
+func summarizeContainer(info container.InspectResponse) ContainerSummary {
+	s := ContainerSummary{Status: "unknown"}
+	if info.ContainerJSONBase == nil {
+		return s
 	}
-	return state.Status
+	if state := info.State; state != nil {
+		s.Status = state.Status
+		if state.ExitCode != 0 {
+			s.Status = fmt.Sprintf("%s (exit %d)", state.Status, state.ExitCode)
+		}
+		if t, err := time.Parse(time.RFC3339Nano, state.StartedAt); err == nil {
+			s.StartedAt = t
+		}
+	}
+	if info.HostConfig != nil {
+		s.MemoryLimit = info.HostConfig.Memory
+		s.MemoryLimitKnown = true
+	}
+	return s
 }
 
 // StreamLogs follows the container log output and copies it to the given writer.

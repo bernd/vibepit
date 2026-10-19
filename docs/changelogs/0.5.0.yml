@@ -1,0 +1,19 @@
+version: "0.5.0"
+
+added:
+  - msg: Add `nodejs.org` to the npm network preset
+    pr: "18"
+  - msg: Add a Git config that makes GitHub SSH remotes (`git@github.com:`) use HTTPS, since SSH traffic is blocked in the sandbox
+    pr: "19"
+  - msg: Add a `--memory`/`-m` flag and `memory` config option to cap the sandbox's memory, like `docker run --memory`; `0` disables a limit set elsewhere
+    pr: "27"
+  - msg: Add a HOSTS tab to `vibepit monitor` that lists every host the sandbox contacts, shows which are blocked, and lets you allow them directly
+  - msg: Add support for the kitty terminal (`TERM=xterm-kitty`) in the sandbox
+
+changed:
+  - msg: Warn in `run` and `up` about sandbox flags that are ignored because a session is already running
+  - msg: Update to Go 1.27.2
+
+fixed:
+  - msg: Fix `--reconfigure` dropping other project settings and comments
+  - msg: Fix IPv6 lookups of `host.vibepit` showing up as blocked

@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/bernd/vibepit/config"
@@ -117,26 +119,6 @@ func TestControlClient_LogsAfter(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, entries)
 	})
-}
-
-func TestControlClient_Stats(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow})
-	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow})
-	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionBlock})
-	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock})
-
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL)
-	client := testControlClient(t, api)
-
-	stats, err := client.Stats()
-	require.NoError(t, err)
-	assert.Equal(t, proxy.DomainStats{Allowed: 2, Blocked: 1}, stats["a.com"])
-	assert.Equal(t, proxy.DomainStats{Allowed: 0, Blocked: 1}, stats["b.com"])
 }
 
 func TestControlClient_Config(t *testing.T) {
@@ -276,4 +258,48 @@ func TestControlClient_CheckAndDeny(t *testing.T) {
 	res, err = client.Check(dnsEntry)
 	require.NoError(t, err)
 	assert.Equal(t, CheckResult{Denied: true}, res)
+}
+
+func TestControlClient_Hosts(t *testing.T) {
+	log := proxy.NewLogBuffer(100)
+	log.Add(proxy.LogEntry{
+		Domain: "a.com",
+		Port:   "443",
+		Source: proxy.SourceProxy,
+		Action: proxy.ActionBlock,
+		Code:   proxy.BlockNotAllowlisted,
+	})
+
+	httpAL, err := proxy.NewHTTPAllowlist(nil)
+	require.NoError(t, err)
+	dnsAL, err := proxy.NewDNSAllowlist(nil)
+	require.NoError(t, err)
+	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
+
+	hosts, err := client.Hosts()
+	require.NoError(t, err)
+	require.Len(t, hosts, 1)
+	assert.Equal(t, proxy.HostKey{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}, hosts[0].HostKey)
+	assert.Equal(t, 1, hosts[0].Blocked)
+	assert.Equal(t, proxy.BlockNotAllowlisted, hosts[0].LastBlockCode)
+}
+
+func TestControlClient_HostsUnsupported(t *testing.T) {
+	client := &ControlClient{
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Status:     "404 Not Found",
+					Body:       io.NopCloser(strings.NewReader("404 page not found\n")),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+		baseURL: "https://proxy.local",
+	}
+
+	_, err := client.Hosts()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnsupportedEndpoint)
 }

@@ -1,0 +1,73 @@
+{
+  "version": "0.5.0",
+  "timestamp": "2026-10-17T02:34:38+02:00",
+  "changelog": "\nAdded:\n- Add `nodejs.org` to the npm network preset ([#18](https://github.com/bernd/vibepit/pull/18))\n- Add a Git config that makes GitHub SSH remotes (`git@github.com:`) use HTTPS, since SSH traffic is blocked in the sandbox ([#19](https://github.com/bernd/vibepit/pull/19))\n- Add a `--memory`/`-m` flag and `memory` config option to cap the sandbox's memory, like `docker run --memory`; `0` disables a limit set elsewhere ([#27](https://github.com/bernd/vibepit/pull/27))\n- Add a HOSTS tab to `vibepit monitor` that lists every host the sandbox contacts, shows which are blocked, and lets you allow them directly\n- Add support for the kitty terminal (`TERM=xterm-kitty`) in the sandbox\n\nChanged:\n- Warn in `run` and `up` about sandbox flags that are ignored because a session is already running\n- Update to Go 1.27.2\n\nFixed:\n- Fix `--reconfigure` dropping other project settings and comments\n- Fix IPv6 lookups of `host.vibepit` showing up as blocked",
+  "changes": {
+    "added": [
+      {
+        "msg": "Add `nodejs.org` to the npm network preset",
+        "pr": "18"
+      },
+      {
+        "msg": "Add a Git config that makes GitHub SSH remotes (`git@github.com:`) use HTTPS, since SSH traffic is blocked in the sandbox",
+        "pr": "19"
+      },
+      {
+        "msg": "Add a `--memory`/`-m` flag and `memory` config option to cap the sandbox's memory, like `docker run --memory`; `0` disables a limit set elsewhere",
+        "pr": "27"
+      },
+      {
+        "msg": "Add a HOSTS tab to `vibepit monitor` that lists every host the sandbox contacts, shows which are blocked, and lets you allow them directly"
+      },
+      {
+        "msg": "Add support for the kitty terminal (`TERM=xterm-kitty`) in the sandbox"
+      }
+    ],
+    "changed": [
+      {
+        "msg": "Warn in `run` and `up` about sandbox flags that are ignored because a session is already running"
+      },
+      {
+        "msg": "Update to Go 1.27.2"
+      }
+    ],
+    "fixed": [
+      {
+        "msg": "Fix `--reconfigure` dropping other project settings and comments"
+      },
+      {
+        "msg": "Fix IPv6 lookups of `host.vibepit` showing up as blocked"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-linux-x86_64.tar.gz",
+      "sha256": "86347a1e94edf5a9747d633e063d9ddef53dd82b908dbfa6f7d7f9efddbac5c3",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-linux-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-linux-aarch64.tar.gz",
+      "sha256": "d4c6be75e203df9925110d27fae8d4f31f2bb4bc12323f8689733332c9163b94",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-linux-aarch64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-darwin-x86_64.tar.gz",
+      "sha256": "6b7c415bb1a76c771bc2eef4c01ba65116aa1ee8c1263c41244a00cd164c856b",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-darwin-x86_64.tar.gz.bundle"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-darwin-aarch64.tar.gz",
+      "sha256": "53d1c67621136c3e40724d83548aa3b8cae00e27e21b1cd5b7596574b492194d",
+      "cosign_bundle_url": "https://github.com/bernd/vibepit/releases/download/v0.5.0/vibepit-0.5.0-darwin-aarch64.tar.gz.bundle"
+    }
+  ]
+}
