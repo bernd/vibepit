@@ -102,6 +102,7 @@ type Terminal struct {
 	resized         bool       // resized while detached
 	resyncing       bool       // drop output up to the next ground
 	misaligned      bool       // the shadow's cursor may not be the real one's
+	missed          bool       // a write failed: the real terminal may lack output the shadow has
 	prog            *tea.Program
 	barrierTimeouts int
 	// snapshot is snapshotLeave; tests replace it to inject failures.
@@ -151,6 +152,7 @@ func New(cfg Config) *Terminal {
 		snapshot: snapshotLeave,
 	}
 	t.profile = colorprofile.Detect(cfg.Stdout, cfg.Environ)
+	t.cfg.Stdout = newBlockingWriter(cfg.Stdout)
 	t.sessionIn = newSessionInput(cfg.SessionIn)
 	t.in = newInputMux(cfg.Stdin, t.sessionIn)
 	t.cols, t.rows = t.size()
@@ -242,7 +244,7 @@ func (t *Terminal) align(ctx context.Context) {
 		return
 	}
 	t.in.ExpectPosition()
-	_, _ = io.WriteString(t.cfg.Stdout, positionQuery)
+	t.writeLocked([]byte(positionQuery))
 	row, col, err := t.in.AwaitPosition(ctx, t.timing.positionWait, t.timing.lateStrip)
 	if err != nil {
 		t.misaligned = true
@@ -284,9 +286,18 @@ func (t *Terminal) output(p []byte) {
 	switch {
 	case len(p) == 0:
 	case t.cut == nil:
-		_, _ = t.cfg.Stdout.Write(p)
+		t.writeLocked(p)
 	default:
 		t.log.append(p, t.timing.logMax)
+	}
+}
+
+// writeLocked writes p to the real terminal. A failed write is logged
+// once and rules out raw replay from then on.
+func (t *Terminal) writeLocked(p []byte) {
+	if _, err := t.cfg.Stdout.Write(p); err != nil && !t.missed {
+		t.missed = true
+		t.cfg.Logf("overlay: writing to the terminal failed, prompts restore the screen from the shadow: %v", err)
 	}
 }
 

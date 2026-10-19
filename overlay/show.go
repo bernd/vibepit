@@ -61,10 +61,35 @@ func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
 // with the leave.
 func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model) (err error) {
 	t.mu.Lock()
-	_, _ = io.WriteString(t.cfg.Stdout, enterSeq(enterFor(t.cut)))
+	c := t.cut
+	seq := enterSeq(enterFor(c))
+	if c.row > 0 {
+		// The replies the app was owed came before the barrier's, so the
+		// next position reply answers this query. The terminal answers it
+		// before the prompt moves the cursor.
+		t.in.ExpectPosition()
+		seq = positionQuery + seq
+		c.posAsked = true
+	}
+	t.writeLocked([]byte(seq))
 	cols, rows := t.cols, t.rows
+	wait, strip := t.timing.positionWait, t.timing.lateStrip
 	t.mu.Unlock()
 	defer t.leave(true)
+	if c.posAsked {
+		// Waited for alongside the prompt, which holds an ESC that might
+		// start the reply only until the wait ends. Background, not the
+		// prompt's context: a late reply must still be stripped.
+		confirmed := make(chan bool, 1)
+		go func() {
+			row, col, err := t.in.AwaitPosition(context.Background(), wait, strip)
+			if err == nil {
+				t.followLocalClear(c, row, col)
+			}
+			confirmed <- err == nil && row == c.row && col == c.col
+		}()
+		defer func() { c.posConfirmed = <-confirmed }()
+	}
 
 	// The session ending cancels the program.
 	pctx, cancel := t.untilEnd(ctx, t.in.Done())

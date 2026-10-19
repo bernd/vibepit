@@ -393,6 +393,102 @@ func TestShowReplaysBelowHostOutput(t *testing.T) {
 	}
 }
 
+func TestShowRestoresFromTheShadowWhenTheCursorMoved(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ls\r\nfile\r\n$ ")
+	// The real terminal handled a resize differently, e.g. reflowed where
+	// the shadow didn't: its lines and cursor are two rows higher.
+	feed(t, h.real, "\x1b[2S\x1b[2A")
+	h.prompt(func() { h.app("date\r\nnow\r\n$ ") })
+	assert.True(t, h.snapshotted(), "the cut's cursor isn't the real one")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	assert.Empty(t, h.sessionIn.String(), "the position reply isn't the app's input")
+}
+
+// clearToCursor is what kitty's clear_terminal to_cursor_scroll and
+// Cmd+K in other terminals do without telling the app: the rows above the
+// cursor go to the scrollback and the cursor's row moves to the top.
+func clearToCursor(rows int) string { return fmt.Sprintf("\x1b[%dS\x1b[%dA", rows, rows) }
+
+func TestShowKeepsAClearTheTerminalDidItself(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the cut's cursor isn't the real one")
+	assert.Equal(t, "$", screenText(h.real))
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowKeepsAClearTheTerminalDidItselfBelowLaterOutput(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.prompt(func() {
+		require.Eventually(t, func() bool {
+			var first string
+			h.locked(func(tm *Terminal) { first = firstLine(tm.shadow) })
+			return first == "$"
+		}, 5*time.Second, time.Millisecond, "the shadow never followed the clear")
+		h.app("ls\r\nfile\r\n$ ")
+	})
+	assert.Equal(t, "$ ls\nfile\n$", screenText(h.real))
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowDoesNotShiftTheShadowAfterOutputBeforeThePositionReply(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.holdPositionReplies()
+	h.prompt(func() {
+		// Scrolls the shadow, so the clear's shift would push these lines
+		// off the screen.
+		h.app("ls\r\nfile\r\n$ ")
+		require.NotEmpty(t, h.releaseReplies())
+	})
+	assert.True(t, h.snapshotted())
+	assert.Equal(t, "three\nfour\nfive\n$ ls\nfile\n$", screenText(h.real), "repainted from the unshifted shadow")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowDoesNotShiftTheShadowWhenTheColumnMoved(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\n$ ")
+	feed(t, h.real, clearToCursor(2)+"\x1b[C")
+	h.prompt(nil)
+	assert.True(t, h.snapshotted())
+	assert.Equal(t, "one\ntwo\n$", screenText(h.real), "repainted from the unshifted shadow")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowWithoutAPositionReplyAtTheCutRestoresFromTheShadow(t *testing.T) {
+	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.positionWait = 50 * time.Millisecond }))
+	h.app("$ ")
+	h.holdPositionReplies()
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the cut's cursor is unconfirmed")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	require.NotEmpty(t, h.releaseReplies(), "the reply comes after the prompt")
+	h.keys("after")
+	h.waitSessionInput("after")
+}
+
+func TestShowRestoresFromTheShadowAfterAFailedWrite(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	// The real terminal misses output that leaves its cursor where it
+	// was, so the position check can't tell.
+	h.failWrites(true)
+	h.app("ls")
+	h.app("\b\b")
+	h.failWrites(false)
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the real terminal lacks output")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	assert.Equal(t, 1, strings.Count(h.logs.String(), "\n"), "logged once: %s", h.logs.String())
+}
+
 func TestShowWithoutAPositionRestoresFromTheShadow(t *testing.T) {
 	h := newHarness(t, 20, 6, hostOutput("host1\r\nhost2\r\n"), silentTerminal(),
 		withTiming(func(tm *timing) { tm.barrierWait = time.Millisecond }))

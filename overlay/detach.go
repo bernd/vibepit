@@ -91,6 +91,16 @@ func (t *Terminal) cutLocked(forced bool) {
 	}
 	c.forced = forced
 	c.barrierSent = !t.barrierUnsupportedLocked()
+	// The handoff compares the cursor only after a barrier reply: replies
+	// to the app's own DSR 6n come before it. A forced cut leaves the
+	// shadow inside a sequence, and a terminal that didn't answer at the
+	// start won't now.
+	if c.barrierSent && !forced && !t.misaligned {
+		if c.row, c.col, err = t.shadowPositionLocked(); err != nil {
+			t.abortDetachLocked(err)
+			return
+		}
+	}
 	t.cut = c
 	t.log = rawLog{}
 	t.answered, t.resized = false, false
@@ -108,8 +118,27 @@ func (t *Terminal) cutLocked(forced bool) {
 	if c.barrierSent {
 		b = append(b, barrierQuery...)
 	}
-	_, _ = t.cfg.Stdout.Write(b)
+	t.writeLocked(b)
 	t.endDetachLocked(nil)
+}
+
+// shadowPositionLocked asks the shadow for its cursor position the way the
+// handoff asks the real terminal, so both answer in the same terms, origin
+// mode and a pending wrap included. The answer goes nowhere else. It
+// returns 0, 0 if the shadow didn't answer.
+func (t *Terminal) shadowPositionLocked() (int, int, error) {
+	if _, err := t.shadow.Write([]byte(positionQuery)); err != nil {
+		return 0, 0, err
+	}
+	reply := t.answers
+	t.answers = t.answers[:0]
+	if len(reply) == 0 {
+		return 0, 0, nil
+	}
+	if st, row, col := matchPosition(reply); st == posComplete {
+		return row, col, nil
+	}
+	return 0, 0, nil
 }
 
 // advanceDetachLocked forwards p up to the byte where the shadow reaches
@@ -117,7 +146,7 @@ func (t *Terminal) cutLocked(forced bool) {
 func (t *Terminal) advanceDetachLocked(p []byte) []byte {
 	n, ground, err := t.writeToGroundLocked(p)
 	if n > 0 {
-		_, _ = t.cfg.Stdout.Write(p[:n])
+		t.writeLocked(p[:n])
 		t.detach.forwarded += n
 		p = p[n:]
 	}
@@ -186,7 +215,7 @@ func (t *Terminal) leave(drawn bool) {
 	var nudge bool
 	t.in.Release(strip, t.reportsFocusLocked(), func() {
 		out, resync, reset := t.leaveBytesLocked(c, e, drawn)
-		_, _ = t.cfg.Stdout.Write(out)
+		t.writeLocked(out)
 		t.cut = nil
 		t.resyncing = resync
 		nudge = reset
@@ -204,9 +233,10 @@ func (t *Terminal) leave(drawn bool) {
 func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte, bool, bool) {
 	raw := !c.forced && // the real terminal may show a replacement character
 		!t.log.overflow && // bytes are missing
+		!t.missed && // the real terminal lacks output the shadow has
 		!t.resized && // the log was written for another geometry
 		!t.answered && // a replayed query would be answered twice
-		!t.misaligned && // the cut's cursor may be on another row
+		t.cursorKnownLocked(c) && // the cut's cursor may be on another row
 		!(drawn && c.alt) // the prompt drew over the app's alternate screen
 	if raw {
 		return rawLeave(c, e, t.log.buf), false, false
@@ -224,6 +254,42 @@ func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte,
 		t.cfg.Logf("overlay: snapshot restore failed, resetting the terminal: %v", err)
 	}
 	return resetLeave(e), false, true
+}
+
+// cursorKnownLocked tells whether the shadow's cursor at the cut is the
+// real terminal's, which the raw leave writes back. A resize can move them
+// apart, because terminals reflow and pull back scrollback in different
+// ways, so the alignment at the start isn't enough once the real terminal
+// was asked.
+func (t *Terminal) cursorKnownLocked(c *cutState) bool {
+	if c.posAsked {
+		return c.posConfirmed
+	}
+	return !t.misaligned
+}
+
+// followLocalClear makes the shadow follow a clear the real terminal did
+// without telling the app, such as kitty's clear_terminal to_cursor_scroll
+// or Cmd+K: row and col are the real cursor at the cut. Those clears move
+// the rows above the cursor into the scrollback and keep the column, so a
+// real cursor higher up in the same column means the shadow must scroll by
+// the difference, or the snapshot paints the cleared rows back.
+func (t *Terminal) followLocalClear(c *cutState, row, col int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// On the alternate screen there is no clear to follow, and after a
+	// forced cut the shadow is inside a sequence the shift would garble.
+	if t.shadowErr != nil || c.alt || c.forced || row >= c.row || col != c.col {
+		return
+	}
+	// Output since the cut may have scrolled the shadow, and the shift
+	// would then push it off the screen. Painting the cleared rows back
+	// loses nothing.
+	if len(t.log.buf) > 0 || t.log.overflow {
+		return
+	}
+	n := c.row - row
+	t.shadowWriteLocked(fmt.Appendf(nil, "\x1b[%dS\x1b[%dA", n, n))
 }
 
 // reportsFocusLocked tells whether the app takes focus reports (mode
