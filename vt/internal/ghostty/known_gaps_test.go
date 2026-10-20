@@ -2,6 +2,7 @@ package ghostty
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,10 +17,16 @@ func TestKnownGaps(t *testing.T) {
 		return format(t, in, FormatterOptions{Emit: FormatVT, Extra: extra})
 	}
 
-	t.Run("no per-cell OSC 8 hyperlinks", func(t *testing.T) {
+	t.Run("a link open at the cut is reopened as another link", func(t *testing.T) {
+		// The cells and the pen share the link, but the content closes it
+		// and the hyperlink extra opens it again. Without an explicit id
+		// the replay gives each OSC 8 a link of its own.
 		in := newTerm(t, 20, 5)
-		feed(t, in, "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\")
-		assert.NotContains(t, full(t, in, restoreExtras), "\x1b]8;")
+		feed(t, in, "\x1b]8;;http://x\x1b\\li")
+		got := full(t, in, restoreExtras)
+		assert.Contains(t, got, "\x1b]8;;http://x\x1b\\li\x1b]8;;\x1b\\")
+		assert.True(t, strings.HasSuffix(got, "\x1b]8;;http://x\x1b\\"), "%q", got)
+		assert.NotContains(t, got, "id=")
 	})
 	t.Run("no DECSCUSR cursor shape", func(t *testing.T) {
 		in := newTerm(t, 20, 5)

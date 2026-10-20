@@ -14,8 +14,8 @@ src="${GHOSTTY_SRC:-${TMPDIR:-/tmp}/vibepit-ghostty-src}"
 
 zig_version="$(zig version)"
 case "$zig_version" in
-  0.16.*) ;;
-  *) echo "need Zig 0.16, found $zig_version" >&2; exit 1 ;;
+  0.17.*) ;;
+  *) echo "need Zig 0.17, found $zig_version" >&2; exit 1 ;;
 esac
 
 if [ ! -d "$src/.git" ]; then
@@ -36,7 +36,7 @@ done
 
 # ghostty enables simd128 on wasm unless a CPU is given, and wasm2go can't
 # translate SIMD instructions.
-(cd "$src" && zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Dcpu=generic -Doptimize=ReleaseSmall)
+(cd "$src" && zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Dcpu=generic -Doptimize=small)
 
 cp "$src/zig-out/bin/ghostty-vt.wasm" "$out/ghostty-vt.wasm"
 if command -v sha256sum >/dev/null; then

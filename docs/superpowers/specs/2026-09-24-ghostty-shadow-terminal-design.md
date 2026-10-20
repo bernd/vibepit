@@ -1592,3 +1592,23 @@ LF in the prompt filter, and the filter dropping ED 3 and 8-bit controls.
   couldn't show it anyway: vibed's attach replay starts with `ESC c` even
   for a new session, which wiped the line at once. The reset on attach is
   Phase 2's to revisit.
+
+## Implementation Notes: ghostty upgrade (2026-10-20)
+
+Moved from ghostty `7c40388` to `96a5131`, which needs Zig 0.17.
+
+- **Patch 0002 is mostly upstream** (`23c7a3e5a`), but only when the
+  output also restores the modes. The snapshot and the cut's extras leave
+  the Modes extra out, so a smaller 0002 drops that condition.
+- **`CAN` and `SUB` now cancel an OSC** (`520d8f55a`), as in xterm, so the
+  `CAN` note under step 2 no longer holds. The snapshot still writes the
+  title and working directory unconditionally after a forced cut:
+  terminals still differ on whether a cancelled OSC takes effect.
+- **The formatter writes each cell's OSC 8 link** (`510b253db`). A link
+  open at the cut comes back as two adjacent links with the same URI,
+  since a link without an explicit id gets a new one on every OSC 8; only
+  hover highlighting tells them apart. Before, the part before the cut
+  lost its link.
+- **VT output keeps trailing blank rows** (`bd1c9cc8c`) and steps over
+  blank gaps with CUF (`152bdbc68`). A snapshot fills exactly the screen's
+  rows, so it doesn't scroll.

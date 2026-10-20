@@ -1,7 +1,7 @@
 # libghostty-vt (WebAssembly, translated to Go)
 
 `internal/wasmvt/ghostty-vt.wasm` is libghostty-vt built for
-`wasm32-freestanding` with `ReleaseSmall` and `-Dcpu=generic` at the commit
+`wasm32-freestanding` with `-Doptimize=small` and `-Dcpu=generic` at the commit
 in `internal/wasmvt/GHOSTTY_COMMIT`, plus the patches in `patches/`.
 `GHOSTTY_COMMIT` also records the Zig version and the sha256 of the
 `.wasm`; `TestProvenance` fails if they don't match.
@@ -21,9 +21,11 @@ fails with `unsupported opcode (SIMD)`.
 | Patch | Why | Upstream |
 |---|---|---|
 | `0001-formatter-content-none.patch` | Extras-only formatting (`content_none`) | not yet proposed |
-| `0002-formatter-origin-mode.patch` | Cursor position relative to the scroll region under DECOM | not yet proposed |
+| `0002-formatter-origin-mode-without-modes.patch` | Cursor relative to the scroll region under DECOM without the modes extra | not yet proposed |
 
-Delete a patch once an upstream commit includes it.
+Delete a patch once an upstream commit includes it. Upstream's version of
+the origin-mode fix (23c7a3e5a) only applies when the output also restores
+the modes, which vibepit's restores don't ask for, so 0002 keeps the rest.
 
 ## Upgrading
 
@@ -47,7 +49,7 @@ doesn't contain by hash (after a squash merge, say) keep refreshes off.
 
 By hand:
 
-1. `make ghostty-wasm GHOSTTY_COMMIT=<sha>` (needs Zig 0.16). It also
+1. `make ghostty-wasm GHOSTTY_COMMIT=<sha>` (needs Zig 0.17). It also
    regenerates `ghostty_vt.go`.
 2. `go test ./vt/internal/ghostty/...`. Failure categories:
    - **Compile error in this package**: an export was removed or changed
@@ -90,6 +92,14 @@ it ever triggers, report it upstream with the input.
 ## Building inside a vibepit sandbox
 
 Zig's package fetcher can fail through the proxy with
-`HttpConnectionClosing`. Download each missing dependency with `curl -LO`,
-register it with `zig fetch <file>`, and build again until nothing is
-missing. It needs github.com, deps.files.ghostty.org and codeberg.org.
+`HttpConnectionClosing` or an HTTP 400 or 403. Download each missing
+dependency with `curl -LO` (git dependencies with `git clone` at the
+pinned commit), and build again until nothing is missing. It needs
+github.com, deps.files.ghostty.org and codeberg.org.
+
+Zig 0.17 unpacks packages into `zig-pkg/<hash>` in the ghostty checkout,
+and `zig fetch <file>` caches a tarball that unpacks to a different hash,
+so the build then fails with `hash mismatch`. Run `zig fetch <file>` only
+to print the hash, and unpack the archive into `zig-pkg/<hash>` yourself,
+without its single top-level directory (`git archive HEAD` for a git
+dependency).

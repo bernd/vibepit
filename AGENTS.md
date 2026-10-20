@@ -54,7 +54,7 @@ make test              # run unit tests
 make test-integration  # run integration tests (60s timeout)
 make test-bats         # run BATS tests for image/entrypoint scripts
 make clean             # remove binary and dist/ artifacts
-make ghostty-wasm      # rebuild libghostty-vt .wasm and its Go translation (needs Zig 0.16)
+make ghostty-wasm      # rebuild libghostty-vt .wasm and its Go translation (needs Zig 0.17)
 ```
 
 ## CLI Command Reference

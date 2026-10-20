@@ -17,12 +17,12 @@ func newTerm(tb testing.TB, cols, rows uint16) *Instance {
 	return in
 }
 
-// withTerm runs fn with a terminal that is closed right after, for loops
-// that would otherwise keep hundreds of instances (448 KiB of linear memory
-// each) alive until the test ends.
-func withTerm(tb testing.TB, cols, rows uint16, fn func(in *Instance)) {
+// withScenarioTerm runs fn with a scenario-sized terminal that is closed
+// right after, for loops that would otherwise keep hundreds of instances
+// (448 KiB of linear memory each) alive until the test ends.
+func withScenarioTerm(tb testing.TB, fn func(in *Instance)) {
 	tb.Helper()
-	in := openTerm(tb, cols, rows)
+	in := openTerm(tb, scenarioCols, scenarioRows)
 	defer func() { _ = in.Close() }()
 	fn(in)
 }

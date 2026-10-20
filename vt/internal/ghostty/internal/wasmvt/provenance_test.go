@@ -92,7 +92,7 @@ func TestProvenance(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(sum[:]), p.SHA256,
 		"ghostty-vt.wasm does not match GHOSTTY_COMMIT; rebuild it with make ghostty-wasm")
 	assert.Len(t, p.Commit, 40)
-	assert.True(t, strings.HasPrefix(p.Zig, "0.16."), "zig version %q", p.Zig)
+	assert.True(t, strings.HasPrefix(p.Zig, "0.17."), "zig version %q", p.Zig)
 }
 
 // TestGeneratedCodeIsCurrent ties ghostty_vt.go to the committed .wasm and

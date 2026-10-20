@@ -32,7 +32,7 @@ test-bats:
 	bats image/tests
 
 # Rebuilds vt/internal/ghostty/internal/wasmvt/ghostty-vt.wasm and its Go
-# translation. Needs Zig 0.16 and network access to github.com,
+# translation. Needs Zig 0.17 and network access to github.com,
 # deps.files.ghostty.org and codeberg.org.
 GHOSTTY_COMMIT ?= $(shell sed -n 's/^commit=//p' vt/internal/ghostty/internal/wasmvt/GHOSTTY_COMMIT 2>/dev/null)
 

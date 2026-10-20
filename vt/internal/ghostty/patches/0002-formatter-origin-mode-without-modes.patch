@@ -1,0 +1,27 @@
+Upstream (23c7a3e5a) writes the cursor relative to the scrolling region
+under origin mode (DECOM) only when the output also restores the modes.
+vibepit formats without the modes extra and restores the modes itself,
+so drop that condition.
+
+Upstream: not yet proposed.
+
+diff --git a/src/terminal/formatter.zig b/src/terminal/formatter.zig
+index f1ec6b7c1..267c7a9cd 100644
+--- a/src/terminal/formatter.zig
++++ b/src/terminal/formatter.zig
+@@ -550,11 +550,11 @@ pub const TerminalFormatter = struct {
+         screen_formatter.content = .none;
+         screen_formatter.extra = self.extra.screen;
+ 
+-        // In origin mode (DECOM), which the modes above restore, CUP counts
+-        // from the top-left of the scrolling region restored above, so the
+-        // cursor position is written relative to it.
++        // In origin mode (DECOM), CUP counts from the top-left of the
++        // scrolling region restored above, so the cursor position is written
++        // relative to it. The modes above restore DECOM; a caller that
++        // leaves them out restores the modes itself, before this output.
+         if (self.opts.emit == .vt and
+-            self.extra.modes and
+             self.extra.scrolling_region and
+             self.terminal.modes.get(.origin))
+         {
