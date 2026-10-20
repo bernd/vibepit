@@ -231,13 +231,14 @@ func (t *Terminal) leave(drawn bool) {
 // the bytes, whether output up to the next ground must be dropped, and
 // whether it reset the terminal.
 func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte, bool, bool) {
+	drewOverAlt := drawn && c.alt
 	raw := !c.forced && // the real terminal may show a replacement character
 		!t.log.overflow && // bytes are missing
 		!t.missed && // the real terminal lacks output the shadow has
 		!t.resized && // the log was written for another geometry
 		!t.answered && // a replayed query would be answered twice
 		t.cursorKnownLocked(c) && // the cut's cursor may be on another row
-		!(drawn && c.alt) // the prompt drew over the app's alternate screen
+		!drewOverAlt // the prompt drew over the app's alternate screen
 	if raw {
 		return rawLeave(c, e, t.log.buf), false, false
 	}

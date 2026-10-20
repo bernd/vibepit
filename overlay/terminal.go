@@ -123,13 +123,13 @@ type rawLog struct {
 	overflow bool
 }
 
-// append keeps p unless the log would pass max. Past it the log is dropped,
+// append keeps p unless the log would pass limit. Past it the log is dropped,
 // which rules out raw replay; the pump never waits.
-func (l *rawLog) append(p []byte, max int) {
+func (l *rawLog) append(p []byte, limit int) {
 	if l.overflow {
 		return
 	}
-	if len(l.buf)+len(p) > max {
+	if len(l.buf)+len(p) > limit {
 		l.buf, l.overflow = nil, true
 		return
 	}

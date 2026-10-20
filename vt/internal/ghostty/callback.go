@@ -12,7 +12,7 @@ func (in *Instance) SetWritePty(fn func([]byte)) error {
 	if in.ptyIndex == 0 {
 		// A C callback is a function table index, and an indirect call is a
 		// type assertion on the entry, so the entry's type must match
-		// GhosttyTerminalWritePtyFn exactly: (i32 i32 i32 i32) -> ().
+		// GhosttyTerminalWritePtyFn exactly: four i32 parameters, no result.
 		tab := in.mod.X__indirect_function_table()
 		in.ptyIndex = uint32(len(*tab))
 		*tab = append(*tab, in.onWritePty)

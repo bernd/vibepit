@@ -7,9 +7,11 @@ import "fmt"
 // TestABIMatchesTypeJSON and TestModeTableComplete check them against the
 // translated module.
 
-// Result is GhosttyResult.
-type Result int32
+// Result is GhosttyResult. The names follow the C enum, which includes
+// Success, rather than Go's error naming.
+type Result int32 //nolint:errname // see above
 
+//nolint:errname // see Result
 const (
 	Success       Result = 0
 	OutOfMemory   Result = -1

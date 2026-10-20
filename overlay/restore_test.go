@@ -13,16 +13,16 @@ import (
 // scroll region, the cursor and its visibility dirty, as a prompt might.
 const promptDraw = "\x1b[1;1H\x1b[1;35mPROMPT\x1b[3;4r\x1b[?25l\x1b[2;2Hx"
 
-// throughPrompt feeds real what the real terminal gets from the cut until
+// throughPrompt feeds realTerm what the real terminal gets from the cut until
 // the program exits: the cut's writes, the enter sequence and prompt output.
-func throughPrompt(t *testing.T, real *vt.Terminal, c *cutState) entered {
+func throughPrompt(t *testing.T, realTerm *vt.Terminal, c *cutState) entered {
 	t.Helper()
 	if c.modes[modeSync] {
-		feed(t, real, "\x1b[?2026l")
+		feed(t, realTerm, "\x1b[?2026l")
 	}
 	e := enterFor(c)
-	feed(t, real, enterSeq(e))
-	feed(t, real, promptDraw)
+	feed(t, realTerm, enterSeq(e))
+	feed(t, realTerm, promptDraw)
 	return e
 }
 
@@ -81,14 +81,14 @@ func TestRawLeaveRestoresTheCut(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			shadow, real := newVT(t, 20, 6), newVT(t, 20, 6)
+			shadow, realTerm := newVT(t, 20, 6), newVT(t, 20, 6)
 			feed(t, shadow, tt.before)
-			feed(t, real, tt.before)
+			feed(t, realTerm, tt.before)
 			c := mustCut(t, shadow)
-			e := throughPrompt(t, real, c)
+			e := throughPrompt(t, realTerm, c)
 			feed(t, shadow, tt.detached)
-			feed(t, real, string(rawLeave(c, e, []byte(tt.detached))))
-			assertSameTerminal(t, shadow, real)
+			feed(t, realTerm, string(rawLeave(c, e, []byte(tt.detached))))
+			assertSameTerminal(t, shadow, realTerm)
 		})
 	}
 }
@@ -111,19 +111,19 @@ func TestSnapshotLeaveRestoresChangesWhileDetached(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			shadow, real := newVT(t, 20, 6), newVT(t, 20, 6)
+			shadow, realTerm := newVT(t, 20, 6), newVT(t, 20, 6)
 			feed(t, shadow, tt.before)
-			feed(t, real, tt.before)
+			feed(t, realTerm, tt.before)
 			c := mustCut(t, shadow)
-			e := throughPrompt(t, real, c)
+			e := throughPrompt(t, realTerm, c)
 			feed(t, shadow, tt.detached)
 			out, resync, err := snapshotLeave(shadow, c, e)
 			require.NoError(t, err)
 			assert.False(t, resync)
-			feed(t, real, string(out))
+			feed(t, realTerm, string(out))
 			feed(t, shadow, tt.later)
-			feed(t, real, tt.later)
-			assertSameTerminal(t, shadow, real)
+			feed(t, realTerm, tt.later)
+			assertSameTerminal(t, shadow, realTerm)
 		})
 	}
 }
@@ -206,24 +206,24 @@ func TestLeaveKeepsTheKittyStack(t *testing.T) {
 			if alt {
 				before = "\x1b[?1049h" + before
 			}
-			shadow, real := newVT(t, 20, 6), newVT(t, 20, 6)
+			shadow, realTerm := newVT(t, 20, 6), newVT(t, 20, 6)
 			feed(t, shadow, before)
-			feed(t, real, before)
+			feed(t, realTerm, before)
 			c := mustCut(t, shadow)
-			e := throughPrompt(t, real, c)
+			e := throughPrompt(t, realTerm, c)
 			out := rawLeave(c, e, nil)
 			if alt {
 				var err error
 				out, _, err = snapshotLeave(shadow, c, e)
 				require.NoError(t, err)
 			}
-			feed(t, real, string(out))
+			feed(t, realTerm, string(out))
 			for range 2 {
 				feed(t, shadow, "\x1b[<u")
-				feed(t, real, "\x1b[<u")
+				feed(t, realTerm, "\x1b[<u")
 				want, err := shadow.KittyKeyboardFlags()
 				require.NoError(t, err)
-				got, err := real.KittyKeyboardFlags()
+				got, err := realTerm.KittyKeyboardFlags()
 				require.NoError(t, err)
 				assert.Equal(t, want, got)
 			}

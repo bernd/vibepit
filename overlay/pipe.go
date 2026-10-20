@@ -16,8 +16,8 @@ type bufPipe struct {
 	closed bool
 }
 
-func newBufPipe(max int) *bufPipe {
-	p := &bufPipe{max: max}
+func newBufPipe(limit int) *bufPipe {
+	p := &bufPipe{max: limit}
 	p.cond = sync.NewCond(&p.mu)
 	return p
 }

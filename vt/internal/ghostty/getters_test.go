@@ -89,7 +89,7 @@ func TestStateGetters(t *testing.T) {
 		{"mode 2004", "\x1b[?2004h", mode(2004, true)},
 		{"mode 2026", "\x1b[?2026h", mode(2026, true)},
 		{"kitty push", "\x1b[>5u", kitty(5)},
-		{"kitty push push pop", "\x1b[>5u\x1b[>1u\x1b[<u", kitty(5)},
+		{"kitty two pushes and a pop", "\x1b[>5u\x1b[>1u\x1b[<u", kitty(5)},
 		{"kitty set", "\x1b[=3;1u", kitty(3)},
 		{"cursor fresh", "", cursorStyle(CursorVisualBlock, false)},
 		{"DECSCUSR 0", "\x1b[0 q", cursorStyle(CursorVisualBlock, false)},
