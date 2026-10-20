@@ -104,6 +104,7 @@ func TestSnapshotLeaveRestoresChangesWhileDetached(t *testing.T) {
 		{name: "scroll region, origin mode, pen, charset", before: "a", detached: "\x1b[3;6r\x1b[?6h\x1b[1;32mgreen\x1b(0"},
 		{name: "kitty flags set", before: "a", detached: "\x1b[=5;1u"},
 		{name: "modifyOtherKeys reset", before: "\x1b[>4;2ma", detached: "\x1b[>4;0m"},
+		{name: "protection reset", before: "\x1b[1\"qa", detached: "\x1b[0\"q"},
 		{name: "synchronized output open", before: "a", detached: "\x1b[?2026hframe"},
 		{name: "mouse modes on the alternate screen", before: "\x1b[?1049h\x1b[?1002h\x1b[?1006hmenu", detached: "\x1b[?1002l\x1b[?1003h"},
 		{name: "lines scrolled off", before: "a", detached: strings.Repeat("line\r\n", 12) + "end"},

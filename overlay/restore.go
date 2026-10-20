@@ -53,9 +53,9 @@ func promptChanges(k modeKey) bool {
 
 const (
 	// penReset clears what the formatter emits only when it differs from
-	// the default: the scroll region, SGR, an open hyperlink, the charsets
-	// and GL.
-	penReset = "\x1b[r\x1b[0m\x1b]8;;\x1b\\\x1b(B\x1b)B\x1b*B\x1b+B\x0f"
+	// the default: the scroll region, SGR, an open hyperlink, character
+	// protection (DECSCA), the charsets and GL.
+	penReset = "\x1b[r\x1b[0m\x1b]8;;\x1b\\\x1b[0\"q\x1b(B\x1b)B\x1b*B\x1b+B\x0f"
 	// keyboardReset is the snapshot's addition: the kitty keyboard flags
 	// and modifyOtherKeys, which the formatter also emits only when set.
 	// The raw leave must not write it, because its pop already restored
