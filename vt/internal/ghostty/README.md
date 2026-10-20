@@ -22,6 +22,7 @@ fails with `unsupported opcode (SIMD)`.
 |---|---|---|
 | `0001-formatter-content-none.patch` | Extras-only formatting (`content_none`) | not yet proposed |
 | `0002-formatter-origin-mode-without-modes.patch` | Cursor relative to the scroll region under DECOM without the modes extra | not yet proposed |
+| `0003-wasm-max-memory.patch` | `-Dwasm-max-memory` build option for the module's memory limit | not yet proposed |
 
 Delete a patch once an upstream commit includes it. Upstream's version of
 the origin-mode fix (23c7a3e5a) only applies when the output also restores
@@ -77,8 +78,16 @@ By hand:
 
 1. `go get -tool github.com/ncruces/wasm2go@<version>`
 2. `go generate ./vt/internal/ghostty/internal/wasmvt`
-3. Steps 2–5 above. If `limit.go` stops compiling, the generated code
-   renamed its memory-limit field: follow the rename.
+3. Steps 2–5 above. If `memory.go` stops compiling, the generated code
+   renamed its memory-limit constant: follow the rename.
+
+## Memory limit
+
+Each instance's linear memory is capped at 256 MiB (`vt.MemoryLimit`).
+Since v0.4.19, wasm2go turns the module's declared maximum memory into a
+constant, so the cap is set at link time: `build-wasm.sh` passes
+`-Dwasm-max-memory`, which patch 0003 adds. It can't differ per
+terminal. `TestMemoryLimitIsBuiltIn` fails on a module built without it.
 
 A dependency update that bumps wasm2go without step 2 fails
 `TestGeneratedCodeIsCurrent`.

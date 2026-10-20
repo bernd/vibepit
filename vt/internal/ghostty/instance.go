@@ -27,12 +27,9 @@ const (
 
 var zero8 [8]byte
 
-// Config configures NewInstance.
-type Config struct {
-	// MemoryLimitPages caps linear memory, in 64 KiB pages. Zero keeps the
-	// module's limit of 4 GiB.
-	MemoryLimitPages uint32
-}
+// MemoryLimit caps each instance's linear memory, in bytes. It is fixed
+// when the module is built.
+const MemoryLimit = wasmvt.MaxMemoryPages * 64 << 10
 
 // Instance is one module instance holding at most one terminal. It is not
 // safe for concurrent use.
@@ -49,13 +46,10 @@ type Instance struct {
 
 // NewInstance creates a module instance: about 65 µs, most of it copying
 // the data segment into fresh linear memory.
-func NewInstance(cfg Config) (*Instance, error) {
+func NewInstance() (*Instance, error) {
 	in := &Instance{}
 	if err := in.guard("wasmvt.New", func() { in.mod = wasmvt.New() }); err != nil {
 		return nil, err
-	}
-	if cfg.MemoryLimitPages > 0 {
-		in.mod.SetMemoryLimitPages(int64(cfg.MemoryLimitPages))
 	}
 	if err := in.init(); err != nil {
 		_ = in.Close()

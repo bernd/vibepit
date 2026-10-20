@@ -292,15 +292,14 @@ func TestConcurrentWriteAndFormat(t *testing.T) {
 // Hitting it is not an error for Write. A large Format then fails with
 // ErrOutOfMemory, which must not fail the terminal: a small Format still
 // works. vibed's scrollback replay (phase 2) relies on this to fall back.
-func TestMemoryLimitOption(t *testing.T) {
-	term := newTerminal(t, 200, 24,
-		vt.WithMemoryLimit(4<<20), vt.WithScrollbackLines(1<<20), vt.WithScrollbackBytes(1<<30))
+func TestMemoryLimit(t *testing.T) {
+	term := newTerminal(t, 200, 24, vt.WithScrollbackLines(1<<20), vt.WithScrollbackBytes(1<<30))
 	line := strings.Repeat("x", 190) + "\r\n"
-	_, err := term.Write([]byte(strings.Repeat(line, 50000)))
+	_, err := term.Write([]byte(strings.Repeat(line, 200000)))
 	require.NoError(t, err, "hitting the memory limit is not an error for Write")
 
 	_, err = term.Format(vt.FormatOptions{Region: vt.RegionScrollback})
-	require.ErrorIs(t, err, vt.ErrOutOfMemory, "about 1,600 rows of history don't fit")
+	require.ErrorIs(t, err, vt.ErrOutOfMemory, "the history doesn't fit twice")
 	assert.NotErrorIs(t, err, vt.ErrFailed)
 
 	write(t, term, "\x1b[2J\x1b[Hstill here")

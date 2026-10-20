@@ -30,7 +30,7 @@ func withScenarioTerm(tb testing.TB, fn func(in *Instance)) {
 // openTerm returns a terminal the caller must close.
 func openTerm(tb testing.TB, cols, rows uint16) *Instance {
 	tb.Helper()
-	in, err := NewInstance(Config{})
+	in, err := NewInstance()
 	require.NoError(tb, err)
 	if err := in.TerminalNew(cols, rows); err != nil {
 		_ = in.Close()

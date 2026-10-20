@@ -29,18 +29,21 @@ var (
 	errSize = errors.New("vt: terminal size must be at least 1x1")
 )
 
+// MemoryLimit caps each terminal's emulator memory. It is fixed when the
+// emulator is built. Past the cap, Write keeps working and the emulator
+// drops history instead of growing, but a Format whose output doesn't fit
+// fails with ErrOutOfMemory (a RegionScrollback of a long history, for
+// example). Keep WithScrollbackBytes well below it.
+const MemoryLimit = ghostty.MemoryLimit
+
 // Defaults for NewTerminal. The emulator's own defaults are not relied on.
 const (
-	DefaultMemoryLimit          = 256 << 20
 	DefaultScrollbackLines      = 1000
 	DefaultScrollbackBytes      = 32 << 20
 	DefaultContinuationMaxBytes = 64 << 10
 )
 
-const pageSize = 64 << 10
-
 type terminalConfig struct {
-	memoryLimit     uint64
 	scrollbackLines uint
 	scrollbackBytes uint
 	continuationMax uint
@@ -49,16 +52,6 @@ type terminalConfig struct {
 
 // TerminalOption configures NewTerminal.
 type TerminalOption func(*terminalConfig)
-
-// WithMemoryLimit caps the terminal's emulator memory, rounded up to 64 KiB.
-// Past the cap, Write keeps working and the emulator drops history instead
-// of growing, but a Format whose output doesn't fit fails with
-// ErrOutOfMemory (a RegionScrollback of a long history, for example). Keep
-// the cap well above WithScrollbackBytes. Zero means no cap below the
-// emulator's 4 GiB address space.
-func WithMemoryLimit(bytes uint64) TerminalOption {
-	return func(c *terminalConfig) { c.memoryLimit = bytes }
-}
 
 // WithScrollbackLines limits history to about n lines. The limit applies
 // per page of rows, so a little less may be kept.
@@ -99,7 +92,6 @@ func NewTerminal(cols, rows uint16, opts ...TerminalOption) (*Terminal, error) {
 		return nil, errSize
 	}
 	cfg := terminalConfig{
-		memoryLimit:     DefaultMemoryLimit,
 		scrollbackLines: DefaultScrollbackLines,
 		scrollbackBytes: DefaultScrollbackBytes,
 		continuationMax: DefaultContinuationMaxBytes,
@@ -107,8 +99,7 @@ func NewTerminal(cols, rows uint16, opts ...TerminalOption) (*Terminal, error) {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	pages := min((cfg.memoryLimit+pageSize-1)/pageSize, 65536)
-	in, err := ghostty.NewInstance(ghostty.Config{MemoryLimitPages: uint32(pages)})
+	in, err := ghostty.NewInstance()
 	if err != nil {
 		return nil, fmt.Errorf("vt: %w", err)
 	}

@@ -35,8 +35,10 @@ for p in "$here"/patches/*.patch; do
 done
 
 # ghostty enables simd128 on wasm unless a CPU is given, and wasm2go can't
-# translate SIMD instructions.
-(cd "$src" && zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Dcpu=generic -Doptimize=small)
+# translate SIMD instructions. wasm2go turns the maximum memory into a
+# constant, which is each terminal's memory limit (vt.MemoryLimit).
+(cd "$src" && zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Dcpu=generic -Doptimize=small \
+  -Dwasm-max-memory=$((256 << 20)))
 
 cp "$src/zig-out/bin/ghostty-vt.wasm" "$out/ghostty-vt.wasm"
 if command -v sha256sum >/dev/null; then

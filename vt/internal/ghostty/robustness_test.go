@@ -23,22 +23,30 @@ func FuzzVTWrite(f *testing.F) {
 	})
 }
 
+// build-wasm.sh sets the limit at link time. A module built without it
+// could grow to 4 GiB.
+func TestMemoryLimitIsBuiltIn(t *testing.T) {
+	assert.Equal(t, 256<<20, MemoryLimit, "rebuild with make ghostty-wasm")
+}
+
 // Hitting the memory limit must not trap or panic.
 func TestMemoryLimit(t *testing.T) {
-	const pages = 64
-	in, err := NewInstance(Config{MemoryLimitPages: pages})
-	require.NoError(t, err)
-	defer func() { _ = in.Close() }()
-	require.NoError(t, in.TerminalNew(200, 60))
+	in := newTerm(t, 200, 60)
 	require.NoError(t, in.TerminalSetPtr(OptScrollbackMaxBytes, 0), "no byte limit")
 	require.NoError(t, in.TerminalSetPtr(OptScrollbackMaxLines, 0), "no line limit")
 
+	// About 15 MiB of input fills the limit, up to the last page or so: a
+	// grow larger than the room left fails as a whole.
 	chunk := styledLines(1 << 20)
-	for range 32 {
+	for i := 0; in.MemorySize()+1<<20 < MemoryLimit; i++ {
+		require.Less(t, i, 64, "64 MiB of input didn't reach the limit")
 		require.NoError(t, in.VTWrite(chunk))
 	}
-	assert.LessOrEqual(t, in.MemorySize(), uint64(pages*64<<10))
-	_, err = in.FormatAlloc(FormatterOptions{Emit: FormatVT})
+	for range 8 {
+		require.NoError(t, in.VTWrite(chunk), "writes past the limit")
+	}
+	assert.LessOrEqual(t, in.MemorySize(), uint64(MemoryLimit))
+	_, err := in.FormatAlloc(FormatterOptions{Emit: FormatVT})
 	assert.NotErrorIs(t, err, ErrTrap)
 }
 

@@ -1612,3 +1612,9 @@ Moved from ghostty `7c40388` to `96a5131`, which needs Zig 0.17.
 - **VT output keeps trailing blank rows** (`bd1c9cc8c`) and steps over
   blank gaps with CUF (`152bdbc68`). A snapshot fills exactly the screen's
   rows, so it doesn't scroll.
+- **The memory limit is fixed at link time.** wasm2go v0.4.19 replaced
+  the module's `maxMem` field with a constant from the module's declared
+  maximum, so `wasmvt/limit.go` had nothing left to set. Patch 0003 adds
+  `-Dwasm-max-memory`, `build-wasm.sh` passes 256 MiB (the old default),
+  and `vt.WithMemoryLimit` is gone in favour of the constant
+  `vt.MemoryLimit`. Nothing overrode the default.

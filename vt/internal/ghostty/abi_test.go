@@ -12,7 +12,7 @@ import (
 // with the module's own description. A ghostty bump that changes one fails
 // here, not in production.
 func TestABIMatchesTypeJSON(t *testing.T) {
-	in, err := NewInstance(Config{})
+	in, err := NewInstance()
 	require.NoError(t, err)
 	defer func() { _ = in.Close() }()
 	raw, err := in.TypeJSON()
