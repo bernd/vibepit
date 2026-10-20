@@ -19,6 +19,13 @@ func (t *Terminal) detachAt(ctx context.Context) error {
 	if isClosed(t.in.Done()) {
 		return ErrClosed
 	}
+	select {
+	case <-t.aligned:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.done:
+		return ErrClosed
+	}
 	t.mu.Lock()
 	switch {
 	case t.isDone():

@@ -83,6 +83,7 @@ type Terminal struct {
 	sessionIn *sessionInput
 	profile   colorprofile.Profile
 	done      chan struct{} // closed when Run returns
+	aligned   chan struct{} // closed when align is done
 
 	showMu sync.Mutex // one Show at a time; finish takes it to wait for one
 	// resizeMu orders whole resizes and repaint nudges, so the shadow and
@@ -149,6 +150,7 @@ func New(cfg Config) *Terminal {
 		cfg:      cfg,
 		timing:   defaultTiming,
 		done:     make(chan struct{}),
+		aligned:  make(chan struct{}),
 		snapshot: snapshotLeave,
 	}
 	t.profile = colorprofile.Detect(cfg.Stdout, cfg.Environ)
@@ -235,9 +237,11 @@ func (t *Terminal) finish() {
 // output: the session starts wherever the host left the cursor, the shadow
 // at its top left, and the raw leave restores the cursor by absolute
 // position. Lines above the session stay blank in the shadow. Without a
-// reply the leave restores from the shadow instead. It holds t.mu while
-// waiting, so a Show can't cut before the shadow is aligned.
+// reply the leave restores from the shadow instead. A Show waits for it:
+// a cut before it would take the cursor from an unaligned shadow, and the
+// position reply would reach the prompt as a key.
 func (t *Terminal) align(ctx context.Context) {
+	defer close(t.aligned)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.shadowErr != nil {

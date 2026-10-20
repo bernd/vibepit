@@ -39,6 +39,7 @@ type harnessConfig struct {
 	onResize func(cols, rows int)
 	gate     chan struct{}
 	host     string
+	runLater bool
 }
 
 type harnessOption func(*harnessConfig)
@@ -58,6 +59,9 @@ func hostOutput(s string) harnessOption { return func(c *harnessConfig) { c.host
 func withoutShadow() harnessOption { return func(c *harnessConfig) { c.noShadow = true } }
 
 func withTiming(f func(*timing)) harnessOption { return func(c *harnessConfig) { f(&c.timing) } }
+
+// runLater leaves starting Run to startRun.
+func runLater() harnessOption { return func(c *harnessConfig) { c.runLater = true } }
 
 // stalledSessionInput makes the session stop reading its input until
 // gate is closed.
@@ -183,12 +187,18 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 	h.term.timing = hc.timing
 	// stdoutWriter isn't a TTY, so detection would find no colours.
 	h.term.profile = colorprofile.ANSI256
+	if !hc.runLater {
+		h.startRun()
+	}
+	t.Cleanup(h.stop)
+	return h
+}
+
+func (h *harness) startRun() {
 	go func() {
 		h.err = h.term.Run(context.Background())
 		close(h.done)
 	}()
-	t.Cleanup(h.stop)
-	return h
 }
 
 // stdoutWriter records what reaches the real terminal and feeds the

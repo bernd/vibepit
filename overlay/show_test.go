@@ -308,6 +308,22 @@ func TestShowLeaveIsAtomic(t *testing.T) {
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
 
+// A Show that comes before Run aligned the shadow waits for it. Cutting
+// first would send the alignment's position query during the prompt, and
+// its reply would reach the prompt as a key (F3).
+func TestShowWaitsForTheAlignment(t *testing.T) {
+	h := newHarness(t, 20, 6, runLater())
+	done := h.show(context.Background(), promptModel)
+	time.Sleep(20 * time.Millisecond)
+	h.startRun()
+	h.waitScreen("PROMPT")
+	h.keys("x")
+	require.NoError(t, h.result(done))
+	out := h.stdout.String()
+	require.Contains(t, out, positionQuery)
+	assert.Less(t, strings.Index(out, positionQuery), strings.Index(out, barrierQuery), "aligned before the cut")
+}
+
 func TestShowWaitsForAnEarlierShow(t *testing.T) {
 	h := newHarness(t, 20, 6)
 	first := h.show(context.Background(), keyModel{text: "FIRST"})
