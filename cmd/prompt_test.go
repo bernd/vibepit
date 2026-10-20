@@ -86,7 +86,8 @@ func TestBlockWatcher_Next(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var bw blockWatcher
 			for i, batch := range tt.batches {
-				got := bw.Next(batch)
+				got, err := bw.Next(batch)
+				require.NoError(t, err)
 				var vals []string
 				for _, e := range got {
 					vals = append(vals, e.Target().String())
@@ -98,20 +99,46 @@ func TestBlockWatcher_Next(t *testing.T) {
 	}
 }
 
+// next is Next for a batch that must not reach the target limit.
+func next(t *testing.T, bw *blockWatcher, batch ...proxy.LogEntry) []proxy.LogEntry {
+	t.Helper()
+	fresh, err := bw.Next(batch)
+	require.NoError(t, err)
+	return fresh
+}
+
 func TestBlockWatcher_Retry(t *testing.T) {
 	var bw blockWatcher
 	e := proxy.LogEntry{ID: 1, Source: proxy.SourceProxy, Domain: "b.com", Port: "443", Action: proxy.ActionBlock}
-	require.Len(t, bw.Next([]proxy.LogEntry{e}), 1)
+	require.Len(t, next(t, &bw, e), 1)
 	e.ID++
-	assert.Empty(t, bw.Next([]proxy.LogEntry{e}))
+	assert.Empty(t, next(t, &bw, e))
 	for i := 1; i < maxPromptTries; i++ {
 		bw.Retry(e.Target())
 		e.ID++
-		assert.Len(t, bw.Next([]proxy.LogEntry{e}), 1, "try %d: a retried target prompts again", i+1)
+		assert.Len(t, next(t, &bw, e), 1, "try %d: a retried target prompts again", i+1)
 	}
 	bw.Retry(e.Target())
 	e.ID++
-	assert.Empty(t, bw.Next([]proxy.LogEntry{e}), "no more tries")
+	assert.Empty(t, next(t, &bw, e), "no more tries")
+}
+
+func TestBlockWatcher_LimitsTargets(t *testing.T) {
+	var bw blockWatcher
+	block := func(i int) proxy.LogEntry {
+		return proxy.LogEntry{ID: uint64(i + 1), Source: proxy.SourceProxy, Domain: fmt.Sprintf("d%d.com", i), Port: "443", Action: proxy.ActionBlock}
+	}
+	var batch []proxy.LogEntry
+	for i := range maxPromptTargets {
+		batch = append(batch, block(i))
+	}
+	require.Len(t, next(t, &bw, batch...), maxPromptTargets)
+	bw.Forget(batch[0].Target())
+	assert.Len(t, next(t, &bw, batch[0]), 1, "a known target is asked about again")
+
+	fresh, err := bw.Next([]proxy.LogEntry{block(maxPromptTargets)})
+	assert.ErrorIs(t, err, errTooManyTargets, "a forgotten target still counts")
+	assert.Empty(t, fresh)
 }
 
 func TestRunBlockPrompter(t *testing.T) {
@@ -232,6 +259,27 @@ func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunBlockPrompter_StopsWhenPromptsAreUnavailable(t *testing.T) {
+	tp := newTestProxy(t)
+	prompted := make(chan proxy.LogEntry, 10)
+	done := make(chan error, 1)
+	go func() {
+		done <- runBlockPrompter(t.Context(), tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
+			prompted <- e
+			return fmt.Errorf("show: %w", overlay.ErrUnavailable)
+		})
+	}()
+	time.Sleep(20 * time.Millisecond)
+	tp.log.Add(proxy.LogEntry{Domain: "a.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, overlay.ErrUnavailable)
+	case <-time.After(time.Second):
+		require.FailNow(t, "the poller kept polling")
+	}
+	assert.Len(t, prompted, 1)
 }
 
 func TestRunBlockPrompter_BurstPastTail(t *testing.T) {

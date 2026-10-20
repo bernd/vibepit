@@ -30,21 +30,34 @@ type promptFunc func(ctx context.Context, entry proxy.LogEntry) error
 // been surfaced, so each domain:port triggers at most one prompt per session
 // even though the agent typically retries a blocked request many times.
 type blockWatcher struct {
-	cursor uint64
-	seen   map[proxy.Target]bool
-	tries  map[proxy.Target]int // failed prompts per target
+	cursor  uint64
+	targets map[proxy.Target]targetState
 }
 
-// maxPromptTries bounds how often a target is asked about when its prompt
-// fails, so a prompt that always fails doesn't come back at every block.
-// Barrier timeouts don't count, see runBlockPrompter.
-const maxPromptTries = 5
+type targetState struct {
+	asked bool // prompted already; not asked about again
+	tries int  // failed prompts
+}
+
+const (
+	// maxPromptTries bounds how often a target is asked about when its
+	// prompt fails, so a prompt that always fails doesn't come back at
+	// every block. Barrier timeouts don't count, see runBlockPrompter.
+	maxPromptTries = 5
+	// maxPromptTargets bounds the targets a session tracks. The sandbox
+	// picks their names, so past it prompting stops rather than holding
+	// more: the targets stay blocked, as without --prompt.
+	maxPromptTargets = 1000
+)
+
+var errTooManyTargets = fmt.Errorf("more than %d blocked targets, no more prompts in this session", maxPromptTargets)
 
 // Next returns the entries in batch that allowing would unblock and that
-// have not been seen before, and advances the cursor past the batch.
-func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
-	if bw.seen == nil {
-		bw.seen = make(map[proxy.Target]bool)
+// have not been seen before, and advances the cursor past the batch. It
+// fails with errTooManyTargets at a target past maxPromptTargets.
+func (bw *blockWatcher) Next(batch []proxy.LogEntry) ([]proxy.LogEntry, error) {
+	if bw.targets == nil {
+		bw.targets = make(map[proxy.Target]targetState)
 	}
 	var fresh []proxy.LogEntry
 	for _, e := range batch {
@@ -53,37 +66,48 @@ func (bw *blockWatcher) Next(batch []proxy.LogEntry) []proxy.LogEntry {
 			continue
 		}
 		key := e.Target()
-		if bw.seen[key] {
+		st, known := bw.targets[key]
+		if !known && len(bw.targets) >= maxPromptTargets {
+			return fresh, errTooManyTargets
+		}
+		if st.asked {
 			continue
 		}
-		bw.seen[key] = true
+		st.asked = true
+		bw.targets[key] = st
 		fresh = append(fresh, e)
 	}
-	return fresh
+	return fresh, nil
 }
 
-// Forget lets target prompt again on its next block.
+// Forget lets target prompt again on its next block. It still counts
+// toward maxPromptTargets.
 func (bw *blockWatcher) Forget(target proxy.Target) {
-	delete(bw.seen, target)
+	if st, ok := bw.targets[target]; ok {
+		st.asked = false
+		bw.targets[target] = st
+	}
 }
 
 // Retry lets target prompt again on its next block after a failed prompt,
 // until it failed maxPromptTries times.
 func (bw *blockWatcher) Retry(target proxy.Target) {
-	if bw.tries == nil {
-		bw.tries = make(map[proxy.Target]int)
+	st, ok := bw.targets[target]
+	if !ok {
+		return
 	}
-	bw.tries[target]++
-	if bw.tries[target] < maxPromptTries {
-		bw.Forget(target)
-	}
+	st.tries++
+	st.asked = st.tries >= maxPromptTries
+	bw.targets[target] = st
 }
 
 // runBlockPrompter polls the control API for new blocked requests and calls
 // prompt for each unseen target, one at a time, until ctx is done. Poll
 // errors are retried on the next tick; prompt failures are for the prompt
-// function to report, see loggedPrompt.
-func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.Duration, prompt promptFunc) {
+// function to report, see loggedPrompt. It returns early, with the reason,
+// once no more prompts can be shown: they are unavailable, or too many
+// targets were blocked.
+func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.Duration, prompt promptFunc) error {
 	var bw blockWatcher
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -101,7 +125,7 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 		}
 	}
@@ -109,23 +133,26 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 		}
 		entries, err := client.LogsAfter(bw.cursor)
 		if err != nil {
 			continue
 		}
-		for _, e := range bw.Next(entries) {
+		fresh, limitErr := bw.Next(entries)
+		for _, e := range fresh {
 			// Another client may have decided already. A failed check, e.g. an
 			// older proxy without /check, falls back to prompting.
 			if res, err := client.Check(e); err == nil && res.Decided() {
 				continue
 			}
 			// A failed prompt may not have been seen: ask again on the next
-			// block. Without a shadow no prompt can be shown.
+			// block. Without a shadow no prompt can be shown, now or later.
 			switch err := prompt(ctx, e); {
-			case err == nil, errors.Is(err, overlay.ErrUnavailable):
+			case err == nil:
+			case errors.Is(err, overlay.ErrUnavailable):
+				return err
 			case errors.Is(err, overlay.ErrBarrierTimeout):
 				// Nothing was shown, and it isn't the prompt's fault: after two
 				// timeouts in a row the terminal takes input after a pause in
@@ -135,6 +162,9 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 				bw.Retry(e.Target())
 			}
 		}
+		if limitErr != nil {
+			return limitErr
+		}
 	}
 }
 
@@ -142,15 +172,19 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 // restore the screen.
 const prompterStopGrace = 3 * time.Second
 
-// startPrompterLoop runs runBlockPrompter in the background. The returned
-// stop function cancels it and waits, up to prompterStopGrace, for it to
-// return, so an open prompt is closed before the CLI exits.
-func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc) func() {
+// startPrompterLoop runs runBlockPrompter in the background and notes why
+// it stopped early to logf. The returned stop function cancels it and waits,
+// up to prompterStopGrace, for it to return, so an open prompt is closed
+// before the CLI exits.
+func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc, logf func(format string, args ...any)) func() {
 	pctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runBlockPrompter(pctx, cc, pollInterval, prompt)
+		// loggedPrompt noted the prompt that found prompts unavailable.
+		if err := runBlockPrompter(pctx, cc, pollInterval, prompt); err != nil && !errors.Is(err, overlay.ErrUnavailable) {
+			logf("prompts stopped: %v", err)
+		}
 	}()
 	return func() {
 		cancel()
@@ -213,7 +247,7 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
 			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, entry)))
 		}
-		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show))
+		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show), notes.Printf)
 	}
 	return &blockPrompter{
 		hooks: ctr.TerminalHooks{OnTerminal: onTerminal, Logf: notes.Printf},
