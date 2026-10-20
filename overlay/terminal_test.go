@@ -128,6 +128,51 @@ func TestAStalledSessionInputNeverStallsOutput(t *testing.T) {
 	h.waitSessionInput("k\x1b[1;1R")
 }
 
+func TestAStalledSessionInputNeverStallsThePrompt(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	h := newHarness(t, 20, 5, stalledSessionInput(gate))
+	t.Cleanup(release)
+	<-h.term.aligned
+	// A paste the session doesn't read makes the stdin pump wait for it.
+	paste := strings.Repeat("p", 4*sessionInputRoom)
+	h.keys(paste)
+	unread := func() int {
+		h.stdin.mu.Lock()
+		defer h.stdin.mu.Unlock()
+		return len(h.stdin.buf)
+	}
+	require.Eventually(t, func() bool {
+		n := unread()
+		time.Sleep(10 * time.Millisecond)
+		return n > 0 && n == unread()
+	}, 5*time.Second, time.Millisecond, "the stdin pump never waited")
+	h.prompt(nil)
+	assert.Empty(t, h.logs.String())
+	release()
+	h.waitSessionInput(paste)
+}
+
+func TestAStalledSessionInputFailsTheHandoffRatherThanLoseInput(t *testing.T) {
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	h := newHarness(t, 20, 5, stalledSessionInput(gate))
+	t.Cleanup(release)
+	<-h.term.aligned
+	// More than the queue holds besides a write in flight.
+	paste := strings.Repeat("p", sessionInputMax+2*sessionInputRoom)
+	h.keys(paste)
+	require.ErrorIs(t, h.result(h.show(context.Background(), promptModel)), ErrSessionBusy)
+	assert.NotContains(t, screenText(h.real), "PROMPT", "nothing was drawn")
+	release()
+	h.waitSessionInput(paste)
+	h.prompt(nil)
+	h.waitSessionInput(paste)
+	h.locked(func(t2 *Terminal) { assert.Zero(t, t2.barrierTimeouts) })
+}
+
 func TestStdinEOFClosesTheSessionInputAfterQueuedKeys(t *testing.T) {
 	gate := make(chan struct{})
 	var once sync.Once

@@ -82,22 +82,45 @@ func TestSessionInput(t *testing.T) {
 		c, w := newStalledInput(t)
 		_, err := c.Write([]byte(strings.Repeat("k", sessionInputRoom)))
 		require.NoError(t, err)
-		running, done := blocked(c.waitRoom)
+		running, done := blocked(func() { c.waitRoom(sessionInputRoom, nil) })
 		assert.True(t, running(), "a full queue makes stdin wait")
 		close(w.gate)
 		<-done
 	})
 
-	t.Run("drops past the max", func(t *testing.T) {
+	t.Run("stop ends the wait", func(t *testing.T) {
+		c, w := newStalledInput(t)
+		_, err := c.Write([]byte(strings.Repeat("k", sessionInputRoom)))
+		require.NoError(t, err)
+		stop := make(chan struct{})
+		running, done := blocked(func() { c.waitRoom(sessionInputRoom, stop) })
+		require.True(t, running())
+		close(stop)
+		<-done
+		close(w.gate)
+		require.Eventually(t, func() bool { return len(w.out.String()) == 1+sessionInputRoom }, 5*time.Second, time.Millisecond,
+			"the queue is kept")
+	})
+
+	t.Run("drops answers past the max", func(t *testing.T) {
 		c, w := newStalledInput(t)
 		_, err := c.Write([]byte(strings.Repeat("a", sessionInputMax)))
 		require.NoError(t, err)
-		n, err := c.Write([]byte("y"))
-		require.NoError(t, err)
-		assert.Equal(t, 1, n)
+		c.writeAnswers([]byte("y"))
 		close(w.gate)
 		require.Eventually(t, func() bool { return len(w.out.String()) == 1+sessionInputMax }, 5*time.Second, time.Millisecond)
 		assert.NotContains(t, w.out.String(), "y")
+	})
+
+	t.Run("keeps stdin past the max", func(t *testing.T) {
+		c, w := newStalledInput(t)
+		_, err := c.Write([]byte(strings.Repeat("a", sessionInputMax)))
+		require.NoError(t, err)
+		_, err = c.Write([]byte("y"))
+		require.NoError(t, err)
+		close(w.gate)
+		require.Eventually(t, func() bool { return len(w.out.String()) == 2+sessionInputMax }, 5*time.Second, time.Millisecond)
+		assert.True(t, strings.HasSuffix(w.out.String(), "y"))
 	})
 
 	t.Run("flush waits for a write in flight", func(t *testing.T) {
@@ -113,7 +136,7 @@ func TestSessionInput(t *testing.T) {
 		c, _ := newStalledInput(t)
 		_, err := c.Write([]byte(strings.Repeat("k", sessionInputRoom)))
 		require.NoError(t, err)
-		running, done := blocked(c.waitRoom)
+		running, done := blocked(func() { c.waitRoom(sessionInputRoom, nil) })
 		require.True(t, running())
 		c.close()
 		<-done

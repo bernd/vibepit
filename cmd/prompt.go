@@ -153,10 +153,11 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 			case err == nil:
 			case errors.Is(err, overlay.ErrUnavailable):
 				return err
-			case errors.Is(err, overlay.ErrBarrierTimeout):
+			case errors.Is(err, overlay.ErrBarrierTimeout), errors.Is(err, overlay.ErrSessionBusy):
 				// Nothing was shown, and it isn't the prompt's fault: after two
 				// timeouts in a row the terminal takes input after a pause in
-				// typing, which can't time out.
+				// typing, which can't time out, and a busy session reads its
+				// input again.
 				bw.Forget(e.Target())
 			default:
 				bw.Retry(e.Target())

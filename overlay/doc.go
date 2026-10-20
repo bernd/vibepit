@@ -62,6 +62,11 @@ var (
 	// ErrBarrierTimeout means the terminal didn't answer the barrier query
 	// in time. Nothing was drawn.
 	ErrBarrierTimeout = errors.New("overlay: terminal did not answer the barrier query")
+	// ErrSessionBusy means the session stopped reading its input and the
+	// input queued for it before the barrier reply filled the queue. The
+	// handoff gave up rather than drop the session's input. Nothing was
+	// drawn.
+	ErrSessionBusy = errors.New("overlay: the session isn't reading its input")
 	// ErrClosed means the session's input or output has ended.
 	ErrClosed = errors.New("overlay: session ended")
 )

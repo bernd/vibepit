@@ -394,7 +394,7 @@ func (t *Terminal) flushAnswersLocked() {
 	}
 	switch {
 	case t.cut != nil:
-		_, _ = t.sessionIn.Write(t.answers)
+		t.sessionIn.writeAnswers(t.answers)
 		t.answered = true
 	case !t.barrierUnsupportedLocked():
 		if n := bytes.Count(t.answers, []byte(barrierReply)); n > 0 {

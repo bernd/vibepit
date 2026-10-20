@@ -39,7 +39,14 @@ type inputMux struct {
 
 	mu   sync.Mutex
 	mode inputMode
-	held int // leading bytes of barrierReply seen and not routed yet
+	// changed is closed and replaced at every change of mode, so the stdin
+	// pump waits for the session with the mode's limit.
+	changed chan struct{}
+	// stalled is closed when the stdin pump has to wait for the session
+	// before the handoff. The input before the barrier reply is the
+	// session's, so the handoff fails instead of dropping it.
+	stalled chan struct{}
+	held    int // leading bytes of barrierReply seen and not routed yet
 	// owed counts the app's DSR 5n queries the terminal hasn't answered.
 	// Their replies come before the barrier's and are the app's.
 	owed      int
@@ -74,7 +81,7 @@ var errPositionTimeout = errors.New("overlay: terminal did not answer the cursor
 
 // newInputMux routes src to session until a prompt takes the input.
 func newInputMux(src io.Reader, session io.Writer) *inputMux {
-	return &inputMux{src: src, session: session, done: make(chan struct{})}
+	return &inputMux{src: src, session: session, done: make(chan struct{}), changed: make(chan struct{})}
 }
 
 // Done is closed when stdin has ended.
@@ -160,15 +167,72 @@ func (m *inputMux) route(p []byte) bool {
 }
 
 // roomWaiter is a session input that queues writes instead of blocking.
-type roomWaiter interface{ waitRoom() }
+type roomWaiter interface {
+	hasRoom(limit int) bool
+	waitRoom(limit int, stop <-chan struct{})
+}
 
 // waitSession is the stdin pump's backpressure: it waits, outside the
-// lock, until a queueing session input has room. The prompt's input
-// never waits for the session.
+// lock, until a queueing session input has room. The prompt's input never
+// waits for the session. While the handoff waits for the barrier reply
+// the limit is the queue's size, so the reply is read even when the
+// session stopped reading; a full queue fails the handoff instead. The
+// session's input is never dropped.
 func (m *inputMux) waitSession() {
-	if w, ok := m.session.(roomWaiter); ok {
-		w.waitRoom()
+	w, ok := m.session.(roomWaiter)
+	if !ok {
+		return
 	}
+	var waited time.Duration
+	for {
+		m.mu.Lock()
+		limit := sessionInputRoom
+		switch m.mode {
+		case toPrompt:
+			limit = 0
+		case draining:
+			limit = sessionInputMax
+		}
+		if limit == 0 || w.hasRoom(limit) {
+			m.mu.Unlock()
+			break
+		}
+		if m.mode == draining && !isClosed(m.stalled) {
+			close(m.stalled)
+		}
+		changed := m.changed
+		m.mu.Unlock()
+		start := time.Now()
+		w.waitRoom(limit, changed)
+		waited += time.Since(start)
+	}
+	if waited > 0 {
+		m.discount(waited)
+	}
+}
+
+// discount keeps time the stdin pump waited for the session out of the
+// late reply windows: replies held up in stdin meanwhile aren't late.
+func (m *inputMux) discount(waited time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.lateSent) > 0 {
+		for i := range m.lateSent {
+			m.lateSent[i] = m.lateSent[i].Add(waited)
+		}
+		m.stripUntil = m.stripUntil.Add(waited)
+	}
+	if m.pos != nil && !m.pos.until.IsZero() {
+		m.pos.until = m.pos.until.Add(waited)
+	}
+}
+
+// setModeLocked changes the input's owner and wakes the stdin pump's wait
+// for the session.
+func (m *inputMux) setModeLocked(mode inputMode) {
+	m.mode = mode
+	close(m.changed)
+	m.changed = make(chan struct{})
 }
 
 // reply handles a complete CSI 0n. Terminals answer in order, but the
@@ -188,7 +252,7 @@ func (m *inputMux) reply(now time.Time) {
 	case m.mode == draining:
 		// The handoff: the terminal answers in order, so every reply it
 		// owed the app has already gone to the session.
-		m.mode = toPrompt
+		m.setModeLocked(toPrompt)
 		close(m.barrier)
 	default:
 		// A DSR 5n reply the app's count missed. The prompt's queries are
@@ -264,7 +328,8 @@ func (m *inputMux) ExpectAppReplies(n int) {
 func (m *inputMux) Drain() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.mode = draining
+	m.setModeLocked(draining)
+	m.stalled = make(chan struct{})
 	m.held = 0
 	m.drainedAt = time.Now()
 	m.prompt = newBufPipe(promptInputMax)
@@ -272,12 +337,13 @@ func (m *inputMux) Drain() {
 }
 
 // AwaitBarrier is the handoff: it waits for the barrier reply and returns the
-// prompt's input. It fails with ErrBarrierTimeout after timeout.
+// prompt's input. It fails with ErrBarrierTimeout after timeout, and with
+// ErrSessionBusy when the session's input before the reply fills its queue.
 func (m *inputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.Reader, error) {
 	m.mu.Lock()
-	barrier, prompt := m.barrier, m.prompt
+	barrier, prompt, stalled := m.barrier, m.prompt, m.stalled
 	m.mu.Unlock()
-	if err := m.await(ctx, barrier, timeout, ErrBarrierTimeout); err != nil {
+	if err := m.await(ctx, barrier, timeout, ErrBarrierTimeout, stalled); err != nil {
 		if errors.Is(err, ErrBarrierTimeout) {
 			// The terminal may not answer DSR 5n at all.
 			m.mu.Lock()
@@ -290,9 +356,10 @@ func (m *inputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.
 }
 
 // await waits until reply is closed, or fails with timeoutErr after
-// timeout, with ctx, or at the end of stdin. A reply that won the race
-// against the failure still counts.
-func (m *inputMux) await(ctx context.Context, reply <-chan struct{}, timeout time.Duration, timeoutErr error) error {
+// timeout, with ctx, at the end of stdin, or with ErrSessionBusy when
+// stalled is closed. A reply that won the race against the failure still
+// counts.
+func (m *inputMux) await(ctx context.Context, reply <-chan struct{}, timeout time.Duration, timeoutErr error, stalled <-chan struct{}) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	var err error
@@ -301,6 +368,8 @@ func (m *inputMux) await(ctx context.Context, reply <-chan struct{}, timeout tim
 		return nil
 	case <-timer.C:
 		err = timeoutErr
+	case <-stalled:
+		err = ErrSessionBusy
 	case <-ctx.Done():
 		err = ctx.Err()
 	case <-m.done:
@@ -316,15 +385,21 @@ func (m *inputMux) await(ctx context.Context, reply <-chan struct{}, timeout tim
 // query: input moves to the prompt after quiet without input, or after
 // limit, so typing that never pauses can't hold the prompt back. Mouse and
 // focus reports don't count as input: the terminal sends them while the
-// mouse moves. A reply or key in flight may land on the wrong side.
+// mouse moves. A reply or key in flight may land on the wrong side. Like
+// AwaitBarrier it fails with ErrSessionBusy: unread stdin isn't silence.
 func (m *inputMux) AwaitSilence(ctx context.Context, quiet, limit time.Duration) (io.Reader, error) {
 	deadline := time.Now().Add(limit)
 	for {
 		m.mu.Lock()
+		stalled := m.stalled
+		if isClosed(stalled) {
+			m.mu.Unlock()
+			return nil, ErrSessionBusy
+		}
 		wait := min(quiet-time.Since(m.lastInput), time.Until(deadline))
 		if wait <= 0 {
 			m.flushHeldLocked()
-			m.mode = toPrompt
+			m.setModeLocked(toPrompt)
 			p := m.prompt
 			m.mu.Unlock()
 			return p, nil
@@ -333,6 +408,8 @@ func (m *inputMux) AwaitSilence(ctx context.Context, quiet, limit time.Duration)
 		timer := time.NewTimer(wait)
 		select {
 		case <-timer.C:
+		case <-stalled:
+			timer.Stop()
 		case <-ctx.Done():
 			timer.Stop()
 			return nil, ctx.Err()
@@ -354,7 +431,7 @@ func (m *inputMux) Release(strip time.Duration, focusReports bool, leave func())
 	leave()
 	pending := m.mode == draining
 	m.flushHeldLocked()
-	m.mode = toSession
+	m.setModeLocked(toSession)
 	if focusReports && m.promptFocus != 0 && m.promptFocus != m.appFocus {
 		m.write([]byte{0x1b, '[', m.promptFocus})
 	}
@@ -388,7 +465,7 @@ func (m *inputMux) AwaitPosition(ctx context.Context, timeout, strip time.Durati
 	if w == nil {
 		return 0, 0, errPositionTimeout
 	}
-	err := m.await(ctx, w.reply, timeout, errPositionTimeout)
+	err := m.await(ctx, w.reply, timeout, errPositionTimeout, nil)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Checked again under the lock: the reply may have come since.

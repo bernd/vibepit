@@ -12,8 +12,9 @@ import (
 // Show runs model over the session and restores the screen afterwards. It
 // waits for an earlier Show to finish. It returns ErrUnavailable when the
 // session has no working shadow, ErrBarrierTimeout when the terminal
-// didn't confirm the input switch (nothing was drawn), and ErrClosed when
-// the session ends first. After the detach every path restores the screen,
+// didn't confirm the input switch, ErrSessionBusy when the session
+// stopped reading its input before the switch (nothing was drawn in
+// either case), and ErrClosed when the session ends first. After the detach every path restores the screen,
 // also when the program fails.
 func (t *Terminal) Show(ctx context.Context, model tea.Model) error {
 	t.showMu.Lock()

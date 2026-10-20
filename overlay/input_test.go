@@ -459,3 +459,65 @@ func TestInputMuxPositionEOF(t *testing.T) {
 	_, _, err := h.mux.AwaitPosition(context.Background(), time.Second, time.Second)
 	require.ErrorIs(t, err, ErrClosed)
 }
+
+func TestInputMuxHandoffPastAStalledSession(t *testing.T) {
+	c, w := newStalledInput(t)
+	src := newChunkReader()
+	mux := newInputMux(src, c)
+	go func() { _ = mux.Run() }()
+	t.Cleanup(src.close)
+
+	// A paste fills the queue of a session that stopped reading, so the
+	// stdin pump waits for room.
+	paste := strings.Repeat("p", sessionInputRoom)
+	pasted := make(chan bool, 1)
+	go func() { pasted <- src.push(paste) }()
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.buf) >= sessionInputRoom
+	}, 5*time.Second, time.Millisecond)
+
+	mux.Drain()
+	src.send(t, barrierReply)
+	in, err := mux.AwaitBarrier(context.Background(), time.Second)
+	require.NoError(t, err, "the handoff stops the wait for the session")
+	require.True(t, <-pasted)
+	src.send(t, "q")
+	assert.Equal(t, "q", readN(t, in, 1), "the prompt gets its keys")
+	mux.Release(0, false, func() {})
+
+	close(w.gate)
+	src.send(t, "after")
+	require.Eventually(t, func() bool { return w.out.String() == "x"+paste+"after" }, 5*time.Second, time.Millisecond,
+		"the queued paste reaches the session in order")
+}
+
+func TestInputMuxHandoffFailsRatherThanDropSessionInput(t *testing.T) {
+	c, w := newStalledInput(t)
+	src := newChunkReader()
+	mux := newInputMux(src, c)
+	go func() { _ = mux.Run() }()
+	t.Cleanup(src.close)
+
+	// More than the queue holds comes before the barrier reply, all of it
+	// the session's.
+	paste := strings.Repeat("p", sessionInputMax+8<<10)
+	mux.Drain()
+	sent := make(chan bool, 1)
+	go func() { sent <- src.push(paste) && src.push(barrierReply) && src.push("after") }()
+	_, err := mux.AwaitBarrier(context.Background(), 5*time.Second)
+	require.ErrorIs(t, err, ErrSessionBusy, "fails at once, without a barrier timeout")
+	const strip = 50 * time.Millisecond
+	mux.Release(strip, false, func() {})
+
+	// The stall outlasts the strip window: waiting for the session doesn't
+	// count against it.
+	time.Sleep(4 * strip)
+	close(w.gate)
+	require.True(t, <-sent)
+	require.Eventually(t, func() bool { return w.out.String() == "x"+paste+"after" }, 5*time.Second, time.Millisecond,
+		"the session gets all its input and not the barrier reply")
+	_, late := mux.TakeLateReply()
+	assert.True(t, late)
+}

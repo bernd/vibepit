@@ -156,7 +156,7 @@ func newHarness(t *testing.T, cols, rows int, opts ...harnessOption) *harness {
 	}
 	h := &harness{
 		t:         t,
-		stdin:     newBufPipe(1 << 20),
+		stdin:     newBufPipe(2 * sessionInputMax),
 		out:       newChunkReader(),
 		sessionIn: &syncBuffer{},
 		stdout:    &syncBuffer{},

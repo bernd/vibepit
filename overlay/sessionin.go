@@ -9,8 +9,9 @@ const (
 	// sessionInputRoom is how much queued input makes the stdin pump wait
 	// for the session: the backpressure a plain copy would have.
 	sessionInputRoom = 64 << 10
-	// sessionInputMax bounds the queue. Stdin waits long before it, so
-	// only the shadow's answers to an app that stopped reading reach it.
+	// sessionInputMax bounds the queue. Past it the shadow's answers are
+	// dropped. Stdin is never dropped: its pump waits for room, at
+	// sessionInputMax only while the handoff waits for the barrier reply.
 	sessionInputMax = 4 << 20
 )
 
@@ -36,14 +37,25 @@ func newSessionInput(w io.Writer) *sessionInput {
 	return c
 }
 
-// Write queues p and never blocks. Past sessionInputMax, p is dropped.
+// Write queues stdin's p and never blocks or drops it: the stdin pump
+// bounds the queue by waiting for room before it reads more.
 func (c *sessionInput) Write(p []byte) (int, error) {
+	return c.queue(p, false)
+}
+
+// writeAnswers queues the shadow's answers and never blocks. Past
+// sessionInputMax they are dropped.
+func (c *sessionInput) writeAnswers(p []byte) {
+	_, _ = c.queue(p, true)
+}
+
+func (c *sessionInput) queue(p []byte, bounded bool) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return 0, io.ErrClosedPipe
 	}
-	if !c.failed && len(c.buf)+len(p) <= sessionInputMax {
+	if !c.failed && (!bounded || len(c.buf)+len(p) <= sessionInputMax) {
 		c.buf = append(c.buf, p...)
 		c.cond.Broadcast()
 	}
@@ -79,14 +91,42 @@ func (c *sessionInput) run() {
 	}
 }
 
-// waitRoom blocks while the queue holds sessionInputRoom or more. Callers
-// must not hold a lock.
-func (c *sessionInput) waitRoom() {
+// hasRoom tells whether the queue holds less than limit.
+func (c *sessionInput) hasRoom(limit int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for len(c.buf) >= sessionInputRoom && !c.failed && !c.closed {
+	return c.roomLocked(limit)
+}
+
+// waitRoom blocks until the queue holds less than limit or stop is closed.
+// Callers must not hold a lock.
+func (c *sessionInput) waitRoom(limit int, stop <-chan struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.roomLocked(limit) {
+		return
+	}
+	// The cond can't wait on a channel: wake it when stop closes.
+	waited := make(chan struct{})
+	defer close(waited)
+	go func() {
+		select {
+		case <-stop:
+			c.mu.Lock()
+			c.cond.Broadcast()
+			c.mu.Unlock()
+		case <-waited:
+		}
+	}()
+	for !c.roomLocked(limit) && !isClosed(stop) {
 		c.cond.Wait()
 	}
+}
+
+// roomLocked tells whether the queue holds less than limit. A failed or
+// closed queue always has room: it drops what it gets.
+func (c *sessionInput) roomLocked(limit int) bool {
+	return len(c.buf) < limit || c.failed || c.closed
 }
 
 // flush blocks until everything queued reached the session, so a

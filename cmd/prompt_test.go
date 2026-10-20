@@ -225,6 +225,7 @@ func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
 		prompts int // prompts shown in all
 	}{
 		{"barrier timeouts don't count as tries", fmt.Errorf("show: %w", overlay.ErrBarrierTimeout), maxPromptTries + 2, maxPromptTries + 3},
+		{"a busy session doesn't count as a try", fmt.Errorf("show: %w", overlay.ErrSessionBusy), maxPromptTries + 2, maxPromptTries + 3},
 		{"program errors until the tries are used up", errors.New("program failed"), maxPromptTries + 2, maxPromptTries},
 		{"program error once", errors.New("program failed"), 1, 2},
 		{"prompts unavailable", fmt.Errorf("show: %w", overlay.ErrUnavailable), 1, 1},
