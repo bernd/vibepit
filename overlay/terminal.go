@@ -225,12 +225,70 @@ func (t *Terminal) finish() {
 	defer t.showMu.Unlock()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if reset := t.endResetLocked(); len(reset) > 0 {
+		t.writeLocked(reset)
+	}
 	if t.shadowErr == nil {
 		t.shadowErr = ErrClosed
 	}
 	if t.shadow != nil {
 		_ = t.shadow.Close()
 	}
+}
+
+// endReset turns off what an app turns on for itself: the report modes,
+// the keyboard protocols, a hidden cursor, synchronized output and the pen.
+// An app that exits cleanly turns them off itself, but one that dies, say
+// with its container, leaves them to garble the user's shell. Every
+// sequence is a no-op when the mode is already off.
+const endReset = "\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
+	"\x1b[?2004l\x1b[?2026l\x1b[?25h" + keyboardReset + "\x1b[0m"
+
+// endResetModes are the DEC modes endReset turns off.
+var endResetModes = []uint16{9, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1016, 2004, 2026}
+
+// endResetLocked is what the real terminal needs once the session ended:
+// endReset, after leaving the alternate screen, or nothing if the shadow
+// shows the app cleaned up. Without the shadow it is endReset alone.
+func (t *Terminal) endResetLocked() []byte {
+	if t.shadowErr != nil {
+		return []byte(endReset)
+	}
+	alt, err := t.shadow.AltScreen()
+	if err != nil {
+		return []byte(endReset)
+	}
+	if alt {
+		modes, err := t.shadow.Modes()
+		if err != nil {
+			return []byte(endReset)
+		}
+		// The kitty flags are per screen: reset them on both.
+		return []byte(keyboardReset + screenSeq(modeMap(modes), false) + endReset)
+	}
+	if on, err := leftOn(t.shadow); err == nil && !on {
+		return nil
+	}
+	return []byte(endReset)
+}
+
+// leftOn reports whether the shadow has anything on that endReset turns
+// off.
+func leftOn(sh *vt.Terminal) (bool, error) {
+	for _, m := range endResetModes {
+		if on, err := sh.Mode(m, false); err != nil || on {
+			return on, err
+		}
+	}
+	if visible, err := sh.CursorVisible(); err != nil || !visible {
+		return !visible, err
+	}
+	if flags, err := sh.KittyKeyboardFlags(); err != nil || flags != 0 {
+		return flags != 0, err
+	}
+	extras, err := sh.Format(vt.FormatOptions{Region: vt.RegionNone, Extras: vt.Extras{Keyboard: true, Style: true}})
+	// The pen extra always starts with SGR 0.
+	return string(extras) != "\x1b[0m", err
 }
 
 // align moves the shadow's cursor to the real terminal's before any

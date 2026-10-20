@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bernd/vibepit/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -141,4 +142,55 @@ func TestStdinEOFClosesTheSessionInputAfterQueuedKeys(t *testing.T) {
 	release()
 	require.Eventually(t, func() bool { return h.closedIn.Load() == 1 }, 5*time.Second, time.Millisecond)
 	assert.Equal(t, "bye", h.sessionIn.String())
+}
+
+// An app that dies, say with its container, can't turn off what it turned
+// on. Left on, mouse reports and kitty keys garble the user's shell.
+func TestRunEndResetsWhatTheSessionLeftOn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []harnessOption
+	}{
+		{"with shadow", nil},
+		{"without shadow", []harnessOption{withoutShadow()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, 20, 5, tc.opts...)
+			h.app("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[>1u\x1b[?25l\x1b[?2026h\x1b[7m")
+			h.out.close()
+			<-h.done
+			mouse, err := h.real.MouseTracking()
+			require.NoError(t, err)
+			assert.Equal(t, vt.MouseNone, mouse)
+			for _, mode := range []uint16{1006, 1004, 2004, 2026} {
+				on, err := h.real.Mode(mode, false)
+				require.NoError(t, err)
+				assert.False(t, on, "mode %d", mode)
+			}
+			flags, err := h.real.KittyKeyboardFlags()
+			require.NoError(t, err)
+			assert.Zero(t, flags)
+			visible, err := h.real.CursorVisible()
+			require.NoError(t, err)
+			assert.True(t, visible)
+			assert.True(t, strings.HasSuffix(h.stdout.String(), "\x1b[0m"), "the pen is reset")
+		})
+	}
+	t.Run("leaves the alternate screen", func(t *testing.T) {
+		h := newHarness(t, 20, 5, hostOutput("shell$ "))
+		h.app("\x1b[?1049happ")
+		h.out.close()
+		<-h.done
+		alt, err := h.real.AltScreen()
+		require.NoError(t, err)
+		assert.False(t, alt)
+		assert.Equal(t, "shell$", firstLine(h.real))
+	})
+	t.Run("writes nothing after a clean exit", func(t *testing.T) {
+		h := newHarness(t, 20, 5)
+		h.app("\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[>1u\x1b[<u\x1b[?1006l\x1b[?1003l\x1b[?1049lbye")
+		h.out.close()
+		<-h.done
+		assert.True(t, strings.HasSuffix(h.stdout.String(), "bye"))
+	})
 }

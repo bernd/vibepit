@@ -44,6 +44,11 @@
 // charsets). Everything else keeps its value from the cut;
 // NewFilter drops prompt output that would change it.
 //
+// When the session ends, Run turns off what the app left on, such as
+// mouse reporting and the keyboard protocols, and leaves its alternate
+// screen. An app that died with its container couldn't, and its mouse
+// reports would otherwise garble the user's shell.
+//
 // The design and its rationale are in
 // docs/superpowers/specs/2026-09-24-ghostty-shadow-terminal-design.md.
 package overlay
