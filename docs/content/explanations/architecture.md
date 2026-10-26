@@ -99,7 +99,7 @@ All outbound traffic from the sandbox container follows two paths:
 
 **DNS queries:** The sandbox container's DNS is configured to use the proxy container's IP on port 53. When a process inside the container resolves a hostname, the query goes to the proxy's DNS server. If the domain is on the DNS allowlist, the query is forwarded to the upstream resolver (`9.9.9.9` by default). Otherwise, the proxy returns `NXDOMAIN`.
 
-**HTTP/HTTPS requests:** The `HTTP_PROXY` and `HTTPS_PROXY` environment variables direct all HTTP traffic through the proxy. For HTTPS, the proxy uses `CONNECT` tunneling — it sees the destination hostname and port but not the encrypted payload. The proxy checks the destination against the HTTP allowlist and the CIDR blocklist before establishing the connection. Blocked requests receive an immediate rejection.
+**HTTP/HTTPS requests:** The `HTTP_PROXY` and `HTTPS_PROXY` environment variables direct all HTTP traffic through the proxy. For HTTPS, the proxy uses `CONNECT` tunneling — it sees the destination hostname and port but not the encrypted payload. The proxy checks the destination against the HTTP allowlist and the CIDR blocklist before establishing the connection. Blocked requests receive an immediate rejection, except while a `--prompt` overlay or the `monitor` is attached: then the proxy holds a request to an unlisted host for up to `hold-timeout` so you can allow it first.
 
 The CIDR blocklist is applied to resolved IP addresses and blocks all private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`), and link-local addresses by default. This prevents the sandbox container from reaching the Docker host, other containers, or local network services, even if a domain resolves to a private IP.
 
@@ -194,5 +194,7 @@ The trust model works as follows:
 3. The server certificate has a SAN of `127.0.0.1` and is used by the control API listener.
 4. The client certificate is stored in the session directory and loaded by `allow-http`, `allow-dns`, and `monitor` when they connect.
 5. Both sides require TLS 1.3 and verify the peer certificate against the ephemeral CA.
+
+Besides request/response endpoints, the control API has a `GET /events` server-sent-events stream. The `monitor` and the `--prompt` overlay subscribe to it to see traffic and held requests as they happen, and the proxy treats a connected subscriber as someone who can decide.
 
 The control API port is published only to `127.0.0.1`, so it is not reachable from the network. Combined with mTLS, this means only the user who started the session can issue control commands.

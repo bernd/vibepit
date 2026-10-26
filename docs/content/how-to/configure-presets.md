@@ -111,6 +111,27 @@ sandbox, but `curl http://host.vibepit:8080` is blocked.
 `allow-host-ports` is a project config setting only — it is not available in the
 global config or via CLI flags.
 
+## Hold blocked requests
+
+While a `--prompt` overlay or the `monitor` is attached, the proxy doesn't
+fail a request to an unlisted host right away. It holds the request for up to
+`hold-timeout`, so you can allow the host before the agent sees an error. The
+default is `10s`:
+
+```yaml
+hold-timeout: 15s
+```
+
+The value is a Go duration such as `10s` or `1m`. Use `0` to turn holding
+off, so blocked requests fail right away as without a prompt.
+`hold-timeout` works in both the global and the project config, and the
+project value overrides the global one.
+
+Only HTTP and HTTPS requests are held, never DNS lookups. Without an attached
+prompt or monitor nothing is held. See the
+[blocked connection prompt](../reference/cli.md#blocked-connection-prompt)
+for what you see while a request waits.
+
 ## Limit sandbox memory
 
 The `memory` setting caps the memory available to the sandbox container,
@@ -181,6 +202,7 @@ uniformly — each key follows its own rules:
 | `block-cidr` | Global config only. Adds custom ranges to the default IP blocklist. |
 | `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges — see the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
 | `allow-host-ports` | Project config only. |
+| `hold-timeout` | Project config, else global config, else `10s`. |
 | `memory` | CLI flag, else project config, else global config. |
 
 ## Further reading

@@ -43,6 +43,12 @@ the request was allowed or blocked:
 - **`+`** — request was allowed by an existing rule.
 - **`x`** — request was blocked.
 
+While the monitor is open, the proxy holds requests to hosts that are not in
+the allowlist for up to `hold-timeout`, so you can decide before the agent sees
+a failure. Held requests are yellow on both tabs, and the hosts tab pins held
+hosts at the top. Press **`a`** or **`A`** to allow a held request, or **`n`**
+to deny it. See [Hold blocked requests](configure-presets.md#hold-blocked-requests).
+
 ### Allow domains from the monitor
 
 You can add allowlist entries directly from the monitor without leaving the TUI,

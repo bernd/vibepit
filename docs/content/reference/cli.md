@@ -65,40 +65,57 @@ vibepit run [flags] [project-path]
 ### Blocked connection prompt
 
 With `--prompt`, `run` and `connect` ask you right away whether to allow a connection
-the proxy blocked. The prompt appears over the session, in the same
+the proxy would block. The prompt appears over the session, in the same
 terminal window, in any terminal emulator. Once you decide or dismiss it,
 the agent's screen comes back as it was, including any output the agent
 wrote in the meantime.
+
+While a prompt is attached, the proxy holds the agent's HTTP and HTTPS
+request instead of failing it. The prompt shows `held` and "the agent is
+waiting" with the seconds left. If you allow the target in time, the request
+goes through and the agent never sees a failure. How long the proxy waits is
+set by [`hold-timeout`](../how-to/configure-presets.md#hold-blocked-requests)
+(10 seconds by default).
 
 | Key | Action |
 |-----|--------|
 | `a` | Allow for the rest of the session |
 | `A` | Allow and save to the project configuration |
-| `n` | Deny. Other clients stop asking about this target for the rest of the session. |
-| `Esc`, `q` | Dismiss without deciding. Other clients still ask. |
+| `n` | Deny. The held request fails at once, and other clients stop asking about this target for the rest of the session. |
+| `Esc`, `q` | Dismiss without deciding. The request keeps waiting until the time runs out, and other clients still ask. |
 
 Behavior details:
 
-- The blocked request has already failed when the prompt appears. Retry it
-  after allowing.
+- When several targets are held at once, the prompt lists the others under
+  "also waiting (N)". Decide the first one and it disappears, then the next
+  one moves up.
+- When the time runs out, the agent's request fails, but the prompt stays
+  open as a regular blocked prompt. Allowing it then lets the agent's next
+  attempt through.
+- Only HTTP and HTTPS requests are held. DNS lookups are blocked right away.
+- When no prompt or monitor is attached, nothing is held and blocked
+  requests fail right away. The same happens when `hold-timeout` is `0`, and
+  when the last prompt or monitor disconnects, which fails the waiting
+  requests at once.
+- The proxy holds at most 32 targets and 64 waiting requests. Requests
+  beyond that are blocked right away.
 - The agent keeps running while the prompt shows. Its output appears when
   the prompt closes.
-- Each target prompts at most once per session, no matter how often the
-  agent retries.
-- Only targets missing from the allowlist prompt. A target that resolves
-  to a blocked IP range, or that the proxy couldn't resolve for that
+- A target you dismiss asks again on the agent's next attempt. A denied
+  target doesn't ask again for the rest of the session.
+- Only targets missing from the allowlist prompt and get held. A target that
+  resolves to a blocked IP range, or that the proxy couldn't resolve for that
   check, stays blocked whatever you allow, so it doesn't prompt.
 - Prompts for different targets open one after another, never on top of
   each other.
 - When several clients are attached to one session, each shows the prompt.
-  As soon as one of them allows or denies, the others close within about a
-  second.
+  As soon as one of them allows or denies, the others close their prompts.
 - Denied targets are held in memory by the proxy. They are forgotten when
   the session stops. To allow a denied target later, use
   [`allow-http`](#allow-http), [`allow-dns`](#allow-dns), or
   [`monitor`](#monitor).
 - IPv6 address targets can be denied or dismissed, but not allowed. The
-  allowlist does not support IPv6 literals.
+  allowlist does not support IPv6 literals, so the proxy doesn't hold them.
 - Before the prompt appears, vibepit asks the terminal for a status report
   to find the exact point where your typing ends and the prompt's input
   begins. If the terminal doesn't answer, the prompt is skipped and shown
@@ -479,6 +496,15 @@ vibepit monitor [flags]
 - If `--session` is not provided and multiple sessions are running,
   `vibepit` presents an interactive session selector.
 - If only one session is running, `vibepit` connects to it directly.
+- The monitor updates live from the proxy's event stream. It doesn't poll.
+- While the monitor is attached, the proxy holds requests to targets that
+  are not in the allowlist, as with [`--prompt`](#blocked-connection-prompt).
+  Held requests are yellow on both tabs. The logs tab shows "held · waiting
+  for a decision" with the seconds left, and once the hold ends it shows how
+  it ended: allowed, denied, timed out, request gone, or nobody watching.
+  The hosts tab pins held hosts at the top with "held Ns", and the summary
+  line counts them as "● N held".
+- On a held request, `a` or `A` allows it and `n` denies it.
 
 ---
 

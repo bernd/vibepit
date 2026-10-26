@@ -85,8 +85,8 @@ Built with `urfave/cli/v3`.
 
 - `run` creates an isolated network, starts proxy + sandbox containers, and
   manages persistent `vibepit-home` volume and per-session networking. With
-  `--prompt` it polls the control API for blocked connections and shows the
-  approve screen over the session through `overlay`.
+  `--prompt` it follows the control API event stream for held connections and
+  shows the approve screen over the session through `overlay`.
 - `up` creates the same infrastructure as `run` but in daemon mode — containers
   run in the background with an SSH server. Returns immediately after startup.
 - `down` stops and removes all containers for a session and cleans up
@@ -109,7 +109,9 @@ Network isolation layer running three services in the proxy container:
 
 1. HTTP proxy (dynamic port) filtering HTTP/HTTPS via allowlist rules.
 2. DNS server (port 53) filtering DNS queries via allowlist rules.
-3. mTLS-secured control API (dynamic port) for runtime admin and logs.
+3. mTLS-secured control API (dynamic port) for runtime admin, logs, and the
+   `GET /events` server-sent-events stream. While a prompt or monitor is
+   subscribed, un-allowlisted HTTP(S) requests are held for `hold-timeout`.
 
 Key files:
 - `proxy/server.go` -- service orchestration.
@@ -120,6 +122,8 @@ Key files:
 - `proxy/api.go` -- control API.
 - `proxy/mtls.go` -- cert generation/validation.
 - `proxy/log.go` -- request log buffer.
+- `proxy/events.go` -- event hub and SSE encoding for `/events`.
+- `proxy/hold.go` -- hold registry for held requests.
 - `proxy/presets.go` / `proxy/presets.yaml` -- network presets.
 
 ### Container client (`container/`)
