@@ -106,9 +106,17 @@ func (s allowState) forHost(h proxy.HostStats) allowTarget {
 	return t
 }
 
+// forEntry treats a hold line as blocked: a hold that ended without an
+// allow ended in a block.
 func (s allowState) forEntry(e proxy.LogEntry) allowTarget {
-	return allowTarget{key: e.HostKey(), current: s.entryStatus(e), blocked: e.Action == proxy.ActionBlock,
-		code: e.Code, reason: e.Reason}
+	blocked := e.Action == proxy.ActionBlock || e.Action == proxy.ActionHold
+	return allowTarget{key: e.HostKey(), current: s.entryStatus(e), blocked: blocked, code: e.Code, reason: e.Reason}
+}
+
+// forHeld is the target of a host the proxy is holding requests for. Only
+// allowlist blocks are held, so an allow always releases them.
+func (s allowState) forHeld(k proxy.HostKey) allowTarget {
+	return allowTarget{key: k, blocked: true, code: proxy.BlockNotAllowlisted}
 }
 
 // canAllow reports whether the a and A keys add an allowlist entry.
@@ -221,4 +229,32 @@ func (s *monitorScreen) handleAllowResult(msg allowResultMsg, w *tui.Window) {
 	case msg.status == statusSaved:
 		w.SetFlash(fmt.Sprintf("allowed and saved %s", allowValue(msg.key)))
 	}
+}
+
+// denyResultMsg is returned by the async deny command.
+type denyResultMsg struct {
+	from *monitorScreen
+	key  proxy.HostKey
+	err  error
+}
+
+// denySelected denies the selected host while the proxy holds requests for
+// it. Anywhere else n does nothing: a deny only ends holds.
+func (s *monitorScreen) denySelected(w *tui.Window) tea.Cmd {
+	k, held := s.heldSelection(w.Now())
+	if !held || s.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return denyResultMsg{from: s, key: k, err: s.client.DenyTarget(k.Target())}
+	}
+}
+
+// handleDenyResult only reports. The hold's end arrives on the feed.
+func (s *monitorScreen) handleDenyResult(msg denyResultMsg, w *tui.Window) {
+	if msg.err != nil {
+		w.SetFlashFor(fmt.Sprintf("deny %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		return
+	}
+	w.SetFlash("denied " + allowValue(msg.key))
 }

@@ -14,12 +14,10 @@ import (
 // logView renders the raw chronological log tail. Without a selection it
 // tails; a selection stays on its entry while new entries arrive below.
 type logView struct {
-	items      []proxy.LogEntry
-	cursor     tui.Cursor
-	selecting  bool // Pos is a selection the user made; see selectionTimeout
-	pollCursor uint64
-	loaded     bool // first poll done; later polls use the strict cursor
-	newCount   int
+	items     []proxy.LogEntry
+	cursor    tui.Cursor
+	selecting bool // Pos is a selection the user made; see selectionTimeout
+	newCount  int
 }
 
 func (v *logView) selected() (proxy.LogEntry, bool) {
@@ -60,14 +58,10 @@ func (v *logView) clearNewIfAtBottom() {
 	}
 }
 
-// appendEntries adds polled entries. Without a selection the view keeps
+// appendEntries adds new entries. Without a selection the view keeps
 // tailing; otherwise new entries are counted so the footer can announce them.
 func (v *logView) appendEntries(entries []proxy.LogEntry) {
 	v.items = append(v.items, entries...)
-	v.loaded = true
-	if len(entries) > 0 {
-		v.pollCursor = entries[len(entries)-1].ID
-	}
 	v.cursor.ItemCount = len(v.items)
 	if !v.selecting {
 		v.tail()
@@ -91,11 +85,11 @@ func (v *logView) handleKey(msg tea.KeyPressMsg) bool {
 	return true
 }
 
-func (v *logView) render(allows allowState) string {
+func (v *logView) render(allows allowState, held *heldTargets, now time.Time) string {
 	var lines []string
 	end := min(v.cursor.Offset+v.cursor.VpHeight, len(v.items))
 	for i := v.cursor.Offset; i < end; i++ {
-		lines = append(lines, renderLogLine(v.items[i], allows.entryStatus(v.items[i]), v.selecting && i == v.cursor.Pos))
+		lines = append(lines, renderLogLine(v.items[i], allows.entryStatus(v.items[i]), v.selecting && i == v.cursor.Pos, held, now))
 	}
 	for len(lines) < v.cursor.VpHeight {
 		lines = append(lines, "")
@@ -111,12 +105,29 @@ func (v *logView) footerKeys(target func(proxy.LogEntry) allowTarget) []tui.Foot
 	return allowFooterKeys(target(e))
 }
 
-func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool) string {
+// renderLogLine renders one entry. A hold line counts down while the hold is
+// open and shows how it ended afterwards, in place of the reason.
+func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool, held *heldTargets, now time.Time) string {
 	base, marker := tui.LineStyle(highlighted)
 
-	var symbol string
+	var symbol, reason string
 	var sourceColor color.Color
+	reasonStyle := base
 	switch {
+	case e.Action == proxy.ActionHold:
+		if held == nil {
+			held = &heldTargets{}
+		}
+		if oh, ok := held.Open(e.HostKey(), now); ok && oh.ID == e.ID {
+			sourceColor = tui.ColorYellow
+			symbol = base.Foreground(sourceColor).Bold(true).Render("?")
+			reason = fmt.Sprintf("held · waiting for a decision (%ds)", secondsLeft(oh.Deadline, now))
+		} else {
+			sourceColor = tui.ColorField
+			symbol = base.Foreground(sourceColor).Render("?")
+			reason = "held · " + holdOutcomeLabel(holdEnding(e, held, now))
+		}
+		reasonStyle = base.Foreground(sourceColor)
 	case status == statusTemp:
 		symbol = base.Foreground(tui.ColorOrange).Render("a")
 		sourceColor = tui.ColorOrange
@@ -134,7 +145,19 @@ func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool) strin
 	ts := base.Foreground(tui.ColorField).Render(e.Time.Format(time.TimeOnly))
 	src := base.Foreground(sourceColor).Render(fmt.Sprintf("%-5s", string(e.Source)))
 	hostStr := base.Render(host)
-	reasonStr := base.Render(tui.SanitizeText(e.Reason))
+	if e.Action != proxy.ActionHold {
+		reason = tui.SanitizeText(e.Reason)
+	}
+	reasonStr := reasonStyle.Render(reason)
 	sp := base.Render(" ")
 	return marker + base.Render("[") + ts + base.Render("]") + sp + symbol + sp + src + sp + hostStr + sp + reasonStr
+}
+
+// holdEnding is how the hold of entry e ended. The entry's own outcome
+// covers holds the table no longer tracks.
+func holdEnding(e proxy.LogEntry, held *heldTargets, now time.Time) proxy.HoldOutcome {
+	if o, ok := held.Outcome(e.ID, now); ok {
+		return o
+	}
+	return e.Outcome
 }

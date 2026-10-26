@@ -228,6 +228,7 @@ func recordStartCast(t *testing.T) {
 type demoProxy struct {
 	log       *proxy.LogBuffer
 	allowlist *proxy.HTTPAllowlist
+	lastID    uint64
 }
 
 func (p *demoProxy) request(domain string, at time.Time) {
@@ -235,7 +236,7 @@ func (p *demoProxy) request(domain string, at time.Time) {
 	if !p.allowlist.Allows(domain, "443") {
 		e.Action, e.Reason, e.Code = proxy.ActionBlock, "domain not in allowlist", proxy.BlockNotAllowlisted
 	}
-	p.log.Add(e)
+	p.lastID = p.log.Add(e)
 }
 
 // virtualClock lets tuiDriver deliver the window's ticks itself.
@@ -244,22 +245,32 @@ type virtualClock struct{ now time.Time }
 func (c *virtualClock) Now() time.Time { return c.now }
 func (c *virtualClock) Tick() tea.Cmd  { return nil }
 
-// tuiDriver runs a Bubble Tea model without tea.Program. Messages and
-// commands run in order on one goroutine, and frames go to the cast as
-// line updates, so the recording does not depend on scheduling.
+// tuiDriver runs a Bubble Tea model without tea.Program. Commands run
+// concurrently, as they do in Bubble Tea, but messages are handled on one
+// goroutine and a frame is only rendered once the model has settled, so the
+// recording does not depend on scheduling.
 type tuiDriver struct {
+	t     *testing.T
 	c     *cast
 	clock *virtualClock
 	model tea.Model
 	base  time.Duration
 	lines []string
 	quit  bool
+
+	results chan tea.Msg
+	pending int // commands whose message hasn't been handled yet
+
+	screen     *monitorScreen
+	proxy      *demoProxy
+	feedClosed bool
 }
 
-func newTUIDriver(c *cast, w *tui.Window) *tuiDriver {
+func newTUIDriver(t *testing.T, c *cast, w *tui.Window, screen *monitorScreen, p *demoProxy) *tuiDriver {
 	clock := &virtualClock{now: castEpoch}
 	w.SetClock(clock)
-	return &tuiDriver{c: c, clock: clock, model: w, base: c.now}
+	return &tuiDriver{t: t, c: c, clock: clock, model: w, base: c.now, results: make(chan tea.Msg),
+		screen: screen, proxy: p}
 }
 
 // advance moves the clocks to offset d from the driver start.
@@ -274,23 +285,53 @@ func (d *tuiDriver) send(msg tea.Msg) {
 	d.run(cmd)
 }
 
-// run executes cmd synchronously. The model's commands are quick (control
-// API calls against the in-process server), and ticks come from the driver.
+// run starts cmd. Its message is handled by settle.
 func (d *tuiDriver) run(cmd tea.Cmd) {
 	if cmd == nil {
 		return
 	}
-	switch msg := cmd().(type) {
-	case nil:
-	case tea.BatchMsg:
-		for _, c := range msg {
-			d.run(c)
+	d.pending++
+	go func() { d.results <- cmd() }()
+}
+
+// settle handles command results until the model is idle. Ticks come from
+// the driver.
+func (d *tuiDriver) settle() {
+	timeout := time.After(10 * time.Second)
+	for !d.idle() {
+		select {
+		case msg := <-d.results:
+			d.pending--
+			switch msg := msg.(type) {
+			case nil:
+			case tea.BatchMsg:
+				for _, c := range msg {
+					d.run(c)
+				}
+			case tea.QuitMsg:
+				d.quit = true
+				return
+			case feedMsg:
+				d.feedClosed = d.feedClosed || msg.closed
+				d.send(msg)
+			default:
+				d.send(msg)
+			}
+		case <-timeout:
+			d.t.Fatal("monitor did not settle")
 		}
-	case tea.QuitMsg:
-		d.quit = true
-	default:
-		d.send(msg)
 	}
+}
+
+// idle reports whether every command has finished, except the monitor's
+// wait on its open feed, which only returns when the proxy has something
+// new, and the monitor has the newest log entry.
+func (d *tuiDriver) idle() bool {
+	if d.screen.feed == nil || d.feedClosed {
+		return d.pending == 0
+	}
+	n := len(d.screen.logs.items)
+	return d.pending == 1 && n > 0 && d.screen.logs.items[n-1].ID == d.proxy.lastID
 }
 
 // render writes the lines that changed since the last frame.
@@ -347,9 +388,15 @@ func recordMonitorCast(t *testing.T) *cast {
 		p.request(domain, times[i])
 	}
 
-	srv := httptest.NewServer(proxy.NewControlAPI(p.log, map[string]any{}, allowlist, dnsAllowlist))
+	api := proxy.NewControlAPI(p.log, map[string]any{}, allowlist, dnsAllowlist)
+	// The event stream delivers each request as it happens. Polling would
+	// run on the wall clock, which the recording must not depend on.
+	hub := proxy.NewEventHub()
+	p.log.OnAdd(func(e proxy.LogEntry) { hub.Publish(proxy.Event{Type: proxy.EventLog, Log: e}) })
+	api.SetEvents(hub, proxy.NewHolds(0, p.log, hub, api.Denied(), func(proxy.Target) bool { return false }))
+	srv := httptest.NewServer(api)
 	defer srv.Close()
-	client := &ControlClient{http: srv.Client(), baseURL: srv.URL}
+	client := &ControlClient{http: srv.Client(), stream: srv.Client(), baseURL: srv.URL}
 
 	c := newCast()
 	c.wait(500 * time.Millisecond)
@@ -359,7 +406,7 @@ func recordMonitorCast(t *testing.T) *cast {
 	session := &SessionInfo{SessionID: castSession, ProjectDir: castProject}
 	screen := newMonitorScreen(session, client, func() tui.Screen { return nil })
 	header := &tui.HeaderInfo{ProjectDir: castProject, SessionID: castSession}
-	d := newTUIDriver(c, tui.NewWindow(header, screen))
+	d := newTUIDriver(t, c, tui.NewWindow(header, screen), screen, p)
 	now := func() time.Time { return d.clock.now }
 
 	key := func(code rune, text string) func() {
@@ -393,6 +440,7 @@ func recordMonitorCast(t *testing.T) *cast {
 	c.out("\x1b[?1049h\x1b[?25l\x1b[H\x1b[2J")
 	d.send(tea.WindowSizeMsg{Width: castWidth, Height: castHeight})
 	d.run(d.model.Init())
+	d.settle()
 	d.render()
 	nextTick := tui.TickInterval
 	for step := 0; !d.quit; {
@@ -405,7 +453,12 @@ func recordMonitorCast(t *testing.T) *cast {
 			d.send(tui.TickMsg{})
 			nextTick += tui.TickInterval
 		}
+		d.settle()
 		d.render()
+	}
+	// Quitting stopped the feed, so its wait returns too.
+	for ; d.pending > 0; d.pending-- {
+		<-d.results
 	}
 	c.out("\x1b[?1049l\x1b[?25h")
 
