@@ -145,6 +145,14 @@ func (s *monitorScreen) applyFeed(events []proxy.Event, now time.Time) {
 	s.hosts.refresh(&s.held, now)
 }
 
+// resetFeedState drops what the screen keeps by log or hold ID once the
+// feed reached a new proxy, whose IDs start over and would collide.
+func (s *monitorScreen) resetFeedState(now time.Time) {
+	s.held = heldTargets{}
+	s.logs.clear()
+	s.hosts.merge(&s.held, now)
+}
+
 // pollHosts starts a hosts poll unless one is in flight or cannot succeed.
 func (s *monitorScreen) pollHosts() tea.Cmd {
 	if s.hostsPollInFlight || s.hosts.unsupported || s.client == nil {
@@ -323,6 +331,8 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		switch {
 		case msg.batch.Err != nil:
 			s.connectionLost(w, msg.batch.Err)
+		case msg.batch.Reset:
+			s.resetFeedState(w.Now())
 		case len(msg.batch.Events) == 0:
 			s.connected(w)
 		default:

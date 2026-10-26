@@ -665,6 +665,39 @@ func TestMonitorScreen_FeedMsg(t *testing.T) {
 	})
 }
 
+func TestMonitor_ProxyRestartResetsTheFeedState(t *testing.T) {
+	s, w := newPollingTestScreen(t, nil, nil)
+	clock := &stepClock{now: approveEpoch}
+	w.SetClock(clock)
+	s.tab = tabLogs
+	hold := proxy.LogEntry{ID: 2, Time: approveEpoch, Domain: "held.com", Port: "443", Action: proxy.ActionHold,
+		Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted, Deadline: approveEpoch.Add(time.Minute)}
+	s.Update(logEvents(s, proxy.LogEntry{ID: 1, Time: approveEpoch, Domain: "old.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy}, hold), w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyUp}, w)
+	require.True(t, s.logs.selecting)
+	require.Equal(t, 1, s.hosts.held, "the held host has a row")
+
+	_, cmd := s.Update(feedMsg{from: s, batch: feedBatch{Reset: true}}, w)
+	assert.NotNil(t, cmd, "the feed is read on")
+	s.Update(logEvents(s,
+		proxy.LogEntry{ID: 1, Time: approveEpoch, Domain: "new.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
+		proxy.LogEntry{ID: 2, Time: approveEpoch, Domain: "other.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy},
+	), w)
+
+	var domains []string
+	for _, e := range s.logs.items {
+		domains = append(domains, e.Domain)
+	}
+	assert.Equal(t, []string{"new.com", "other.com"}, domains)
+	assert.False(t, s.logs.selecting, "the selected line is gone")
+	assert.Zero(t, s.held.Count(clock.now))
+	assert.Equal(t, -1, s.hosts.indexOf(hold.HostKey()), "no stale held row")
+	assert.Zero(t, s.hosts.held)
+	view := ansi.Strip(w.View().Content)
+	assert.NotContains(t, view, "held.com")
+	assert.Contains(t, view, "LOGS (2)")
+}
+
 func TestMonitor_StreamsLogEntries(t *testing.T) {
 	ep := newEventsProxy(t)
 	ep.addEntries(2)

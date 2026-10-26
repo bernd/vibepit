@@ -52,6 +52,15 @@ func (v *logView) deselect() {
 	}
 }
 
+// clear drops every line and the selection: the IDs of a restarted proxy's
+// entries start over, so its lines can't be told apart from the old ones.
+func (v *logView) clear() {
+	v.items = nil
+	v.cursor.ItemCount = 0
+	v.selecting = false
+	v.tail()
+}
+
 func (v *logView) clearNewIfAtBottom() {
 	if len(v.items) <= v.cursor.Offset+v.cursor.VpHeight {
 		v.newCount = 0
