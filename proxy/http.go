@@ -22,6 +22,7 @@ type HTTPProxy struct {
 	resolver       *net.Resolver
 	hostGateway    string
 	allowHostPorts map[int]bool
+	holds          *Holds
 }
 
 // filterResult captures the outcome of a proxy filter check.
@@ -35,8 +36,19 @@ type filterResult struct {
 // checkRequest decides whether to allow or block a request and logs the
 // decision. Both the CONNECT and plain HTTP handlers call this so the
 // filtering logic stays in one place.
-func (p *HTTPProxy) checkRequest(hostname, port string) filterResult {
+func (p *HTTPProxy) checkRequest(ctx context.Context, hostname, port string) filterResult {
 	r := p.filter(hostname, port)
+	// Only a plain not-allowlisted block can be fixed by allowing the target.
+	if r.code == BlockNotAllowlisted && p.holds != nil {
+		switch p.holds.Wait(ctx, HostKey{Source: SourceProxy, Domain: hostname, Port: port}) {
+		case HoldAllowed:
+			// The allowlist changed, but the CIDR check still applies.
+			r = p.filter(hostname, port)
+		case HoldAbandoned:
+			// The client is gone; nobody sees this block, so don't log it.
+			return r
+		}
+	}
 	p.logEntry(hostname, port, r)
 	return r
 }
@@ -97,7 +109,7 @@ func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, u
 	p.proxy.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(
 		func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 			hostname, port := splitHostPort(host, "443")
-			result := p.checkRequest(hostname, port)
+			result := p.checkRequest(ctx.Req.Context(), hostname, port)
 			if result.action == ActionBlock {
 				return goproxy.RejectConnect, host
 			}
@@ -110,7 +122,7 @@ func NewHTTPProxy(allowlist *HTTPAllowlist, cidr *CIDRBlocker, log *LogBuffer, u
 	p.proxy.OnRequest().DoFunc(
 		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 			hostname, port := splitHostPort(req.Host, "80")
-			result := p.checkRequest(hostname, port)
+			result := p.checkRequest(req.Context(), hostname, port)
 			if result.action == ActionBlock {
 				msg := fmt.Sprintf("domain %q is not in the allowlist\nadd it to .vibepit/network.yaml or run: vibepit monitor\n", hostname)
 				switch result.code {
@@ -193,6 +205,12 @@ func (p *HTTPProxy) SetHostVibepit(gateway string, allowedPorts []int) {
 	for _, port := range allowedPorts {
 		p.allowHostPorts[port] = true
 	}
+}
+
+// SetHolds makes requests blocked only for not being allowlisted wait on h
+// instead of failing at once. Nil keeps the immediate block.
+func (p *HTTPProxy) SetHolds(h *Holds) {
+	p.holds = h
 }
 
 func (p *HTTPProxy) isHostPortAllowed(port string) bool {
