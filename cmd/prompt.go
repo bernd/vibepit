@@ -246,7 +246,9 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 		// show puts the approve screen over the session.
 		show := func(ctx context.Context, entry proxy.LogEntry) error {
 			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
-			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, entry)))
+			q := newPromptQueue()
+			q.Add(entry)
+			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, q)))
 		}
 		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show), notes.Printf)
 	}

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -21,15 +22,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var approveEpoch = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+// stepClock is a window clock the tests move by hand.
+type stepClock struct{ now time.Time }
+
+func (c *stepClock) Now() time.Time { return c.now }
+func (c *stepClock) Tick() tea.Cmd  { return nil }
+
 type approveFixture struct {
 	s           *approveScreen
 	w           *tui.Window
+	q           *promptQueue
+	clock       *stepClock
 	proxy       *testProxy
 	projectPath string
 }
 
-func makeApproveSetup(t *testing.T, entry proxy.LogEntry) *approveFixture {
+func makeApproveSetup(t *testing.T, entries ...proxy.LogEntry) *approveFixture {
 	t.Helper()
+	q := newPromptQueue()
+	for _, e := range entries {
+		q.Add(e)
+	}
 	projectDir := t.TempDir()
 	projectPath := config.DefaultProjectPath(projectDir)
 	require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
@@ -37,10 +52,12 @@ func makeApproveSetup(t *testing.T, entry proxy.LogEntry) *approveFixture {
 
 	tp := newTestProxy(t)
 	session := &SessionInfo{SessionID: "test123456", ProjectDir: projectDir}
-	s := newApproveScreen(session, tp.client, entry)
+	s := newApproveScreen(session, tp.client, q)
 	w := tui.NewWindow(&tui.HeaderInfo{ProjectDir: projectDir, SessionID: session.SessionID}, s)
+	clock := &stepClock{now: approveEpoch}
+	w.SetClock(clock)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
-	return &approveFixture{s: s, w: w, proxy: tp, projectPath: projectPath}
+	return &approveFixture{s: s, w: w, q: q, clock: clock, proxy: tp, projectPath: projectPath}
 }
 
 var blockedEntry = proxy.LogEntry{
@@ -49,6 +66,96 @@ var blockedEntry = proxy.LogEntry{
 	Action: proxy.ActionBlock,
 	Source: proxy.SourceProxy,
 	Reason: "domain not in allowlist",
+}
+
+func singleQueue(e proxy.LogEntry) *promptQueue {
+	q := newPromptQueue()
+	q.Add(e)
+	return q
+}
+
+func heldEntry(host string, id uint64, deadline time.Time) proxy.LogEntry {
+	return proxy.LogEntry{
+		ID: id, Domain: host, Port: "443", Action: proxy.ActionHold,
+		Source: proxy.SourceProxy, Reason: "domain not in allowlist", Deadline: deadline,
+	}
+}
+
+func TestApproveScreen_HeldCountdown(t *testing.T) {
+	f := makeApproveSetup(t, heldEntry("docs.example.com", 1, approveEpoch.Add(6200*time.Millisecond)))
+	view := f.s.View(f.w)
+	assert.Contains(t, view, "held")
+	assert.Contains(t, view, "docs.example.com:443")
+	assert.Contains(t, view, "the agent is waiting · 7s left")
+}
+
+func TestApproveScreen_HeldBecomesBlockedAtDeadline(t *testing.T) {
+	f := makeApproveSetup(t, heldEntry("docs.example.com", 1, approveEpoch.Add(5*time.Second)))
+	f.clock.now = approveEpoch.Add(5 * time.Second)
+	view := f.s.View(f.w)
+	assert.Contains(t, view, "blocked")
+	assert.NotContains(t, view, "waiting")
+}
+
+func TestApproveScreen_ListsOtherTargets(t *testing.T) {
+	f := makeApproveSetup(t,
+		heldEntry("one.example.com", 1, approveEpoch.Add(5*time.Second)),
+		heldEntry("two.example.com", 2, approveEpoch.Add(3*time.Second)),
+		proxy.LogEntry{Domain: "three.example.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy},
+	)
+	view := f.s.View(f.w)
+	assert.Contains(t, view, "also waiting (2)")
+	assert.Contains(t, view, "two.example.com:443")
+	assert.Contains(t, view, "three.example.com:443")
+}
+
+func TestApproveScreen_DecidesHeadThenNext(t *testing.T) {
+	f := makeApproveSetup(t,
+		heldEntry("one.example.com", 1, approveEpoch.Add(5*time.Second)),
+		heldEntry("two.example.com", 2, approveEpoch.Add(5*time.Second)),
+	)
+	s, w := f.s, f.w
+
+	_, cmd := s.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}, w)
+	require.NotNil(t, cmd)
+	msg := cmd()
+	require.NoError(t, msg.(decisionResultMsg).err)
+	assert.True(t, f.proxy.http.Allows("one.example.com", "443"))
+	_, cmd = s.Update(msg, w)
+	assert.Nil(t, cmd, "the screen stays open on the second target")
+	assert.Equal(t, 1, f.q.Len())
+	assert.Contains(t, s.View(w), "two.example.com:443")
+
+	_, cmd = s.Update(tea.KeyPressMsg{Code: 'n', Text: "n"}, w)
+	require.NotNil(t, cmd)
+	msg = cmd()
+	require.NoError(t, msg.(decisionResultMsg).err)
+	res, err := s.client.Check(heldEntry("two.example.com", 2, time.Time{}))
+	require.NoError(t, err)
+	assert.True(t, res.Denied)
+	_, cmd = s.Update(msg, w)
+	require.NotNil(t, cmd)
+	assert.IsType(t, tea.QuitMsg{}, cmd())
+}
+
+func TestApproveScreen_QuitsWhenQueueEmptiedElsewhere(t *testing.T) {
+	f := makeApproveSetup(t, blockedEntry)
+	f.q.Remove(blockedEntry.Target())
+	_, cmd := f.s.Update(tui.TickMsg{}, f.w)
+	require.NotNil(t, cmd)
+	assert.IsType(t, tea.QuitMsg{}, cmd())
+}
+
+func TestApproveScreen_TickQuitWaitsForBusyAndError(t *testing.T) {
+	f := makeApproveSetup(t, blockedEntry)
+	f.q.Remove(blockedEntry.Target())
+	f.s.busy = true
+	_, cmd := f.s.Update(tui.TickMsg{}, f.w)
+	assert.Nil(t, cmd)
+	f.s.busy = false
+	f.w.SetError(assert.AnError)
+	_, cmd = f.s.Update(tui.TickMsg{}, f.w)
+	assert.Nil(t, cmd)
 }
 
 func TestApproveScreen_View(t *testing.T) {
@@ -176,7 +283,7 @@ func TestApproveScreen_DenyErrorStaysOpen(t *testing.T) {
 	_, cmd := s.Update(decisionResultMsg{err: assert.AnError}, w)
 	assert.Nil(t, cmd)
 	assert.Error(t, w.Err())
-	_, cmd = s.Update(checkResultMsg{res: CheckResult{Denied: true}}, w)
+	_, cmd = s.Update(checkResultMsg{decided: []proxy.Target{blockedEntry.Target()}}, w)
 	assert.Nil(t, cmd, "pending error blocks auto-close")
 }
 
@@ -277,7 +384,7 @@ func TestApproveScreen_FailedAllowStaysOpenUntilAcknowledged(t *testing.T) {
 
 	// The live allowlist may already contain the target (save failed after
 	// the runtime allow). An allowed check must not hide the error.
-	_, cmd = s.Update(checkResultMsg{res: CheckResult{Allowed: true}}, w)
+	_, cmd = s.Update(checkResultMsg{decided: []proxy.Target{blockedEntry.Target()}}, w)
 	assert.Nil(t, cmd)
 	assert.Error(t, w.Err())
 
@@ -315,7 +422,7 @@ func TestApproveScreen_RendersThroughPromptFilter(t *testing.T) {
 			session := &SessionInfo{SessionID: "test123456", ProjectDir: t.TempDir()}
 			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
 			start := func(out io.Writer, in io.Reader) (*tea.Program, <-chan error) {
-				p := tea.NewProgram(tui.NewWindow(header, newApproveScreen(session, tp.client, blockedEntry)),
+				p := tea.NewProgram(tui.NewWindow(header, newApproveScreen(session, tp.client, singleQueue(blockedEntry))),
 					tea.WithInput(in),
 					tea.WithOutput(out),
 					tea.WithWindowSize(100, 30),
@@ -387,4 +494,15 @@ func screenText(term *vt.Terminal) string {
 		return ""
 	}
 	return string(b)
+}
+
+func TestApproveScreen_OtherTargetsFitTheViewport(t *testing.T) {
+	f := makeApproveSetup(t)
+	for i := range 60 {
+		f.q.Add(proxy.LogEntry{Domain: fmt.Sprintf("h%d.example.com", i), Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+	}
+	view := f.s.View(f.w)
+	assert.LessOrEqual(t, len(strings.Split(view, "\n")), f.w.VpHeight())
+	assert.Contains(t, view, "also waiting (59)")
+	assert.Contains(t, view, " more")
 }
