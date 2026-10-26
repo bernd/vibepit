@@ -38,12 +38,18 @@ type ProxyConfig struct {
 	ControlAPIPort int      `json:"control-api-port"`
 	DNSPort        int      `json:"dns-port"`
 	SSHForwardAddr string   `json:"ssh-forward-addr,omitempty"`
+	HoldTimeout    string   `json:"hold-timeout,omitempty"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
 type Server struct {
-	config ProxyConfig
+	config       ProxyConfig
+	holdDuration time.Duration
 }
+
+// holdTimeout is how long a blocked request waits for approval. Zero means
+// no holding, which is what configs without the key (tests, older CLIs) get.
+func (s *Server) holdTimeout() time.Duration { return s.holdDuration }
 
 func NewServer(configPath string) (*Server, error) {
 	data, err := os.ReadFile(configPath)
@@ -60,7 +66,18 @@ func NewServer(configPath string) (*Server, error) {
 		cfg.UpstreamDNS = DefaultUpstreamDNS
 	}
 
-	return &Server{config: cfg}, nil
+	var hold time.Duration
+	if cfg.HoldTimeout != "" {
+		hold, err = time.ParseDuration(cfg.HoldTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("hold-timeout: %w", err)
+		}
+		if hold < 0 {
+			return nil, fmt.Errorf("hold-timeout: must not be negative, got %q", cfg.HoldTimeout)
+		}
+	}
+
+	return &Server{config: cfg, holdDuration: hold}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {

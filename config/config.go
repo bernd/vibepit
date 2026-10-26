@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/proxy"
@@ -23,6 +25,10 @@ const (
 	CacheDirName         = "vibepit"
 	ConfigDirName        = "vibepit"
 	ProjectConfigDirName = ".vibepit"
+
+	// DefaultHoldTimeout is how long the proxy holds a blocked request for
+	// the user to allow it.
+	DefaultHoldTimeout = "10s"
 )
 
 type GlobalConfig struct {
@@ -33,6 +39,7 @@ type GlobalConfig struct {
 	ExtraHosts  []string `koanf:"extra-hosts"`
 	UpstreamDNS string   `koanf:"upstream-dns"`
 	Memory      string   `koanf:"memory"`
+	HoldTimeout string   `koanf:"hold-timeout"`
 }
 
 type ProjectConfig struct {
@@ -41,6 +48,7 @@ type ProjectConfig struct {
 	AllowDNS       []string `koanf:"allow-dns"`
 	AllowHostPorts []int    `koanf:"allow-host-ports"`
 	Memory         string   `koanf:"memory"`
+	HoldTimeout    string   `koanf:"hold-timeout"`
 }
 
 type Config struct {
@@ -61,6 +69,7 @@ type MergedConfig struct {
 	ProxyPort      int      `json:"proxy-port,omitempty"`
 	ControlAPIPort int      `json:"control-api-port,omitempty"`
 	SSHForwardAddr string   `json:"ssh-forward-addr,omitempty"`
+	HoldTimeout    string   `json:"hold-timeout,omitempty"`
 }
 
 // RandomProxyPort returns a random port in the ephemeral range (49152-65535)
@@ -127,7 +136,15 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 		return MergedConfig{}, fmt.Errorf("allow-dns: %w", err)
 	}
 
+	holdTimeout := cmp.Or(c.Project.HoldTimeout, c.Global.HoldTimeout, DefaultHoldTimeout)
+	if d, err := time.ParseDuration(holdTimeout); err != nil {
+		return MergedConfig{}, fmt.Errorf("hold-timeout: %w", err)
+	} else if d < 0 {
+		return MergedConfig{}, fmt.Errorf("hold-timeout: must not be negative, got %q", holdTimeout)
+	}
+
 	return MergedConfig{
+		HoldTimeout:    holdTimeout,
 		AllowHTTP:      allowHTTP,
 		AllowDNS:       allowDNS,
 		BlockCIDR:      c.Global.BlockCIDR,
