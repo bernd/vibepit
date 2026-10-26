@@ -35,11 +35,10 @@ type promptResult struct {
 	Dismissed []proxy.Target
 }
 
-// blockWatcher tracks the log cursor and which blocked targets have already
-// been surfaced, so each domain:port triggers at most one prompt per session
-// even though the agent typically retries a blocked request many times.
+// blockWatcher tracks which blocked targets have already been surfaced, so
+// each domain:port triggers at most one prompt per session even though the
+// agent typically retries a blocked request many times.
 type blockWatcher struct {
-	cursor  uint64
 	targets map[proxy.Target]targetState
 }
 
@@ -51,7 +50,7 @@ type targetState struct {
 const (
 	// maxPromptTries bounds how often a target is asked about when its
 	// prompt fails, so a prompt that always fails doesn't come back at
-	// every block. Barrier timeouts don't count, see runBlockPrompter.
+	// every block. Barrier timeouts don't count, see promptLoop.settle.
 	maxPromptTries = 5
 	// maxPromptTargets bounds the targets a session tracks. The sandbox
 	// picks their names, so past it prompting stops rather than holding
@@ -62,15 +61,14 @@ const (
 var errTooManyTargets = fmt.Errorf("more than %d blocked targets, no more prompts in this session", maxPromptTargets)
 
 // Next returns the entries in batch that allowing would unblock and that
-// have not been seen before, and advances the cursor past the batch. It
-// fails with errTooManyTargets at a target past maxPromptTargets.
+// have not been seen before. It fails with errTooManyTargets at a target
+// past maxPromptTargets.
 func (bw *blockWatcher) Next(batch []proxy.LogEntry) ([]proxy.LogEntry, error) {
 	if bw.targets == nil {
 		bw.targets = make(map[proxy.Target]targetState)
 	}
 	var fresh []proxy.LogEntry
 	for _, e := range batch {
-		bw.cursor = e.ID
 		if !e.Allowable() {
 			continue
 		}

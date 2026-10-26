@@ -32,13 +32,11 @@ func TestBlockWatcher_Next(t *testing.T) {
 		name    string
 		batches [][]proxy.LogEntry
 		want    [][]string // allow values per batch
-		cursor  uint64
 	}{
 		{
 			name:    "ignores allowed entries",
 			batches: [][]proxy.LogEntry{{allow(1, "a.com"), block(2, proxy.SourceProxy, "b.com", "443")}},
 			want:    [][]string{{"b.com:443"}},
-			cursor:  2,
 		},
 		{
 			name: "dedupes same target across batches",
@@ -46,16 +44,14 @@ func TestBlockWatcher_Next(t *testing.T) {
 				{block(1, proxy.SourceProxy, "b.com", "443"), block(2, proxy.SourceProxy, "b.com", "443")},
 				{block(3, proxy.SourceProxy, "b.com", "443"), block(4, proxy.SourceProxy, "b.com", "80")},
 			},
-			want:   [][]string{{"b.com:443"}, {"b.com:80"}},
-			cursor: 4,
+			want: [][]string{{"b.com:443"}, {"b.com:80"}},
 		},
 		{
 			name: "dns and proxy for same domain are distinct",
 			batches: [][]proxy.LogEntry{
 				{block(1, proxy.SourceDNS, "b.com", ""), block(2, proxy.SourceProxy, "b.com", "443")},
 			},
-			want:   [][]string{{"b.com", "b.com:443"}},
-			cursor: 2,
+			want: [][]string{{"b.com", "b.com:443"}},
 		},
 		{
 			name: "skips blocks allowing can't undo",
@@ -65,21 +61,18 @@ func TestBlockWatcher_Next(t *testing.T) {
 				withCode(block(3, proxy.SourceProxy, "c.com", "443"), proxy.BlockNotAllowlisted),
 				withCode(block(4, proxy.SourceDNS, "d.com", ""), proxy.BlockCIDR),
 			}},
-			want:   [][]string{{"c.com:443"}},
-			cursor: 4,
+			want: [][]string{{"c.com:443"}},
 		},
 		{
 			// A proxy from before causes were logged sends none.
 			name:    "keeps blocks without a cause",
 			batches: [][]proxy.LogEntry{{block(1, proxy.SourceProxy, "a.com", "443")}},
 			want:    [][]string{{"a.com:443"}},
-			cursor:  1,
 		},
 		{
-			name:    "empty batch keeps cursor",
+			name:    "empty batch",
 			batches: [][]proxy.LogEntry{{block(5, proxy.SourceProxy, "b.com", "443")}, {}},
 			want:    [][]string{{"b.com:443"}, nil},
-			cursor:  5,
 		},
 	}
 	for _, tt := range tests {
@@ -94,7 +87,6 @@ func TestBlockWatcher_Next(t *testing.T) {
 				}
 				assert.Equal(t, tt.want[i], vals, "batch %d", i)
 			}
-			assert.Equal(t, tt.cursor, bw.cursor)
 		})
 	}
 }
