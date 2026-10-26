@@ -63,9 +63,8 @@ func NewHolds(timeout time.Duration, log *LogBuffer, hub *EventHub, denied *Deny
 // target by the time the registry lock is taken. HoldAbandoned: this
 // request's ctx ended first.
 func (h *Holds) Wait(ctx context.Context, k HostKey) HoldOutcome {
-	// Only proxy requests are held.
-	k.Source = SourceProxy
-	if !AllowFixes(k, BlockNotAllowlisted) {
+	// Only proxy requests are held; DNS queries are always answered at once.
+	if k.Source != SourceProxy || !AllowFixes(k, BlockNotAllowlisted) {
 		return HoldNone
 	}
 	t := k.Target()

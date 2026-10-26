@@ -114,6 +114,7 @@ func TestHolds_NotHeld(t *testing.T) {
 		{name: "no subscribers", timeout: testHoldTimeout, watch: false, key: proxyKey("example.com")},
 		{name: "denied target", timeout: testHoldTimeout, watch: true, deny: true, key: proxyKey("example.com")},
 		{name: "IPv6 literal", timeout: testHoldTimeout, watch: true, key: proxyKey("::1")},
+		{name: "DNS source", timeout: testHoldTimeout, watch: true, key: HostKey{Source: SourceDNS, Domain: "example.com", Port: "443"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
