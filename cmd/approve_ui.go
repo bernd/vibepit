@@ -23,6 +23,10 @@ type approveScreen struct {
 	deciding      proxy.Target // the target the in-flight decision applies to
 	busy          bool         // a decision is being applied
 	checkInFlight bool
+	// shown is the first target as last drawn. The prompter settles
+	// targets between draws, and the keys must not act on one that moved
+	// up since: the user never saw it.
+	shown proxy.Target
 }
 
 // checkResultMsg carries the targets that someone else has decided meanwhile,
@@ -95,13 +99,16 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			return s, nil
 		}
 		items := s.queue.Items()
+		// Returning without a command still redraws, so the next press
+		// acts on what the user then sees.
+		onScreen := len(items) > 0 && items[0].Entry.Target() == s.shown
 		switch msg.String() {
 		case "a", "A":
-			if len(items) > 0 {
+			if onScreen {
 				return s.decide(w, items[0].Entry, s.allowCmd(items[0].Entry, msg.String() == "A"))
 			}
 		case "n":
-			if len(items) > 0 {
+			if onScreen {
 				return s.decide(w, items[0].Entry, s.denyCmd(items[0].Entry))
 			}
 		case "esc", "q", "ctrl+c":
@@ -152,10 +159,12 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 func (s *approveScreen) View(w *tui.Window) string {
 	items := s.queue.Items()
 	if len(items) == 0 {
+		s.shown = proxy.Target{}
 		return ""
 	}
 	now := w.Now()
 	first := items[0]
+	s.shown = first.Entry.Target()
 	entry := first.Entry
 	target := tui.SanitizeText(entry.Target().String())
 	reason := tui.SanitizeText(entry.Reason)

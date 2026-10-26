@@ -57,6 +57,9 @@ func makeApproveSetup(t *testing.T, entries ...proxy.LogEntry) *approveFixture {
 	clock := &stepClock{now: approveEpoch}
 	w.SetClock(clock)
 	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	// Bubble Tea draws before it delivers the first key, and the keys act
+	// on what was drawn.
+	w.View()
 	return &approveFixture{s: s, w: w, q: q, clock: clock, proxy: tp, projectPath: projectPath}
 }
 
@@ -136,6 +139,36 @@ func TestApproveScreen_DecidesHeadThenNext(t *testing.T) {
 	_, cmd = s.Update(msg, w)
 	require.NotNil(t, cmd)
 	assert.IsType(t, tea.QuitMsg{}, cmd())
+}
+
+func TestApproveScreen_KeysActOnlyOnTheTargetShown(t *testing.T) {
+	for _, key := range []string{"a", "A", "n"} {
+		t.Run(key, func(t *testing.T) {
+			f := makeApproveSetup(t,
+				heldEntry("one.example.com", 1, approveEpoch.Add(5*time.Second)),
+				heldEntry("two.example.com", 2, approveEpoch.Add(5*time.Second)),
+			)
+			s, w := f.s, f.w
+			require.Contains(t, s.View(w), "one.example.com:443")
+			// The prompter settles the first target before the screen
+			// draws again.
+			f.q.EndHold(proxy.HoldEnd{ID: 1, HostKey: heldEntry("one.example.com", 1, time.Time{}).HostKey(), Outcome: proxy.HoldAllowed})
+
+			press := tea.KeyPressMsg{Code: rune(key[0]), Text: key}
+			_, cmd := s.Update(press, w)
+			assert.Nil(t, cmd, "two.example.com was never on screen")
+			assert.False(t, s.busy)
+			assert.Equal(t, []string{"two.example.com:443"}, queued(f.q))
+
+			require.Contains(t, s.View(w), "two.example.com:443")
+			_, cmd = s.Update(press, w)
+			require.NotNil(t, cmd)
+			require.NoError(t, cmd().(decisionResultMsg).err)
+			res, err := s.client.Check(heldEntry("two.example.com", 2, time.Time{}))
+			require.NoError(t, err)
+			assert.True(t, res.Decided(), "the target on screen is decided")
+		})
+	}
 }
 
 func TestApproveScreen_QuitsWhenQueueEmptiedElsewhere(t *testing.T) {
