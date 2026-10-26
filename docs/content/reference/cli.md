@@ -119,7 +119,7 @@ Behavior details:
 - Before the prompt appears, vibepit asks the terminal for a status report
   to find the exact point where your typing ends and the prompt's input
   begins. If the terminal doesn't answer, the prompt is skipped and shown
-  on the next block of that target. After two misses, vibepit instead
+  on the next hold or block of that target. After two misses, vibepit instead
   switches input to the prompt after a short pause in typing.
 - When a prompt can't be shown, or your terminal lacks something prompts
   rely on, vibepit prints a warning once the session ends.
