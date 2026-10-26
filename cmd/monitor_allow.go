@@ -198,7 +198,7 @@ func (s *monitorScreen) requestAllow(w *tui.Window, t allowTarget, save bool) te
 			// An allowlist block the allowlist can't fix, e.g. an IPv6 literal.
 			reason = "the allowlist can't hold " + allowValue(t.key)
 		}
-		w.SetFlash("cannot allow: " + reason)
+		w.SetFlash(flashText("cannot allow: %s", reason))
 	default:
 		w.SetFlash("already allowed")
 	}
@@ -212,7 +212,7 @@ const allowErrorFlash = 6 * time.Second
 
 func (s *monitorScreen) handleAllowResult(msg allowResultMsg, w *tui.Window) {
 	if msg.err != nil && msg.status == statusNone {
-		w.SetFlashFor(fmt.Sprintf("allow %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		w.SetFlashFor(flashText("allow %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
 		return
 	}
 	if msg.status == statusTemp && s.allows[msg.key] == statusSaved {
@@ -223,12 +223,18 @@ func (s *monitorScreen) handleAllowResult(msg allowResultMsg, w *tui.Window) {
 	s.allowGen++
 	switch {
 	case msg.err != nil:
-		w.SetFlashFor(fmt.Sprintf("allowed %s, but saving failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		w.SetFlashFor(flashText("allowed %s, but saving failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
 	case msg.status == statusTemp:
-		w.SetFlash(fmt.Sprintf("allowed %s", allowValue(msg.key)))
+		w.SetFlash(flashText("allowed %s", allowValue(msg.key)))
 	case msg.status == statusSaved:
-		w.SetFlash(fmt.Sprintf("allowed and saved %s", allowValue(msg.key)))
+		w.SetFlash(flashText("allowed and saved %s", allowValue(msg.key)))
 	}
+}
+
+// flashText formats a flash. The hosts come from the sandbox, and errors
+// and reasons can quote them, so control characters are dropped.
+func flashText(format string, args ...any) string {
+	return tui.SanitizeText(fmt.Sprintf(format, args...))
 }
 
 // denyResultMsg is returned by the async deny command.
@@ -253,8 +259,8 @@ func (s *monitorScreen) denySelected(w *tui.Window) tea.Cmd {
 // handleDenyResult only reports. The hold's end arrives on the feed.
 func (s *monitorScreen) handleDenyResult(msg denyResultMsg, w *tui.Window) {
 	if msg.err != nil {
-		w.SetFlashFor(fmt.Sprintf("deny %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		w.SetFlashFor(flashText("deny %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
 		return
 	}
-	w.SetFlash("denied " + allowValue(msg.key))
+	w.SetFlash(flashText("denied %s", allowValue(msg.key)))
 }
