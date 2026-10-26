@@ -141,6 +141,9 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 				}
 				return nil
 			}
+			if b.Reset {
+				p.q.DropHolds()
+			}
 			if err := p.queue(b.Events); err != nil {
 				limitErr = err
 			}

@@ -145,6 +145,27 @@ func TestPromptQueue(t *testing.T) {
 				assert.Equal(t, 0, q.Len())
 			},
 		},
+		{
+			name: "dropping holds keeps the targets as blocks",
+			run: func(q *promptQueue) {
+				q.Add(a)
+				q.Add(b)
+				q.DropHolds()
+				// The new proxy's IDs start over: its end of hold 1 is
+				// not the end of the old proxy's hold 1.
+				q.EndHold(proxy.HoldEnd{ID: 1, HostKey: a.HostKey(), Outcome: proxy.HoldTimeout})
+				q.Add(c)
+			},
+			wantHosts: []string{"a.example.com", "b.example.com", "c.example.com"},
+			check: func(t *testing.T, q *promptQueue) {
+				items := q.Items()
+				for _, it := range items[:2] {
+					assert.Zero(t, it.Deadline, it.Entry.Domain)
+					assert.Zero(t, it.Entry.ID, it.Entry.Domain)
+				}
+				assert.Equal(t, deadline, items[2].Deadline, "holds after the drop count")
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

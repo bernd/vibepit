@@ -475,6 +475,38 @@ func TestRunBlockPrompter_HoldEndUpdatesQueue(t *testing.T) {
 	}, time.Second, time.Millisecond, "a timed-out hold stays queued as a block")
 }
 
+func TestRunBlockPrompter_ProxyRestart(t *testing.T) {
+	old := newEventsProxy(t)
+	old.addEntries(5)
+	rp := &restartProxy{api: old.api}
+	client, connected := prompterClient(t, rp)
+	shown := make(chan *promptQueue, 10)
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		shown <- q
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	connected()
+
+	old.holdRequest(t, "a.com")
+	q := receive(t, shown, "prompt")
+	require.Len(t, q.Items(), 1)
+	require.False(t, q.Items()[0].Deadline.IsZero(), "held")
+
+	fresh := newEventsProxy(t)
+	rp.restart(fresh.api)
+	connected()
+	require.Eventually(t, func() bool {
+		items := q.Items()
+		return len(items) == 1 && items[0].Deadline.IsZero() && items[0].Entry.ID == 0
+	}, time.Second, time.Millisecond, "the old proxy's hold is gone: a.com stays queued as a block")
+
+	fresh.holdRequest(t, "b.com")
+	require.Eventually(t, func() bool { return q.Len() == 2 }, time.Second, time.Millisecond, "a hold on the new proxy is queued")
+	assert.Equal(t, []string{"a.com:443", "b.com:443"}, queued(q))
+	assert.False(t, q.Items()[1].Deadline.IsZero(), "b.com is held")
+}
+
 func TestRunBlockPrompter_OlderProxyStillPrompts(t *testing.T) {
 	tp := newTestProxy(t)
 	var polls atomic.Int32

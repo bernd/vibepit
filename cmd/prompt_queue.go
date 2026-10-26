@@ -88,6 +88,18 @@ func (q *promptQueue) EndHold(end proxy.HoldEnd) {
 	}
 }
 
+// DropHolds turns every item into a plain block, for a proxy that restarted:
+// the requests it held are gone, and the IDs of its holds start over, so an
+// old ID must not match the end of a new hold.
+func (q *promptQueue) DropHolds() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.items {
+		q.items[i].Entry.ID = 0
+		q.items[i].Deadline = time.Time{}
+	}
+}
+
 func (q *promptQueue) Remove(t proxy.Target) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
