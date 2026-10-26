@@ -131,6 +131,9 @@ func describe(b feedBatch) []string {
 	if b.Err != nil {
 		return []string{"err"}
 	}
+	if b.Reset {
+		return []string{"reset"}
+	}
 	if len(b.Events) == 0 {
 		return []string{"connect"}
 	}
@@ -330,4 +333,84 @@ func TestStartFeed_HoldOpenAndEnd(t *testing.T) {
 	assert.Equal(t, proxy.HoldAllowed, <-waited)
 	ep.addEntries(1)
 	assert.Equal(t, []string{"hold-end 4 allowed", "log 5"}, readFeed(t, ch, 2))
+}
+
+// restartProxy serves one control API until restart swaps in another, like
+// a proxy container that restarted on the same port: its log IDs start
+// over. A restart ends the old API's open streams.
+type restartProxy struct {
+	mu      sync.Mutex
+	api     http.Handler
+	cancels []context.CancelFunc
+}
+
+func (p *restartProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	p.mu.Lock()
+	api := p.api
+	p.cancels = append(p.cancels, cancel)
+	p.mu.Unlock()
+	api.ServeHTTP(w, r.WithContext(ctx))
+}
+
+func (p *restartProxy) restart(api http.Handler) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.api = api
+	for _, cancel := range p.cancels {
+		cancel()
+	}
+	p.cancels = nil
+}
+
+func TestStartFeed_ProxyRestart(t *testing.T) {
+	t.Run("delivers the new proxy's entries and holds", func(t *testing.T) {
+		old := newEventsProxy(t)
+		old.addEntries(5)
+		rp := &restartProxy{api: old.api}
+		h := &cutStream{api: rp}
+		ch := startFeed(t.Context(), testControlClient(t, h), 25, testRetry)
+		assert.Equal(t, []string{"connect", "log 1", "log 2", "log 3", "log 4", "log 5"}, readFeed(t, ch, 6))
+
+		fresh := newEventsProxy(t)
+		fresh.addEntries(2)
+		rp.restart(fresh.api)
+		assert.Equal(t, []string{"err", "connect", "reset"}, readFeed(t, ch, 3))
+
+		fresh.addEntries(1)
+		key := proxy.HostKey{Source: proxy.SourceProxy, Domain: "held.com", Port: "443"}
+		waited := make(chan proxy.HoldOutcome, 1)
+		go func() { waited <- fresh.holds.Wait(t.Context(), key) }()
+		assert.Equal(t, []string{"log 3", "log 4"}, readFeed(t, ch, 2))
+		fresh.holds.End(key.Target(), proxy.HoldAllowed)
+		assert.Equal(t, proxy.HoldAllowed, <-waited)
+		assert.Equal(t, []string{"hold-end 4 allowed"}, readFeed(t, ch, 1))
+		assert.Equal(t, []string{"tail=25", "after=5"}, h.recorded())
+	})
+
+	t.Run("drops the new proxy's history before the reset", func(t *testing.T) {
+		old := newEventsProxy(t)
+		old.addEntries(2)
+		require.Equal(t, uint64(3), old.addHold())
+		old.addEntries(7)
+		rp := &restartProxy{api: old.api}
+		h := &cutStream{api: rp}
+		ch := startFeed(t.Context(), testControlClient(t, h), 25, testRetry)
+		readFeed(t, ch, 11)
+
+		// The new proxy's hold 3 ended, and it has nothing to do with the
+		// old proxy's hold 3 the feed still thinks is open.
+		fresh := newEventsProxy(t)
+		fresh.addEntries(2)
+		require.Equal(t, uint64(3), fresh.addHold())
+		require.True(t, fresh.log.SetHoldOutcome(3, proxy.HoldDenied))
+		fresh.addEntries(1)
+		rp.restart(fresh.api)
+		assert.Equal(t, []string{"err", "connect", "reset"}, readFeed(t, ch, 3))
+
+		fresh.addEntries(1)
+		assert.Equal(t, []string{"log 5"}, readFeed(t, ch, 1))
+		assert.Equal(t, []string{"tail=25", "after=2"}, h.recorded())
+	})
 }

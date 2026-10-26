@@ -13,10 +13,15 @@ import (
 )
 
 // feedBatch is what the feed delivers: events, or a connection error.
-// An empty batch with Err == nil reports a (re)connect.
+// An empty batch with Err == nil and Reset unset reports a (re)connect.
 type feedBatch struct {
 	Events []proxy.Event
 	Err    error
+	// Reset reports that the feed reconnected to a new proxy, e.g. after
+	// its container restarted: log and hold IDs started over, so whatever
+	// the consumer keeps by ID from before is stale. It comes alone, after
+	// every event from the old proxy and before any from the new one.
+	Reset bool
 }
 
 // feedIdleTimeout is how long the feed waits without reading anything,
@@ -113,6 +118,10 @@ func (f *feed) stream(ctx context.Context) error {
 	f.down = false
 	f.queue.push(feedBatch{})
 
+	// The history waits for the cursor that ends it: only the cursor tells
+	// whether the proxy is still the one the feed's IDs came from.
+	var history []proxy.Event
+	cursorSeen := false
 	for {
 		e, err := s.Next()
 		if err != nil {
@@ -124,10 +133,39 @@ func (f *feed) stream(ctx context.Context) error {
 			}
 			return fmt.Errorf("event stream: %w", err)
 		}
-		if e, ok := f.apply(e); ok {
-			f.queue.push(feedBatch{Events: []proxy.Event{e}})
+		if !cursorSeen {
+			if e.Type != proxy.EventCursor {
+				history = append(history, e)
+				continue
+			}
+			cursorSeen = true
+			// A proxy never hands out an ID above its cursor, so a lower
+			// cursor means a new proxy whose IDs started over.
+			if f.positioned && e.Cursor < f.lastID {
+				f.reset(e.Cursor)
+			}
+			for _, h := range history {
+				f.deliver(h)
+			}
+			history = nil
 		}
+		f.deliver(e)
 	}
+}
+
+func (f *feed) deliver(e proxy.Event) {
+	if e, ok := f.apply(e); ok {
+		f.queue.push(feedBatch{Events: []proxy.Event{e}})
+	}
+}
+
+// reset forgets the old proxy's IDs and tells the consumer. The new
+// proxy's entries up to its cursor are skipped like a tail would skip them:
+// the history above the old position is only a part of them.
+func (f *feed) reset(cursor uint64) {
+	f.lastID = cursor
+	clear(f.open)
+	f.queue.push(feedBatch{Reset: true})
 }
 
 // resumeAfter reaches back far enough to replay every hold entry the
@@ -268,8 +306,9 @@ func newFeedQueue() *feedQueue {
 
 func (q *feedQueue) push(b feedBatch) {
 	q.mu.Lock()
-	// Errors and connects stay batches of their own, so they are still
-	// recognisable and in order.
+	// Errors, connects and resets stay batches of their own, so they are
+	// still recognisable and in order, and no batch mixes events from
+	// before a reset with events from after it.
 	if n := len(q.pending); n > 0 && len(b.Events) > 0 && len(q.pending[n-1].Events) > 0 {
 		q.pending[n-1].Events = append(q.pending[n-1].Events, b.Events...)
 	} else {
