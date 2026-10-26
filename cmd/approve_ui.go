@@ -27,6 +27,9 @@ type approveScreen struct {
 	// targets between draws, and the keys must not act on one that moved
 	// up since: the user never saw it.
 	shown proxy.Target
+	// dismissed holds the targets queued when the user dismissed the
+	// screen. Targets queued after that weren't dismissed.
+	dismissed []proxy.Target
 }
 
 // checkResultMsg carries the targets that someone else has decided meanwhile,
@@ -113,6 +116,9 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			}
 		case "esc", "q", "ctrl+c":
 			// Dismiss only: no decision is recorded, other clients keep asking.
+			for _, it := range items {
+				s.dismissed = append(s.dismissed, it.Entry.Target())
+			}
 			return s, tea.Quit
 		}
 
@@ -154,6 +160,11 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 	}
 	return s, nil
+}
+
+// result reports how the screen ended. Call it once its program stopped.
+func (s *approveScreen) result() promptResult {
+	return promptResult{Dismissed: s.dismissed}
 }
 
 func (s *approveScreen) View(w *tui.Window) string {

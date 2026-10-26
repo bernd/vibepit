@@ -341,6 +341,46 @@ func TestApproveScreen_DismissRecordsNothing(t *testing.T) {
 	}
 }
 
+func TestApproveScreen_ReportsHowItEnded(t *testing.T) {
+	one := heldEntry("one.example.com", 1, approveEpoch.Add(5*time.Second))
+	two := heldEntry("two.example.com", 2, approveEpoch.Add(5*time.Second))
+	quit := func(t *testing.T, cmd tea.Cmd) {
+		t.Helper()
+		require.NotNil(t, cmd)
+		assert.IsType(t, tea.QuitMsg{}, cmd())
+	}
+
+	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyEscape}, {Code: 'q', Text: "q"}, {Code: 'c', Mod: tea.ModCtrl}} {
+		t.Run("dismissed with "+key.String(), func(t *testing.T) {
+			f := makeApproveSetup(t, one, two)
+			_, cmd := f.s.Update(key, f.w)
+			quit(t, cmd)
+			assert.Equal(t, promptResult{Dismissed: []proxy.Target{one.Target(), two.Target()}}, f.s.result())
+		})
+	}
+
+	t.Run("dismissed after the queue emptied elsewhere", func(t *testing.T) {
+		f := makeApproveSetup(t, one)
+		f.q.Remove(one.Target())
+		f.q.Add(two)
+		f.s.View(f.w)
+		_, cmd := f.s.Update(tea.KeyPressMsg{Code: tea.KeyEscape}, f.w)
+		quit(t, cmd)
+		assert.Equal(t, promptResult{Dismissed: []proxy.Target{two.Target()}}, f.s.result())
+	})
+
+	t.Run("closed on an empty queue", func(t *testing.T) {
+		f := makeApproveSetup(t, one)
+		_, cmd := f.s.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}, f.w)
+		require.NotNil(t, cmd)
+		_, cmd = f.s.Update(cmd(), f.w)
+		quit(t, cmd)
+		// Queued as the screen closed: not dismissed, the next prompt shows it.
+		f.q.Add(two)
+		assert.Equal(t, promptResult{}, f.s.result())
+	})
+}
+
 func TestApproveScreen_ClosesWhenDeniedElsewhere(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w

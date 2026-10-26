@@ -194,7 +194,7 @@ func queued(q *promptQueue) []string {
 // decideAll is a prompt that, like the approve screen, decides the targets
 // it shows until the queue is empty.
 func decideAll(prompted chan<- []string) promptFunc {
-	return func(ctx context.Context, q *promptQueue) error {
+	return func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		for q.Len() > 0 {
 			targets := queued(q)
 			prompted <- targets
@@ -202,8 +202,18 @@ func decideAll(prompted chan<- []string) promptFunc {
 				q.Remove(it.Entry.Target())
 			}
 		}
-		return nil
+		return promptResult{}, nil
 	}
+}
+
+// dismiss is what the approve screen reports when the user dismisses it
+// with q as it is.
+func dismiss(q *promptQueue) promptResult {
+	var res promptResult
+	for _, it := range q.Items() {
+		res.Dismissed = append(res.Dismissed, it.Entry.Target())
+	}
+	return res
 }
 
 func receive[T any](t *testing.T, ch <-chan T, what string) T {
@@ -294,13 +304,13 @@ func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
 			client, connected := prompterClient(t, ep.api)
 			prompted := make(chan []string, 20)
 			var calls atomic.Int32
-			startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+			startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 				prompted <- queued(q)
 				if int(calls.Add(1)) <= tt.fails {
-					return tt.err
+					return promptResult{}, tt.err
 				}
 				q.Clear()
-				return nil
+				return promptResult{}, nil
 			})
 			connected()
 			for i := range tt.prompts {
@@ -317,9 +327,9 @@ func TestRunBlockPrompter_StopsWhenPromptsAreUnavailable(t *testing.T) {
 	ep := newEventsProxy(t)
 	client, connected := prompterClient(t, ep.api)
 	prompted := make(chan []string, 10)
-	done := startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	done := startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		prompted <- queued(q)
-		return fmt.Errorf("show: %w", overlay.ErrUnavailable)
+		return promptResult{}, fmt.Errorf("show: %w", overlay.ErrUnavailable)
 	})
 	connected()
 	ep.log.Add(blocked("a.com"))
@@ -367,11 +377,11 @@ func TestRunBlockPrompter_QueuesTargetsWhileShowing(t *testing.T) {
 	client, connected := prompterClient(t, ep.api)
 	shown := make(chan *promptQueue, 10)
 	release := make(chan struct{})
-	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		shown <- q
 		<-release
 		q.Clear()
-		return nil
+		return promptResult{}, nil
 	})
 	connected()
 
@@ -393,26 +403,85 @@ func TestRunBlockPrompter_DismissPromptsAgain(t *testing.T) {
 	ep := newEventsProxy(t)
 	client, connected := prompterClient(t, ep.api)
 	prompted := make(chan []string, 10)
-	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		prompted <- queued(q)
-		return nil // dismissed: the queue is left as it was
+		return dismiss(q), nil
 	})
 	connected()
 
 	ep.log.Add(blocked("a.com"))
 	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	assertQuiet(t, prompted, "prompt before the next block")
 	ep.log.Add(blocked("a.com"))
 	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt after the dismissal"))
+}
+
+func TestRunBlockPrompter_DismissAfterTheQueueEmptied(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	prompted := make(chan []string, 10)
+	emptied := make(chan struct{})
+	var calls atomic.Int32
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
+		prompted <- queued(q)
+		if calls.Add(1) == 1 {
+			// Decided elsewhere while the screen stays open; it shows the
+			// next target and the user dismisses that one.
+			q.Remove(q.Items()[0].Entry.Target())
+			close(emptied)
+			for q.Len() == 0 {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		return dismiss(q), nil
+	})
+	connected()
+
+	ep.log.Add(blocked("a.com"))
+	receive(t, emptied, "emptied queue")
+	ep.log.Add(blocked("b.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	assertQuiet(t, prompted, "prompt for the dismissed b.com")
+	ep.log.Add(blocked("b.com"))
+	assert.Equal(t, []string{"b.com:443"}, receive(t, prompted, "prompt after the next block"))
+}
+
+func TestRunBlockPrompter_TargetsQueuedAfterTheDismissalPrompt(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	prompted := make(chan []string, 10)
+	dismissed := make(chan struct{})
+	var calls atomic.Int32
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
+		prompted <- queued(q)
+		res := dismiss(q)
+		if calls.Add(1) == 1 {
+			// esc is pressed; a target comes in before the screen is gone.
+			close(dismissed)
+			for q.Len() < 2 {
+				time.Sleep(time.Millisecond)
+			}
+		}
+		return res, nil
+	})
+	connected()
+
+	ep.log.Add(blocked("a.com"))
+	receive(t, dismissed, "dismissal")
+	ep.log.Add(blocked("b.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	assert.Equal(t, []string{"b.com:443"}, receive(t, prompted, "prompt for the target queued after the dismissal"))
+	assertQuiet(t, prompted, "prompt for the dismissed a.com")
 }
 
 func TestRunBlockPrompter_DecidedTargetsDontPromptAgain(t *testing.T) {
 	ep := newEventsProxy(t)
 	client, connected := prompterClient(t, ep.api)
 	prompted := make(chan []string, 10)
-	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		prompted <- queued(q)
 		q.Remove(q.Items()[0].Entry.Target()) // allowed
-		return nil
+		return promptResult{}, nil
 	})
 	connected()
 
@@ -428,11 +497,11 @@ func TestRunBlockPrompter_TargetsAfterTheQueueEmptiedPrompt(t *testing.T) {
 	prompted := make(chan []string, 10)
 	drained := make(chan struct{})
 	var calls atomic.Int32
-	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		prompted <- queued(q)
 		if calls.Add(1) > 1 {
 			q.Clear()
-			return nil
+			return promptResult{}, nil
 		}
 		// Decide the only target, then return as a target comes in, as the
 		// screen does when it quits on the empty queue.
@@ -441,7 +510,7 @@ func TestRunBlockPrompter_TargetsAfterTheQueueEmptiedPrompt(t *testing.T) {
 		for q.Len() == 0 {
 			time.Sleep(time.Millisecond)
 		}
-		return nil
+		return promptResult{}, nil
 	})
 	connected()
 
@@ -456,10 +525,10 @@ func TestRunBlockPrompter_HoldEndUpdatesQueue(t *testing.T) {
 	ep := newEventsProxy(t)
 	client, connected := prompterClient(t, ep.api)
 	shown := make(chan *promptQueue, 10)
-	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		shown <- q
 		<-ctx.Done()
-		return ctx.Err()
+		return promptResult{}, ctx.Err()
 	})
 	connected()
 
@@ -481,10 +550,10 @@ func TestRunBlockPrompter_ProxyRestart(t *testing.T) {
 	rp := &restartProxy{api: old.api}
 	client, connected := prompterClient(t, rp)
 	shown := make(chan *promptQueue, 10)
-	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) (promptResult, error) {
 		shown <- q
 		<-ctx.Done()
-		return ctx.Err()
+		return promptResult{}, ctx.Err()
 	})
 	connected()
 
@@ -597,8 +666,11 @@ func TestLoggedPrompt(t *testing.T) {
 			for _, e := range tt.queue {
 				q.Add(e)
 			}
-			prompt := loggedPrompt(notes.Printf, func(context.Context, *promptQueue) error { return tt.err })
-			assert.Equal(t, tt.err, prompt(context.Background(), q))
+			want := promptResult{Dismissed: []proxy.Target{evil.Target()}}
+			prompt := loggedPrompt(notes.Printf, func(context.Context, *promptQueue) (promptResult, error) { return want, tt.err })
+			res, err := prompt(context.Background(), q)
+			assert.Equal(t, tt.err, err)
+			assert.Equal(t, want, res)
 			if tt.wantLog == "" {
 				assert.Empty(t, notes.Lines())
 			} else {

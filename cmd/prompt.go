@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -25,8 +24,16 @@ var promptCLIFlag = &cli.BoolFlag{
 
 // promptFunc asks the user about the queued targets. The prompt posts the
 // decisions to the control API itself and removes decided targets from the
-// queue; returning with targets left means they were dismissed.
-type promptFunc func(ctx context.Context, q *promptQueue) error
+// queue. It reports the targets the user dismissed without a decision.
+type promptFunc func(ctx context.Context, q *promptQueue) (promptResult, error)
+
+// promptResult is how a prompt ended.
+type promptResult struct {
+	// Dismissed holds the targets that were queued when the user dismissed
+	// the prompt. It is empty when the prompt closed on an empty queue:
+	// targets queued after that are still to be shown.
+	Dismissed []proxy.Target
+}
 
 // blockWatcher tracks the log cursor and which blocked targets have already
 // been surfaced, so each domain:port triggers at most one prompt per session
@@ -118,16 +125,22 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 	p := &promptLoop{client: client, q: newPromptQueue()}
 	// Tail 0 skips whatever was blocked before we started watching.
 	feed := startFeed(ctx, client, 0, interval)
+	type ended struct {
+		res promptResult
+		err error
+	}
 	var (
-		shown    chan error // the open prompt's result; nil while none shows
+		shown    chan ended // the open prompt's result; nil while none shows
 		limitErr error
 	)
 	for {
 		if shown == nil {
 			if p.q.Len() > 0 && ctx.Err() == nil {
-				shown = make(chan error, 1)
-				p.showing = true
-				go func(done chan<- error) { done <- prompt(ctx, p.q) }(shown)
+				shown = make(chan ended, 1)
+				go func(done chan<- ended) {
+					res, err := prompt(ctx, p.q)
+					done <- ended{res, err}
+				}(shown)
 			} else if limitErr != nil {
 				return limitErr
 			}
@@ -147,9 +160,9 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 			if err := p.queue(b.Events); err != nil {
 				limitErr = err
 			}
-		case err := <-shown:
+		case e := <-shown:
 			shown = nil
-			if err := p.settle(err); err != nil {
+			if err := p.settle(e.res, e.err); err != nil {
 				return err
 			}
 		}
@@ -162,11 +175,6 @@ type promptLoop struct {
 	bw     blockWatcher
 	client *ControlClient
 	q      *promptQueue
-	// showing is set while a prompt is open. late holds the targets queued
-	// since its queue ran empty: the prompt quits on an empty queue, so it
-	// may never show them, and they weren't its to dismiss.
-	showing bool
-	late    []proxy.Target
 }
 
 // queue adds the targets in events that should be asked about to q. It
@@ -191,7 +199,7 @@ func (p *promptLoop) queue(events []proxy.Event) error {
 		// could bring back a target the prompt just decided.
 		if p.q.Has(e.Target()) {
 			if e.Action == proxy.ActionHold {
-				p.add(e)
+				p.q.Add(e)
 			}
 			continue
 		}
@@ -205,51 +213,43 @@ func (p *promptLoop) queue(events []proxy.Event) error {
 			if res, err := p.client.Check(e); err == nil && res.Decided() {
 				continue
 			}
-			p.add(e)
+			p.q.Add(e)
 		}
 	}
 	return limitErr
 }
 
-func (p *promptLoop) add(e proxy.LogEntry) {
-	// Checking after the add can't miss an emptied queue: the prompt only
-	// removes targets, so if it ran empty before the add, e is alone now.
-	// A target the prompt goes on to show may be marked too; dismissing it
-	// then just asks again.
-	if p.q.Add(e) && p.showing && (len(p.late) > 0 || p.q.Len() == 1) {
-		p.late = append(p.late, e.Target())
-	}
-}
-
-// settle updates bw for the targets the prompt left in q after it returned
-// err and takes them out of q. A dismissed or failed prompt decided nothing,
-// so its targets may be asked about again on their next block. Late targets
-// stay queued for the next prompt. Without a shadow no prompt can be shown,
-// now or later: that error is returned.
-func (p *promptLoop) settle(err error) error {
+// settle updates bw and q for how the prompt ended. A dismissal is not a
+// decision: the dismissed targets leave q and may be asked about again on
+// their next hold or block. Targets queued after the dismissal, or after
+// the prompt closed on an empty queue, stay for the next prompt. A failed
+// prompt decided nothing either: all its targets leave q, and they count a
+// try unless the failure wasn't the prompt's. Without a shadow no prompt
+// can be shown, now or later: that error is returned.
+func (p *promptLoop) settle(res promptResult, err error) error {
 	if errors.Is(err, overlay.ErrUnavailable) {
 		return err
 	}
-	for _, it := range p.q.Items() {
-		t := it.Entry.Target()
-		if slices.Contains(p.late, t) {
-			continue
+	if err == nil {
+		for _, t := range res.Dismissed {
+			p.q.Remove(t)
+			p.bw.Forget(t)
 		}
-		p.q.Remove(t)
+		return nil
+	}
+	for _, it := range p.q.Clear() {
+		t := it.Entry.Target()
 		switch {
-		case err == nil, errors.Is(err, overlay.ErrBarrierTimeout), errors.Is(err, overlay.ErrSessionBusy):
-			// A dismissal is not a decision. Barrier timeouts and a busy
-			// session showed nothing, and aren't the prompt's fault: after
-			// two timeouts in a row the terminal takes input after a pause
-			// in typing, which can't time out, and a busy session reads its
-			// input again.
+		case errors.Is(err, overlay.ErrBarrierTimeout), errors.Is(err, overlay.ErrSessionBusy):
+			// Barrier timeouts and a busy session showed nothing, and aren't
+			// the prompt's fault: after two timeouts in a row the terminal
+			// takes input after a pause in typing, which can't time out, and
+			// a busy session reads its input again.
 			p.bw.Forget(t)
 		default:
 			p.bw.Retry(t)
 		}
 	}
-	p.showing = false
-	p.late = nil
 	return nil
 }
 
@@ -327,10 +327,13 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 		if stopped || stopLoop != nil {
 			return
 		}
-		// show puts the approve screen over the session.
-		show := func(ctx context.Context, q *promptQueue) error {
+		// show puts the approve screen over the session. Show returns once
+		// the screen's program has stopped, so its result is settled.
+		show := func(ctx context.Context, q *promptQueue) (promptResult, error) {
 			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
-			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, q)))
+			screen := newApproveScreen(session, cc, q)
+			err := t.Show(ctx, tui.NewWindow(header, screen))
+			return screen.result(), err
 		}
 		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show), notes.Printf)
 	}
@@ -354,8 +357,8 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 // the terminal, so it's reported after the session. A prompt ended by the
 // session ending isn't a failure.
 func loggedPrompt(logf func(format string, args ...any), prompt promptFunc) promptFunc {
-	return func(ctx context.Context, q *promptQueue) error {
-		err := prompt(ctx, q)
+	return func(ctx context.Context, q *promptQueue) (promptResult, error) {
+		res, err := prompt(ctx, q)
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, overlay.ErrClosed) {
 			if items := q.Items(); len(items) > 0 {
 				logf("prompt for %s: %v", items[0].Entry.Target(), err)
@@ -363,7 +366,7 @@ func loggedPrompt(logf func(format string, args ...any), prompt promptFunc) prom
 				logf("prompt: %v", err)
 			}
 		}
-		return err
+		return res, err
 	}
 }
 
