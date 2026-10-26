@@ -96,6 +96,15 @@ func (s *Server) Run(ctx context.Context) error {
 	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.UpstreamDNS)
 	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
 
+	// Publishing under the log's lock keeps live log events in ID order.
+	hub := NewEventHub()
+	log.OnAdd(func(e LogEntry) { hub.Publish(Event{Type: EventLog, Log: e}) })
+	holds := NewHolds(s.holdTimeout(), log, hub, controlAPI.Denied(), func(t Target) bool {
+		return allowlist.Allows(t.Host, t.Port)
+	})
+	controlAPI.SetEvents(hub, holds)
+	httpProxy.SetHolds(holds)
+
 	// Configure host.vibepit support.
 	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {
 		dnsServer.SetProxyIP(proxyIP)

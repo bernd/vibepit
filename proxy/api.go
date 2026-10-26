@@ -3,12 +3,22 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime/debug"
 	"strconv"
+	"time"
 )
+
+// eventsKeepalive is how often an idle /events stream writes a comment. It
+// bounds how long a dead client goes unnoticed and lets clients detect a
+// dead proxy. A var so tests can shorten it.
+var eventsKeepalive = 15 * time.Second
+
+// eventsWriteTimeout drops a stream client that stops reading.
+const eventsWriteTimeout = 10 * time.Second
 
 // ControlAPI serves proxy status and configuration over HTTP.
 type ControlAPI struct {
@@ -18,6 +28,8 @@ type ControlAPI struct {
 	httpAllowlist *HTTPAllowlist
 	dnsAllowlist  *DNSAllowlist
 	denied        DenySet
+	hub           *EventHub
+	holds         *Holds
 }
 
 func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist) *ControlAPI {
@@ -35,7 +47,22 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
 	api.mux.HandleFunc("GET /check", api.handleCheck)
 	api.mux.HandleFunc("POST /deny", api.handleDeny)
+	api.mux.HandleFunc("GET /events", api.handleEvents)
 	return api
+}
+
+// SetEvents enables the /events stream and lets allow and deny decisions end
+// held requests. Without it, /events answers 404 so clients fall back to
+// polling.
+func (a *ControlAPI) SetEvents(hub *EventHub, holds *Holds) {
+	a.hub = hub
+	a.holds = holds
+}
+
+// Denied returns the set of targets users denied, which the hold registry
+// consults so a denied target is never held.
+func (a *ControlAPI) Denied() *DenySet {
+	return &a.denied
 }
 
 func (a *ControlAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +97,23 @@ func (rw *responseState) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// Unwrap lets http.ResponseController reach the connection for deadlines.
+func (rw *responseState) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
+// Flush sends the headers, so it counts as written.
+func (rw *responseState) Flush() {
+	rw.FlushError() //nolint:errcheck
+}
+
+// FlushError is what http.ResponseController prefers over Flush, so stream
+// handlers see failed flushes.
+func (rw *responseState) FlushError() error {
+	rw.written = true
+	return http.NewResponseController(rw.ResponseWriter).Flush()
+}
+
 // handleLogs returns a recent tail when called without a cursor, and every
 // entry with a larger ID for "after=N", including N=0.
 func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +127,109 @@ func (a *ControlAPI) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	afterID, _ := strconv.ParseUint(q.Get("after"), 10, 64)
 	writeJSON(w, a.log.EntriesAfter(afterID))
+}
+
+// handleEvents streams log entries and hold changes. It replays history
+// first: "after=N" sends every entry above N (reconnects), "tail=N" the newest
+// N (at most TailSize), and neither sends none. A cursor event marks where
+// history ends, a snapshot of open holds follows, then live events.
+func (a *ControlAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if a.hub == nil {
+		http.Error(w, `{"error":"events not supported"}`, http.StatusNotFound)
+		return
+	}
+	q := r.URL.Query()
+	var after, tail uint64
+	var err error
+	if q.Has("after") {
+		after, err = strconv.ParseUint(q.Get("after"), 10, 64)
+	} else if q.Has("tail") {
+		tail, err = strconv.ParseUint(q.Get("tail"), 10, 64)
+	}
+	if err != nil {
+		http.Error(w, `{"error":"after and tail must be non-negative integers"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Subscribe before reading history so nothing logged in between is lost;
+	// entries that arrive both ways are skipped by ID below.
+	events, unsubscribe := a.hub.Subscribe()
+	defer unsubscribe()
+
+	rc := http.NewResponseController(w)
+	// The server's ReadTimeout and WriteTimeout would end the stream, so
+	// lift the read deadline and give each write its own. Errors only mean
+	// the writer can't do deadlines (test recorders).
+	rc.SetReadDeadline(time.Time{}) //nolint:errcheck
+	write := func(f func() error) error {
+		rc.SetWriteDeadline(time.Now().Add(eventsWriteTimeout)) //nolint:errcheck
+		if err := f(); err != nil {
+			return err
+		}
+		return rc.Flush()
+	}
+	send := func(e Event) error {
+		return write(func() error { return WriteEvent(w, e) })
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	if write(func() error { w.WriteHeader(http.StatusOK); return nil }) != nil {
+		return
+	}
+
+	var history []LogEntry
+	var sent uint64
+	if q.Has("after") {
+		history, sent = a.log.EntriesAfterAt(after)
+	} else {
+		history, sent = a.log.TailAt(int(min(tail, TailSize)))
+	}
+	for _, e := range history {
+		if send(Event{Type: EventLog, Log: e}) != nil {
+			return
+		}
+	}
+	if send(Event{Type: EventCursor, Cursor: sent}) != nil {
+		return
+	}
+	// Open holds are sent whatever the tail size, so a late watcher can
+	// still decide them.
+	for _, e := range a.holds.Open() {
+		if send(Event{Type: EventHoldOpen, Log: e}) != nil {
+			return
+		}
+	}
+
+	keepalive := time.NewTicker(eventsKeepalive)
+	defer keepalive.Stop()
+	for {
+		var err error
+		select {
+		case e, ok := <-events:
+			if !ok {
+				// Dropped for falling behind; the client reconnects with after.
+				return
+			}
+			if e.Type == EventLog {
+				if e.Log.ID <= sent {
+					continue
+				}
+				sent = e.Log.ID
+			}
+			err = send(e)
+		case <-keepalive.C:
+			err = write(func() error {
+				_, err := io.WriteString(w, ": keepalive\n\n")
+				return err
+			})
+		case <-r.Context().Done():
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (a *ControlAPI) handleHosts(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +273,11 @@ func (a *ControlAPI) handleAllowHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := a.httpAllowlist.Add(entries); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
+	}
+	// Only after Add: a hold opening concurrently then either sees the new
+	// entries in its own allowlist check or is ended here.
+	if a.holds != nil {
+		a.holds.EndAllowed()
 	}
 	writeJSON(w, map[string]any{"added": entries})
 }
@@ -178,6 +330,9 @@ func (a *ControlAPI) handleDeny(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.denied.Add(t)
+	if a.holds != nil {
+		a.holds.End(t, HoldDenied)
+	}
 	writeJSON(w, map[string]string{"denied": t.String()})
 }
 

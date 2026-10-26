@@ -3,12 +3,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"testing"
@@ -156,4 +158,115 @@ func TestProxyServerIntegration(t *testing.T) {
 	require.NoError(t, json.NewDecoder(deniedResp.Body).Decode(&check))
 	assert.True(t, check.Denied, "deny is recorded")
 	assert.False(t, check.Allowed, "deny doesn't allow")
+
+	t.Run("held request is released by allow", func(t *testing.T) {
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		defer backend.Close()
+		backendHost, backendPort, err := net.SplitHostPort(mustParseURL(backend.URL).Host)
+		require.NoError(t, err)
+
+		heldProxyPort := mustGetFreePort(t)
+		heldControlPort := mustGetFreePort(t)
+		data, err := json.Marshal(proxy.ProxyConfig{
+			AllowCIDR:      []string{"127.0.0.0/8"},
+			HoldTimeout:    "5s",
+			ProxyPort:      heldProxyPort,
+			ControlAPIPort: heldControlPort,
+			DNSPort:        mustGetFreePort(t),
+		})
+		require.NoError(t, err)
+		cfgPath := t.TempDir() + "/proxy.json"
+		require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
+		heldSrv, err := proxy.NewServer(cfgPath)
+		require.NoError(t, err, "NewServer")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go heldSrv.Run(ctx)
+
+		controlURL := fmt.Sprintf("https://127.0.0.1:%d", heldControlPort)
+		require.Eventually(t, func() bool {
+			resp, err := tlsClient.Get(controlURL + "/config")
+			if err != nil {
+				return false
+			}
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusOK
+		}, 5*time.Second, 50*time.Millisecond, "proxy control API never came up")
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, controlURL+"/events", nil)
+		require.NoError(t, err)
+		streamResp, err := tlsClient.Do(req)
+		require.NoError(t, err, "open /events")
+		defer streamResp.Body.Close()
+		require.Equal(t, http.StatusOK, streamResp.StatusCode)
+
+		events := make(chan proxy.Event, 64)
+		go func() {
+			defer close(events)
+			r := bufio.NewReader(streamResp.Body)
+			for {
+				e, err := proxy.ReadEvent(r)
+				if err != nil {
+					return
+				}
+				events <- e
+			}
+		}()
+		nextEvent := func(match func(proxy.Event) bool) proxy.Event {
+			t.Helper()
+			timeout := time.After(5 * time.Second)
+			for {
+				select {
+				case e, ok := <-events:
+					require.True(t, ok, "event stream ended")
+					if match(e) {
+						return e
+					}
+				case <-timeout:
+					t.Fatal("timed out waiting for an event")
+				}
+			}
+		}
+		// The cursor means the stream is subscribed, so the proxy holds.
+		nextEvent(func(e proxy.Event) bool { return e.Type == proxy.EventCursor })
+
+		heldProxyClient := &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(mustParseURL(fmt.Sprintf("http://127.0.0.1:%d", heldProxyPort))),
+			},
+		}
+		status := make(chan int, 1)
+		go func() {
+			resp, err := heldProxyClient.Get(backend.URL)
+			if err != nil {
+				status <- 0
+				return
+			}
+			resp.Body.Close()
+			status <- resp.StatusCode
+		}()
+
+		hold := nextEvent(func(e proxy.Event) bool {
+			return e.Type == proxy.EventLog && e.Log.Action == proxy.ActionHold
+		})
+		assert.Equal(t, backendHost, hold.Log.Domain)
+		assert.Equal(t, backendPort, hold.Log.Port)
+
+		allowResp := controlAPIPostJSON(t, tlsClient, controlURL+"/allow-http",
+			fmt.Sprintf(`{"entries":["%s:%s"]}`, backendHost, backendPort))
+		allowResp.Body.Close()
+		require.Equal(t, http.StatusOK, allowResp.StatusCode)
+
+		select {
+		case code := <-status:
+			assert.Equal(t, http.StatusOK, code, "held request goes through once allowed")
+		case <-time.After(2 * time.Second):
+			t.Fatal("held request didn't return within 2s of the allow")
+		}
+
+		end := nextEvent(func(e proxy.Event) bool { return e.Type == proxy.EventHoldEnd })
+		assert.Equal(t, hold.Log.ID, end.HoldEnd.ID)
+		assert.Equal(t, proxy.HoldAllowed, end.HoldEnd.Outcome)
+	})
 }
