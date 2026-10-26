@@ -496,7 +496,8 @@ vibepit monitor [flags]
 - If `--session` is not provided and multiple sessions are running,
   `vibepit` presents an interactive session selector.
 - If only one session is running, `vibepit` connects to it directly.
-- The monitor updates live from the proxy's event stream. It doesn't poll.
+- The logs and held requests update live from the proxy's event stream.
+  Host statistics are still refreshed periodically.
 - While the monitor is attached, the proxy holds requests to targets that
   are not in the allowlist, as with [`--prompt`](#blocked-connection-prompt).
   Held requests are yellow on both tabs. The logs tab shows "held · waiting
