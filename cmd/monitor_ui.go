@@ -329,6 +329,11 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			break
 		}
 		switch {
+		case errors.Is(msg.batch.Err, ErrUnsupportedEndpoint):
+			// A proxy started by an older vibepit has no event stream. It's
+			// reachable, so the hosts tab still works.
+			s.logs.unsupported = true
+			s.connected(w)
 		case msg.batch.Err != nil:
 			s.connectionLost(w, msg.batch.Err)
 		case msg.batch.Reset:

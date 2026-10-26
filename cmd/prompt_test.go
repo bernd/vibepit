@@ -339,10 +339,6 @@ func TestRunBlockPrompter_BurstPastTail(t *testing.T) {
 			client, connected := prompterClient(t, ep.api)
 			return ep.log, client, connected
 		}},
-		{"polling", func(t *testing.T) (*proxy.LogBuffer, *ControlClient, func()) {
-			tp := newTestProxy(t)
-			return tp.log, tp.client, func() { time.Sleep(50 * time.Millisecond) }
-		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -568,22 +564,13 @@ func TestRunBlockPrompter_ProxyRestart(t *testing.T) {
 	assert.False(t, q.Items()[1].Deadline.IsZero(), "b.com is held")
 }
 
-func TestRunBlockPrompter_OlderProxyStillPrompts(t *testing.T) {
+func TestRunBlockPrompter_StopsForProxyWithoutStream(t *testing.T) {
 	tp := newTestProxy(t)
-	var polls atomic.Int32
-	client := testControlClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/logs" {
-			polls.Add(1)
-		}
-		tp.api.ServeHTTP(w, r)
-	}))
-	prompted := make(chan []string, 10)
-	startPrompter(t, client, 5*time.Millisecond, decideAll(prompted))
-	// The first poll positions the feed; blocks from then on prompt.
-	require.Eventually(t, func() bool { return polls.Load() >= 2 }, time.Second, time.Millisecond)
-
-	tp.log.Add(blocked("a.com"))
-	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	err := runBlockPrompter(t.Context(), tp.client, 5*time.Millisecond, func(context.Context, *promptQueue) (promptResult, error) {
+		t.Error("no prompt without the event stream")
+		return promptResult{}, nil
+	})
+	assert.ErrorIs(t, err, errNoEventStream)
 }
 
 func TestStartBlockPrompter(t *testing.T) {

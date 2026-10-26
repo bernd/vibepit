@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -257,21 +258,26 @@ func TestStartFeed_ReconnectsWhenIdle(t *testing.T) {
 	assert.GreaterOrEqual(t, conns, 2)
 }
 
-func TestStartFeed_PollsOlderProxy(t *testing.T) {
+func TestStartFeed_ReportsProxyWithoutStream(t *testing.T) {
 	tp := newTestProxy(t)
-	add := func(n int) {
-		for range n {
-			tp.log.Add(proxy.LogEntry{Domain: "a.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
-		}
-	}
-	add(3)
-	ch := startFeed(t.Context(), tp.client, 2, testRetry)
+	var requests atomic.Int32
+	client := testControlClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		tp.api.ServeHTTP(w, r)
+	}))
+	ch := startFeed(t.Context(), client, 25, testRetry)
 
-	assert.Equal(t, []string{"connect", "log 2", "log 3"}, readFeed(t, ch, 3))
-	add(2)
-	assert.Equal(t, []string{"log 4", "log 5"}, readFeed(t, ch, 2))
-	add(1)
-	assert.Equal(t, []string{"log 6"}, readFeed(t, ch, 1))
+	b := <-ch
+	require.ErrorIs(t, b.Err, ErrUnsupportedEndpoint)
+	assert.Empty(t, b.Events)
+	// The feed gives up: no retries, no polling.
+	time.Sleep(10 * testRetry)
+	assert.Equal(t, int32(1), requests.Load())
+	select {
+	case b := <-ch:
+		t.Fatalf("unexpected batch after the unsupported report: %+v", b)
+	default:
+	}
 }
 
 func TestStartFeed_GroupsEventsWhileConsumerBusy(t *testing.T) {

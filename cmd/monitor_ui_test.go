@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -494,8 +495,9 @@ func fakeProxyClient(t *testing.T, requests *requestLog, hostsStatus int) *Contr
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			requests.add(req.URL.RequestURI())
 			switch req.URL.Path {
-			case "/logs":
-				return jsonResponse(http.StatusOK, `[{"id":11,"domain":"api.openai.com","port":"443","action":"block","source":"proxy"}]`), nil
+			case "/events":
+				return fakeEventStream(t, req.Context(), proxy.LogEntry{ID: 11, Domain: "api.openai.com", Port: "443",
+					Action: proxy.ActionBlock, Source: proxy.SourceProxy}), nil
 			case "/hosts":
 				if hostsStatus != http.StatusOK {
 					return jsonResponse(hostsStatus, "404 page not found\n"), nil
@@ -506,6 +508,32 @@ func fakeProxyClient(t *testing.T, requests *requestLog, hostsStatus int) *Contr
 		}),
 	}
 	return &ControlClient{http: hc, stream: hc, baseURL: "https://proxy.local"}
+}
+
+// fakeEventStream answers /events with entries as history and their
+// cursor, then stays open until the request ends, like a live stream.
+func fakeEventStream(t *testing.T, ctx context.Context, entries ...proxy.LogEntry) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	var cursor uint64
+	for _, e := range entries {
+		require.NoError(t, proxy.WriteEvent(&buf, proxy.Event{Type: proxy.EventLog, Log: e}))
+		cursor = e.ID
+	}
+	require.NoError(t, proxy.WriteEvent(&buf, proxy.Event{Type: proxy.EventCursor, Cursor: cursor}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(io.MultiReader(&buf, ctxReader{ctx})),
+	}
+}
+
+// ctxReader blocks until ctx ends.
+type ctxReader struct{ ctx context.Context }
+
+func (r ctxReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, io.EOF
 }
 
 func newPollingTestScreen(t *testing.T, client *ControlClient, onBack func() tui.Screen) (*monitorScreen, *tui.Window) {
@@ -652,6 +680,16 @@ func TestMonitorScreen_FeedMsg(t *testing.T) {
 		s, w := newPollingTestScreen(t, nil, nil)
 		_, cmd := s.Update(feedMsg{from: s, closed: true}, w)
 		assert.Nil(t, cmd)
+	})
+
+	t.Run("a proxy without the stream is not a lost connection", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, func() tui.Screen { return nil })
+		s.tab = tabLogs
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: ErrUnsupportedEndpoint}}, w)
+		assert.True(t, s.logs.unsupported)
+		assert.Equal(t, -1, s.disconnectTick, "the session is still there")
+		assert.NoError(t, w.Err())
+		assert.Contains(t, w.View().Content, "proxy does not support the live log, restart the session")
 	})
 
 	t.Run("hold-open adds no log line", func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 )
@@ -18,6 +19,9 @@ type logView struct {
 	cursor    tui.Cursor
 	selecting bool // Pos is a selection the user made; see selectionTimeout
 	newCount  int
+	// unsupported is set for a proxy that predates the event stream; the
+	// log can't follow it.
+	unsupported bool
 }
 
 func (v *logView) selected() (proxy.LogEntry, bool) {
@@ -95,6 +99,10 @@ func (v *logView) handleKey(msg tea.KeyPressMsg) bool {
 }
 
 func (v *logView) render(allows allowState, held *heldTargets, now time.Time) string {
+	if v.unsupported {
+		return lipgloss.NewStyle().Foreground(tui.ColorOrange).
+			Render("proxy does not support the live log, restart the session")
+	}
 	var lines []string
 	end := min(v.cursor.Offset+v.cursor.VpHeight, len(v.items))
 	for i := v.cursor.Offset; i < end; i++ {

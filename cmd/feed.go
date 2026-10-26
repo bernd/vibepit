@@ -32,8 +32,8 @@ var feedIdleTimeout = 30 * time.Second
 // startFeed keeps an event stream to the proxy open and delivers its events
 // until ctx ends, then closes the channel. The first stream starts with the
 // newest tail entries; reconnects resume where the last stream ended, so
-// every log entry is delivered once. A proxy without the stream is polled
-// every retry instead.
+// every log entry is delivered once. A proxy that predates the stream gets
+// one batch with ErrUnsupportedEndpoint and nothing after it.
 func startFeed(ctx context.Context, c *ControlClient, tail int, retry time.Duration) <-chan feedBatch {
 	f := &feed{
 		client: c,
@@ -77,7 +77,7 @@ func (f *feed) run(ctx context.Context) {
 			return
 		}
 		if errors.Is(err, ErrUnsupportedEndpoint) {
-			f.poll(ctx)
+			f.queue.push(feedBatch{Err: err})
 			return
 		}
 		f.fail(err)
@@ -233,55 +233,6 @@ func (f *feed) apply(e proxy.Event) (proxy.Event, bool) {
 	default:
 		return e, false
 	}
-}
-
-// poll replaces the stream for a proxy that predates it. Such a proxy
-// never holds requests, so log entries are all there is.
-func (f *feed) poll(ctx context.Context) {
-	up := false
-	for {
-		entries, err := f.fetch()
-		if err != nil {
-			f.fail(err)
-			up = false
-		} else {
-			if !up {
-				f.down = false
-				up = true
-				f.queue.push(feedBatch{})
-			}
-			if len(entries) > 0 {
-				events := make([]proxy.Event, len(entries))
-				for i, e := range entries {
-					events[i] = proxy.Event{Type: proxy.EventLog, Log: e}
-				}
-				f.queue.push(feedBatch{Events: events})
-			}
-		}
-		if !sleepCtx(ctx, f.retry) {
-			return
-		}
-	}
-}
-
-// fetch returns the entries to deliver from one poll.
-func (f *feed) fetch() ([]proxy.LogEntry, error) {
-	if f.positioned {
-		entries, err := f.client.LogsAfter(f.lastID)
-		if err == nil && len(entries) > 0 {
-			f.lastID = entries[len(entries)-1].ID
-		}
-		return entries, err
-	}
-	entries, err := f.client.Logs()
-	if err != nil {
-		return nil, err
-	}
-	f.positioned = true
-	if len(entries) > 0 {
-		f.lastID = entries[len(entries)-1].ID
-	}
-	return entries[max(0, len(entries)-f.tail):], nil
 }
 
 func (f *feed) fail(err error) {

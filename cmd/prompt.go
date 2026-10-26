@@ -58,6 +58,8 @@ const (
 	maxPromptTargets = 1000
 )
 
+var errNoEventStream = errors.New("the proxy predates prompts; restart the session to get them")
+
 var errTooManyTargets = fmt.Errorf("more than %d blocked targets, no more prompts in this session", maxPromptTargets)
 
 // Next returns the entries in batch that allowing would unblock and that
@@ -114,7 +116,8 @@ func (bw *blockWatcher) Retry(target proxy.Target) {
 // the prompt shows, until ctx is done. Feed errors are retried by the feed;
 // prompt failures are for the prompt function to report, see loggedPrompt.
 // It returns early, with the reason, once no more prompts can be shown:
-// they are unavailable, or too many targets were blocked.
+// they are unavailable, too many targets were blocked, or the proxy
+// predates the event stream.
 func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.Duration, prompt promptFunc) error {
 	// An open stream makes the proxy hold requests, so it must not outlive
 	// the prompts.
@@ -151,6 +154,10 @@ func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.
 					<-shown
 				}
 				return nil
+			}
+			if errors.Is(b.Err, ErrUnsupportedEndpoint) {
+				// The feed delivers nothing after this, so nothing is queued.
+				return errNoEventStream
 			}
 			if b.Reset {
 				p.q.DropHolds()

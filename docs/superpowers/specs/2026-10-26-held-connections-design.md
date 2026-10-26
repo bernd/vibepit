@@ -307,11 +307,16 @@ file and shouldn't be committed.
 
 ### Older proxies
 
-If `/events` returns 404, the client falls back to polling `/logs` as
-today, and nothing is held, because the old proxy can't hold. This
-follows the existing `ErrUnsupportedEndpoint` pattern. An older client
-attached to a newer proxy polls and never opens a stream, so it doesn't
-count as a watcher, and the proxy keeps blocking immediately for it.
+If `/events` returns 404, the proxy predates this feature, which only
+happens for a session started before an upgrade. The client doesn't fall
+back to polling `/logs` (the user's decision after implementation, to keep the
+client small). Prompts stop, and `startPrompterLoop` notes "the proxy
+predates prompts; restart the session to get them" after the session.
+The monitor's logs tab shows "proxy does not support the live log,
+restart the session", and the hosts tab keeps working. This follows the
+existing `ErrUnsupportedEndpoint` pattern. An older client attached to a
+newer proxy polls and never opens a stream, so it doesn't count as a
+watcher, and the proxy keeps blocking immediately for it.
 
 ## Constraints
 
@@ -353,7 +358,7 @@ count as a watcher, and the proxy keeps blocking immediately for it.
   as today. The numbers are guesses meant to stop abuse, and normal use
   shouldn't come near them.
 - Held hosts are pinned at the top of the hosts tab.
-- Older proxies fall back to polling with no holds.
+- Older proxies get no fallback: prompts stop and the monitor's logs tab says to restart the session (the user's decision, after implementation).
 - When the last watcher disconnects, holds end immediately (`unwatched`).
   When every waiting request goes away, the hold ends (`abandoned`).
 - A `hold` line shows how the hold ended, and the request's outcome is a

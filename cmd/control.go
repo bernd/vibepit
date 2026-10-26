@@ -50,24 +50,6 @@ func (c *ControlClient) Close() {
 	c.http.CloseIdleConnections()
 }
 
-// Logs returns a recent tail of the log, for filling a screen on first load.
-func (c *ControlClient) Logs() ([]proxy.LogEntry, error) {
-	var entries []proxy.LogEntry
-	if err := c.get("/logs", &entries); err != nil {
-		return nil, err
-	}
-	return entries, nil
-}
-
-// LogsAfter returns every entry with an ID greater than afterID; 0 means all.
-func (c *ControlClient) LogsAfter(afterID uint64) ([]proxy.LogEntry, error) {
-	var entries []proxy.LogEntry
-	if err := c.get(fmt.Sprintf("/logs?after=%d", afterID), &entries); err != nil {
-		return nil, err
-	}
-	return entries, nil
-}
-
 func (c *ControlClient) Hosts() ([]proxy.HostStats, error) {
 	var hosts []proxy.HostStats
 	if err := c.get("/hosts", &hosts); err != nil {
