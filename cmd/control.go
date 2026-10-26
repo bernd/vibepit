@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -19,7 +22,10 @@ var ErrUnsupportedEndpoint = errors.New("endpoint not supported by proxy")
 
 // ControlClient talks to a running proxy's control API over mTLS.
 type ControlClient struct {
-	http    *http.Client
+	http *http.Client
+	// stream has no overall timeout, which would end an event stream; its
+	// requests live as long as their context.
+	stream  *http.Client
 	baseURL string
 }
 
@@ -31,11 +37,10 @@ func NewControlClient(session *SessionInfo) (*ControlClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load TLS credentials: %w", err)
 	}
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
 	return &ControlClient{
-		http: &http.Client{
-			Timeout:   5 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: tlsCfg},
-		},
+		http:    &http.Client{Timeout: 5 * time.Second, Transport: transport},
+		stream:  &http.Client{Transport: transport},
 		baseURL: fmt.Sprintf("https://127.0.0.1:%s", session.ControlPort),
 	}, nil
 }
@@ -115,15 +120,92 @@ func (c *ControlClient) Check(entry proxy.LogEntry) (CheckResult, error) {
 // stop prompting for it. An older proxy without /deny can't record it; the
 // refusal then stays with this client, which doesn't ask twice anyway.
 func (c *ControlClient) Deny(entry proxy.LogEntry) error {
+	return c.DenyTarget(entry.Target())
+}
+
+// DenyTarget is Deny for a target without a log entry at hand.
+func (c *ControlClient) DenyTarget(t proxy.Target) error {
 	err := c.post("/deny", map[string]string{
-		"source": string(entry.Source),
-		"target": entry.Target().String(),
+		"source": string(t.Source),
+		"target": t.String(),
 	}, nil)
 	var se *statusError
 	if errors.As(err, &se) && se.code == http.StatusNotFound {
 		return nil
 	}
 	return err
+}
+
+// EventsTail opens the event stream with the newest n log entries as
+// history. The stream ends when ctx does.
+func (c *ControlClient) EventsTail(ctx context.Context, n int) (*EventStream, error) {
+	return c.events(ctx, fmt.Sprintf("tail=%d", n))
+}
+
+// EventsAfter opens the event stream with every log entry above after as
+// history, for resuming where an earlier stream ended.
+func (c *ControlClient) EventsAfter(ctx context.Context, after uint64) (*EventStream, error) {
+	return c.events(ctx, fmt.Sprintf("after=%d", after))
+}
+
+func (c *ControlClient) events(ctx context.Context, query string) (*EventStream, error) {
+	path := "/events?" + query
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", path, err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", path, err)
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		resp.Body.Close()
+		return nil, fmt.Errorf("GET %s: %s: %w", path, resp.Status, ErrUnsupportedEndpoint)
+	default:
+		resp.Body.Close()
+		return nil, &statusError{method: "GET", path: path, code: resp.StatusCode, status: resp.Status}
+	}
+	body := &streamBody{ReadCloser: resp.Body}
+	return &EventStream{body: body, r: bufio.NewReader(body)}, nil
+}
+
+// EventStream reads events from the proxy's /events stream.
+type EventStream struct {
+	body *streamBody
+	r    *bufio.Reader
+}
+
+// Next returns the next event. It returns io.EOF when the proxy ends the
+// stream, and events of types this client doesn't know with only Type set.
+func (s *EventStream) Next() (proxy.Event, error) {
+	return proxy.ReadEvent(s.r)
+}
+
+// Close ends the stream. It may be called while Next is blocked.
+func (s *EventStream) Close() error {
+	return s.body.Close()
+}
+
+// onRead registers f to run after every read that returned data, keepalive
+// comments included, so a caller can tell a quiet stream from a dead one.
+func (s *EventStream) onRead(f func()) {
+	s.body.onRead = f
+}
+
+type streamBody struct {
+	io.ReadCloser
+	onRead func()
+}
+
+func (b *streamBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 && b.onRead != nil {
+		b.onRead()
+	}
+	return n, err
 }
 
 // statusError is a control API response other than 200 OK.

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +19,7 @@ func testControlClient(t *testing.T, h http.Handler) *ControlClient {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &ControlClient{http: srv.Client(), baseURL: srv.URL}
+	return &ControlClient{http: srv.Client(), stream: srv.Client(), baseURL: srv.URL}
 }
 
 // testProxy is a real control API with empty allowlists, served over
@@ -258,6 +260,55 @@ func TestControlClient_CheckAndDeny(t *testing.T) {
 	res, err = client.Check(dnsEntry)
 	require.NoError(t, err)
 	assert.Equal(t, CheckResult{Denied: true}, res)
+
+	other := proxy.Target{Source: proxy.SourceProxy, Host: "b.com", Port: "443"}
+	require.NoError(t, client.DenyTarget(other))
+	res, err = client.Check(proxy.LogEntry{Source: proxy.SourceProxy, Domain: "b.com", Port: "443"})
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{Denied: true}, res)
+}
+
+func TestControlClient_Events(t *testing.T) {
+	ep := newEventsProxy(t)
+	ep.addEntries(2)
+
+	s, err := ep.client.EventsTail(t.Context(), 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close() })
+
+	e, err := s.Next()
+	require.NoError(t, err)
+	require.Equal(t, proxy.EventLog, e.Type)
+	assert.Equal(t, uint64(2), e.Log.ID)
+
+	e, err = s.Next()
+	require.NoError(t, err)
+	require.Equal(t, proxy.EventCursor, e.Type)
+	assert.Equal(t, uint64(2), e.Cursor)
+
+	ep.addEntries(1)
+	e, err = s.Next()
+	require.NoError(t, err)
+	require.Equal(t, proxy.EventLog, e.Type)
+	assert.Equal(t, uint64(3), e.Log.ID)
+}
+
+func TestControlClient_EventsUnsupported(t *testing.T) {
+	client := newTestProxy(t).client
+	tests := []struct {
+		name string
+		open func(context.Context) (*EventStream, error)
+	}{
+		{name: "tail", open: func(ctx context.Context) (*EventStream, error) { return client.EventsTail(ctx, 1) }},
+		{name: "after", open: func(ctx context.Context) (*EventStream, error) { return client.EventsAfter(ctx, 1) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.open(t.Context())
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrUnsupportedEndpoint), "got %v", err)
+		})
+	}
 }
 
 func TestControlClient_Hosts(t *testing.T) {
