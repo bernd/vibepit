@@ -270,12 +270,7 @@ func (v *hostsView) handleKey(msg tea.KeyPressMsg) bool {
 func (v *hostsView) footerKeys(allows allowState, held *heldTargets, now time.Time) []tui.FooterKey {
 	var keys []tui.FooterKey
 	if sel, ok := v.selected(); ok {
-		if isHeld(held, sel.HostKey, now) {
-			keys = append(keys, allowFooterKeys(allows.forHeld(sel.HostKey))...)
-			keys = append(keys, tui.FooterKey{Key: "n", Desc: "deny"})
-		} else {
-			keys = append(keys, allowFooterKeys(allows.forHost(sel))...)
-		}
+		keys = append(keys, hostKeys(allows, held, sel, now)...)
 		desc := "details"
 		if v.isExpandedHost(sel.HostKey) {
 			desc = "collapse"
@@ -350,6 +345,15 @@ func (v *hostsView) renderSummary() string {
 		summary += "  " + lipgloss.NewStyle().Foreground(tui.ColorYellow).Render(fmt.Sprintf("● %d held", v.held))
 	}
 	return summary
+}
+
+// hostKeys are the keys that act on host h, for the footer and the row's
+// inline hint alike.
+func hostKeys(allows allowState, held *heldTargets, h proxy.HostStats, now time.Time) []tui.FooterKey {
+	if isHeld(held, h.HostKey, now) {
+		return append(allowFooterKeys(allows.forHeld(h.HostKey)), tui.FooterKey{Key: "n", Desc: "deny"})
+	}
+	return allowFooterKeys(allows.forHost(h))
 }
 
 func isHeld(held *heldTargets, k proxy.HostKey, now time.Time) bool {
@@ -459,14 +463,14 @@ func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, sele
 	if held != nil {
 		oh, isHeld = held.Open(h.HostKey, now)
 	}
-	statusColor, statusLabel, target := st.color(), st.label(), allows.forHost(h)
+	statusColor, statusLabel := st.color(), st.label()
 	if isHeld {
 		tint := "#1f2119"
 		if selected {
 			tint = "#2a2e22"
 		}
 		base = base.Background(lipgloss.Color(tint))
-		statusColor, statusLabel, target = tui.ColorYellow, fmt.Sprintf("held %ds", secondsLeft(oh.Deadline, now)), allows.forHeld(h.HostKey)
+		statusColor, statusLabel = tui.ColorYellow, fmt.Sprintf("held %ds", secondsLeft(oh.Deadline, now))
 	}
 
 	timeColor := tui.ColorField
@@ -490,7 +494,7 @@ func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, sele
 
 	var hint string
 	if selected {
-		for _, k := range allowFooterKeys(target) {
+		for _, k := range hostKeys(allows, held, h, now) {
 			hint += base.Foreground(tui.ColorCyan).Bold(true).Render(k.Key) +
 				base.Foreground(tui.ColorField).Render(" "+k.Desc+"  ")
 		}

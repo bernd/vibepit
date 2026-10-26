@@ -786,4 +786,7 @@ func TestHostsView_HeldRowFooterKeys(t *testing.T) {
 	selectDomain(t, v, "new.example", proxy.SourceProxy)
 	keys := v.footerKeys(allowState{}, held, hostsT0)
 	assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "deny"}}, keys[:3])
+
+	line := lineContaining(renderPlainHeld(v, allowState{}, held, 140, 12, hostsT0), "new.example")
+	assert.Contains(t, line, "a allow  A allow+save  n deny", "the row hints the footer's keys")
 }
