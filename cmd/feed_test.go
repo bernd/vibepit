@@ -414,3 +414,78 @@ func TestStartFeed_ProxyRestart(t *testing.T) {
 		assert.Equal(t, []string{"tail=25", "after=2"}, h.recorded())
 	})
 }
+
+// scriptedEvents serves /events from a script: stream i sends script[i]
+// and ends, streams past the script stay open and silent. It returns a
+// client and the queries the streams were opened with.
+func scriptedEvents(t *testing.T, script ...[]proxy.Event) (*ControlClient, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var queries []string
+	client := testControlClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		queries = append(queries, r.URL.RawQuery)
+		conn := len(queries) - 1
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if conn >= len(script) {
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		for _, e := range script[conn] {
+			require.NoError(t, proxy.WriteEvent(w, e))
+		}
+		w.(http.Flusher).Flush()
+	}))
+	return client, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), queries...)
+	}
+}
+
+func TestStartFeed_OpenHoldsDontPinReconnects(t *testing.T) {
+	logEvent := func(id uint64, action proxy.Action, deadline time.Time, outcome proxy.HoldOutcome) proxy.Event {
+		return proxy.Event{Type: proxy.EventLog, Log: proxy.LogEntry{ID: id, Domain: fmt.Sprintf("d%d.com", id), Port: "443",
+			Action: action, Source: proxy.SourceProxy, Deadline: deadline, Outcome: outcome}}
+	}
+	cursor := func(id uint64) proxy.Event { return proxy.Event{Type: proxy.EventCursor, Cursor: id} }
+	future := time.Now().Add(time.Hour)
+
+	tests := []struct {
+		name   string
+		script [][]proxy.Event
+		want   []string
+	}{
+		{
+			// Its entry may have left the log ring, so replaying from it
+			// could mean the whole ring on every reconnect.
+			name: "a hold past its deadline",
+			script: [][]proxy.Event{{
+				logEvent(1, proxy.ActionAllow, time.Time{}, proxy.HoldNone),
+				logEvent(2, proxy.ActionHold, time.Now().Add(-time.Second), proxy.HoldNone),
+				logEvent(3, proxy.ActionAllow, time.Time{}, proxy.HoldNone),
+				cursor(3),
+			}},
+			want: []string{"tail=25", "after=3"},
+		},
+		{
+			name: "a hold whose new entry came with its outcome",
+			script: [][]proxy.Event{
+				{cursor(5), {Type: proxy.EventHoldOpen, Log: logEvent(6, proxy.ActionHold, future, proxy.HoldNone).Log}},
+				{logEvent(6, proxy.ActionHold, future, proxy.HoldDenied), cursor(6)},
+			},
+			want: []string{"tail=25", "after=5", "after=6"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, queries := scriptedEvents(t, tt.script...)
+			startFeed(t.Context(), client, 25, testRetry)
+			require.Eventually(t, func() bool { return len(queries()) >= len(tt.want) }, 5*time.Second, time.Millisecond)
+			assert.Equal(t, tt.want, queries())
+		})
+	}
+}

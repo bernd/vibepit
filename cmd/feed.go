@@ -40,7 +40,7 @@ func startFeed(ctx context.Context, c *ControlClient, tail int, retry time.Durat
 		tail:   max(tail, 0),
 		retry:  retry,
 		idle:   feedIdleTimeout,
-		open:   make(map[uint64]struct{}),
+		open:   make(map[uint64]time.Time),
 		queue:  newFeedQueue(),
 	}
 	out := make(chan feedBatch)
@@ -62,9 +62,9 @@ type feed struct {
 	// lastID is the highest cursor or log ID seen. Log entries up to it
 	// were delivered or deliberately skipped by the tail.
 	lastID uint64
-	// open holds the IDs of hold entries the consumer was told about and
-	// hasn't seen end yet.
-	open map[uint64]struct{}
+	// open maps the IDs of hold entries the consumer was told about and
+	// hasn't seen end yet to their deadlines.
+	open map[uint64]time.Time
 	// down is set once a failure was reported, so a proxy that stays away
 	// is reported once rather than on every retry.
 	down bool
@@ -170,10 +170,17 @@ func (f *feed) reset(cursor uint64) {
 
 // resumeAfter reaches back far enough to replay every hold entry the
 // consumer still thinks is open, so holds that ended while disconnected
-// come back with their outcome.
+// come back with their outcome. A hold past its deadline has ended, and
+// its entry may have left the log ring: reaching back for it could replay
+// the whole ring on every reconnect, so it is no longer tracked.
 func (f *feed) resumeAfter() uint64 {
+	now := time.Now()
 	after := f.lastID
-	for id := range f.open {
+	for id, deadline := range f.open {
+		if !now.Before(deadline) {
+			delete(f.open, id)
+			continue
+		}
 		after = min(after, id-1)
 	}
 	return after
@@ -203,12 +210,17 @@ func (f *feed) apply(e proxy.Event) (proxy.Event, bool) {
 		}
 		f.positioned = true
 		f.lastID = id
-		if e.Log.Action == proxy.ActionHold && e.Log.Outcome == proxy.HoldNone {
-			f.open[id] = struct{}{}
+		if e.Log.Action == proxy.ActionHold {
+			if e.Log.Outcome == proxy.HoldNone {
+				f.open[id] = e.Log.Deadline
+			} else {
+				// Its hold-open may have come first; the outcome ends it.
+				delete(f.open, id)
+			}
 		}
 		return e, true
 	case proxy.EventHoldOpen:
-		f.open[e.Log.ID] = struct{}{}
+		f.open[e.Log.ID] = e.Log.Deadline
 		return e, true
 	case proxy.EventHoldEnd:
 		// An ending the consumer already got from a replayed outcome, or
