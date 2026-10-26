@@ -141,80 +141,138 @@ func TestBlockWatcher_LimitsTargets(t *testing.T) {
 	assert.Empty(t, fresh)
 }
 
-func TestRunBlockPrompter(t *testing.T) {
-	tp := newTestProxy(t)
-	log, client := tp.log, tp.client
-	// Blocked before the poller starts: must not prompt.
-	log.Add(proxy.LogEntry{Domain: "old.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+// blocked is a blocked request for domain:443 that allowing would unblock.
+func blocked(domain string) proxy.LogEntry {
+	return proxy.LogEntry{Domain: domain, Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy}
+}
 
-	prompted := make(chan proxy.LogEntry, 10)
+// startPrompter runs runBlockPrompter until the test ends and returns its
+// result.
+func startPrompter(t *testing.T, client *ControlClient, interval time.Duration, prompt promptFunc) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- runBlockPrompter(t.Context(), client, interval, prompt) }()
+	return done
+}
+
+// prompterClient returns a client for api and a function that waits until
+// the stream it opens has sent its cursor: what is logged from then on
+// reaches the prompter, what was logged before is skipped.
+func prompterClient(t *testing.T, api http.Handler) (*ControlClient, func()) {
+	t.Helper()
+	connected := make(chan struct{}, 1)
+	h := &cutStream{api: api, drop: func(_ int, e proxy.Event) bool {
+		if e.Type == proxy.EventCursor {
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+		}
+		return false
+	}}
+	return testControlClient(t, h), func() {
+		t.Helper()
+		receive(t, connected, "event stream")
+	}
+}
+
+// holdRequest holds a request for domain:443 until the test ends or the
+// hold ends.
+func (ep *eventsProxy) holdRequest(t *testing.T, domain string) {
+	go ep.holds.Wait(t.Context(), proxy.HostKey{Source: proxy.SourceProxy, Domain: domain, Port: "443"})
+}
+
+// queued returns the targets in q, first target first.
+func queued(q *promptQueue) []string {
+	var targets []string
+	for _, it := range q.Items() {
+		targets = append(targets, it.Entry.Target().String())
+	}
+	return targets
+}
+
+// decideAll is a prompt that, like the approve screen, decides the targets
+// it shows until the queue is empty.
+func decideAll(prompted chan<- []string) promptFunc {
+	return func(ctx context.Context, q *promptQueue) error {
+		for q.Len() > 0 {
+			targets := queued(q)
+			prompted <- targets
+			for _, it := range q.Items()[:len(targets)] {
+				q.Remove(it.Entry.Target())
+			}
+		}
+		return nil
+	}
+}
+
+func receive[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(time.Second):
+		require.FailNow(t, "no "+what)
+		panic("unreachable")
+	}
+}
+
+func assertQuiet[T any](t *testing.T, ch <-chan T, what string) {
+	t.Helper()
+	select {
+	case v := <-ch:
+		assert.Fail(t, fmt.Sprintf("unexpected %s: %v", what, v))
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRunBlockPrompter(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	// Blocked before the prompter starts: must not prompt.
+	ep.log.Add(blocked("old.com"))
+
+	prompted := make(chan []string, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runBlockPrompter(ctx, client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-			prompted <- e
-			return nil
-		})
+		runBlockPrompter(ctx, client, 5*time.Millisecond, decideAll(prompted))
 	}()
+	connected()
+	ep.log.Add(blocked("new.com"))
+	ep.log.Add(blocked("new.com"))
+	ep.log.Add(proxy.LogEntry{Domain: "fine.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
 
-	// Give the poller a moment to prime its cursor past old.com.
-	time.Sleep(20 * time.Millisecond)
-	log.Add(proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-	log.Add(proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-	log.Add(proxy.LogEntry{Domain: "fine.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
-
-	select {
-	case e := <-prompted:
-		assert.Equal(t, "new.com", e.Domain)
-	case <-time.After(time.Second):
-		require.FailNow(t, "no prompt for new.com")
-	}
+	assert.Equal(t, []string{"new.com:443"}, receive(t, prompted, "prompt for new.com"))
 
 	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		require.FailNow(t, "poller did not stop on cancel")
-	}
-	select {
-	case e := <-prompted:
-		require.FailNow(t, fmt.Sprintf("unexpected extra prompt for %s", e.Domain))
-	default:
-	}
+	receive(t, done, "stop on cancel")
+	assertQuiet(t, prompted, "prompt")
 }
 
-func TestRunBlockPrompter_RetriesPriming(t *testing.T) {
-	tp := newTestProxy(t)
-	log, api := tp.log, tp.api
-	log.Add(proxy.LogEntry{Domain: "old.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+func TestRunBlockPrompter_ConnectsLate(t *testing.T) {
+	ep := newEventsProxy(t)
+	ep.log.Add(blocked("old.com"))
 
-	// Fail the first requests so the priming call does not succeed at once.
+	// Fail the first requests so the feed doesn't connect at once.
 	var calls atomic.Int32
-	client := testControlClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client, connected := prompterClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) <= 3 {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		api.ServeHTTP(w, r)
+		ep.api.ServeHTTP(w, r)
 	}))
 
-	prompted := make(chan proxy.LogEntry, 10)
-	ctx := t.Context()
-	go runBlockPrompter(ctx, client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-		prompted <- e
-		return nil
-	})
+	prompted := make(chan []string, 10)
+	startPrompter(t, client, 5*time.Millisecond, decideAll(prompted))
+	connected()
+	ep.log.Add(blocked("new.com"))
 
-	require.Eventually(t, func() bool { return calls.Load() > 5 }, time.Second, 5*time.Millisecond)
-	log.Add(proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-
-	select {
-	case e := <-prompted:
-		assert.Equal(t, "new.com", e.Domain, "history from before the poller started must not be replayed")
-	case <-time.After(time.Second):
-		require.FailNow(t, "no prompt for new.com")
-	}
+	assert.Equal(t, []string{"new.com:443"}, receive(t, prompted, "prompt for new.com"),
+		"history from before the prompter started must not be replayed")
+	assertQuiet(t, prompted, "prompt")
 }
 
 func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
@@ -232,79 +290,207 @@ func TestRunBlockPrompter_ReasksAfterAFailedPrompt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tp := newTestProxy(t)
-			prompted := make(chan proxy.LogEntry, 20)
+			ep := newEventsProxy(t)
+			client, connected := prompterClient(t, ep.api)
+			prompted := make(chan []string, 20)
 			var calls atomic.Int32
-			go runBlockPrompter(t.Context(), tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-				prompted <- e
+			startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+				prompted <- queued(q)
 				if int(calls.Add(1)) <= tt.fails {
 					return tt.err
 				}
+				q.Clear()
 				return nil
 			})
-			time.Sleep(20 * time.Millisecond)
-			block := proxy.LogEntry{Domain: "new.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy}
+			connected()
 			for i := range tt.prompts {
-				tp.log.Add(block)
-				select {
-				case <-prompted:
-				case <-time.After(time.Second):
-					require.FailNow(t, fmt.Sprintf("no prompt %d", i+1))
-				}
+				ep.log.Add(blocked("new.com"))
+				receive(t, prompted, fmt.Sprintf("prompt %d", i+1))
 			}
-			tp.log.Add(block)
-			select {
-			case <-prompted:
-				require.FailNow(t, "prompted again")
-			case <-time.After(50 * time.Millisecond):
-			}
+			ep.log.Add(blocked("new.com"))
+			assertQuiet(t, prompted, "prompt")
 		})
 	}
 }
 
 func TestRunBlockPrompter_StopsWhenPromptsAreUnavailable(t *testing.T) {
-	tp := newTestProxy(t)
-	prompted := make(chan proxy.LogEntry, 10)
-	done := make(chan error, 1)
-	go func() {
-		done <- runBlockPrompter(t.Context(), tp.client, 5*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-			prompted <- e
-			return fmt.Errorf("show: %w", overlay.ErrUnavailable)
-		})
-	}()
-	time.Sleep(20 * time.Millisecond)
-	tp.log.Add(proxy.LogEntry{Domain: "a.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
-	select {
-	case err := <-done:
-		assert.ErrorIs(t, err, overlay.ErrUnavailable)
-	case <-time.After(time.Second):
-		require.FailNow(t, "the poller kept polling")
-	}
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	prompted := make(chan []string, 10)
+	done := startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		prompted <- queued(q)
+		return fmt.Errorf("show: %w", overlay.ErrUnavailable)
+	})
+	connected()
+	ep.log.Add(blocked("a.com"))
+	assert.ErrorIs(t, receive(t, done, "return"), overlay.ErrUnavailable)
 	assert.Len(t, prompted, 1)
 }
 
 func TestRunBlockPrompter_BurstPastTail(t *testing.T) {
-	tp := newTestProxy(t)
-	prompted := make(chan proxy.LogEntry, 100)
-	ctx := t.Context()
-	go runBlockPrompter(ctx, tp.client, 20*time.Millisecond, func(ctx context.Context, e proxy.LogEntry) error {
-		prompted <- e
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) (*proxy.LogBuffer, *ControlClient, func())
+	}{
+		{"stream", func(t *testing.T) (*proxy.LogBuffer, *ControlClient, func()) {
+			ep := newEventsProxy(t)
+			client, connected := prompterClient(t, ep.api)
+			return ep.log, client, connected
+		}},
+		{"polling", func(t *testing.T) (*proxy.LogBuffer, *ControlClient, func()) {
+			tp := newTestProxy(t)
+			return tp.log, tp.client, func() { time.Sleep(50 * time.Millisecond) }
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, client, ready := tt.setup(t)
+			prompted := make(chan []string, 200)
+			startPrompter(t, client, 20*time.Millisecond, decideAll(prompted))
+			ready()
+			n := proxy.TailSize + 5
+			for i := range n {
+				log.Add(blocked(fmt.Sprintf("d%d.com", i)))
+			}
+			seen := map[string]bool{}
+			for len(seen) < n {
+				for _, target := range receive(t, prompted, fmt.Sprintf("prompt after %d of %d targets", len(seen), n)) {
+					seen[target] = true
+				}
+			}
+		})
+	}
+}
+
+func TestRunBlockPrompter_QueuesTargetsWhileShowing(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	shown := make(chan *promptQueue, 10)
+	release := make(chan struct{})
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		shown <- q
+		<-release
+		q.Clear()
 		return nil
 	})
-	time.Sleep(50 * time.Millisecond) // primed on an empty log
-	n := proxy.TailSize + 5
-	for i := range n {
-		tp.log.Add(proxy.LogEntry{Domain: fmt.Sprintf("d%d.com", i), Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy})
+	connected()
+
+	ep.holdRequest(t, "a.com")
+	q := receive(t, shown, "prompt")
+	for i, domain := range []string{"b.com", "c.com"} {
+		ep.holdRequest(t, domain)
+		require.Eventually(t, func() bool { return q.Len() == i+2 }, time.Second, time.Millisecond, "%s queued", domain)
 	}
-	seen := map[string]bool{}
-	for len(seen) < n {
-		select {
-		case e := <-prompted:
-			seen[e.Domain] = true
-		case <-time.After(2 * time.Second):
-			require.FailNow(t, fmt.Sprintf("only %d of %d targets prompted", len(seen), n))
+	assert.Equal(t, []string{"a.com:443", "b.com:443", "c.com:443"}, queued(q))
+	for _, it := range q.Items() {
+		assert.False(t, it.Deadline.IsZero(), "%s is held", it.Entry.Target())
+	}
+	close(release)
+	assertQuiet(t, shown, "second prompt")
+}
+
+func TestRunBlockPrompter_DismissPromptsAgain(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	prompted := make(chan []string, 10)
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		prompted <- queued(q)
+		return nil // dismissed: the queue is left as it was
+	})
+	connected()
+
+	ep.log.Add(blocked("a.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	ep.log.Add(blocked("a.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt after the dismissal"))
+}
+
+func TestRunBlockPrompter_DecidedTargetsDontPromptAgain(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	prompted := make(chan []string, 10)
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		prompted <- queued(q)
+		q.Remove(q.Items()[0].Entry.Target()) // allowed
+		return nil
+	})
+	connected()
+
+	ep.log.Add(blocked("a.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	ep.log.Add(blocked("a.com"))
+	assertQuiet(t, prompted, "prompt for a decided target")
+}
+
+func TestRunBlockPrompter_TargetsAfterTheQueueEmptiedPrompt(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	prompted := make(chan []string, 10)
+	drained := make(chan struct{})
+	var calls atomic.Int32
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		prompted <- queued(q)
+		if calls.Add(1) > 1 {
+			q.Clear()
+			return nil
 		}
-	}
+		// Decide the only target, then return as a target comes in, as the
+		// screen does when it quits on the empty queue.
+		q.Remove(q.Items()[0].Entry.Target())
+		close(drained)
+		for q.Len() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		return nil
+	})
+	connected()
+
+	ep.log.Add(blocked("a.com"))
+	receive(t, drained, "drained queue")
+	ep.log.Add(blocked("b.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
+	assert.Equal(t, []string{"b.com:443"}, receive(t, prompted, "prompt for the target that came in as the prompt closed"))
+}
+
+func TestRunBlockPrompter_HoldEndUpdatesQueue(t *testing.T) {
+	ep := newEventsProxy(t)
+	client, connected := prompterClient(t, ep.api)
+	shown := make(chan *promptQueue, 10)
+	startPrompter(t, client, 5*time.Millisecond, func(ctx context.Context, q *promptQueue) error {
+		shown <- q
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	connected()
+
+	ep.holdRequest(t, "a.com")
+	q := receive(t, shown, "prompt")
+	require.Len(t, q.Items(), 1)
+	require.False(t, q.Items()[0].Deadline.IsZero(), "held")
+
+	ep.holds.End(blocked("a.com").Target(), proxy.HoldTimeout)
+	require.Eventually(t, func() bool {
+		items := q.Items()
+		return len(items) == 1 && items[0].Deadline.IsZero()
+	}, time.Second, time.Millisecond, "a timed-out hold stays queued as a block")
+}
+
+func TestRunBlockPrompter_OlderProxyStillPrompts(t *testing.T) {
+	tp := newTestProxy(t)
+	var polls atomic.Int32
+	client := testControlClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/logs" {
+			polls.Add(1)
+		}
+		tp.api.ServeHTTP(w, r)
+	}))
+	prompted := make(chan []string, 10)
+	startPrompter(t, client, 5*time.Millisecond, decideAll(prompted))
+	// The first poll positions the feed; blocks from then on prompt.
+	require.Eventually(t, func() bool { return polls.Load() >= 2 }, time.Second, time.Millisecond)
+
+	tp.log.Add(blocked("a.com"))
+	assert.Equal(t, []string{"a.com:443"}, receive(t, prompted, "prompt"))
 }
 
 func TestStartBlockPrompter(t *testing.T) {
@@ -357,23 +543,30 @@ func TestStartBlockPrompter(t *testing.T) {
 }
 
 func TestLoggedPrompt(t *testing.T) {
-	entry := proxy.LogEntry{Source: proxy.SourceProxy, Domain: "evil\x1b[2J.com", Port: "443", Action: proxy.ActionBlock}
+	evil := proxy.LogEntry{Source: proxy.SourceProxy, Domain: "evil\x1b[2J.com", Port: "443", Action: proxy.ActionBlock}
+	queue := []proxy.LogEntry{evil, blocked("b.com")}
 	tests := []struct {
 		name    string
+		queue   []proxy.LogEntry
 		err     error
 		wantLog string
 	}{
-		{name: "shown"},
-		{name: "cancelled", err: context.Canceled},
-		{name: "session ended", err: fmt.Errorf("show: %w", overlay.ErrClosed)},
-		{name: "unavailable", err: fmt.Errorf("%w: trap", overlay.ErrUnavailable), wantLog: "prompt for evil[2J.com:443: overlay: unavailable: trap"},
-		{name: "barrier timeout", err: overlay.ErrBarrierTimeout, wantLog: "prompt for evil[2J.com:443: overlay: terminal did not answer the barrier query"},
+		{name: "shown", queue: queue},
+		{name: "cancelled", queue: queue, err: context.Canceled},
+		{name: "session ended", queue: queue, err: fmt.Errorf("show: %w", overlay.ErrClosed)},
+		{name: "unavailable", queue: queue, err: fmt.Errorf("%w: trap", overlay.ErrUnavailable), wantLog: "prompt for evil[2J.com:443: overlay: unavailable: trap"},
+		{name: "barrier timeout", queue: queue, err: overlay.ErrBarrierTimeout, wantLog: "prompt for evil[2J.com:443: overlay: terminal did not answer the barrier query"},
+		{name: "empty queue", err: errors.New("program failed"), wantLog: "prompt: program failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var notes promptNotes
-			prompt := loggedPrompt(notes.Printf, func(context.Context, proxy.LogEntry) error { return tt.err })
-			assert.Equal(t, tt.err, prompt(context.Background(), entry))
+			q := newPromptQueue()
+			for _, e := range tt.queue {
+				q.Add(e)
+			}
+			prompt := loggedPrompt(notes.Printf, func(context.Context, *promptQueue) error { return tt.err })
+			assert.Equal(t, tt.err, prompt(context.Background(), q))
 			if tt.wantLog == "" {
 				assert.Empty(t, notes.Lines())
 			} else {

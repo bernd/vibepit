@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -22,9 +23,10 @@ var promptCLIFlag = &cli.BoolFlag{
 	Usage: "Show an allow/deny prompt over the session when the proxy blocks a connection",
 }
 
-// promptFunc asks the user about a blocked entry. The prompt posts the
-// decision to the control API itself.
-type promptFunc func(ctx context.Context, entry proxy.LogEntry) error
+// promptFunc asks the user about the queued targets. The prompt posts the
+// decisions to the control API itself and removes decided targets from the
+// queue; returning with targets left means they were dismissed.
+type promptFunc func(ctx context.Context, q *promptQueue) error
 
 // blockWatcher tracks the log cursor and which blocked targets have already
 // been surfaced, so each domain:port triggers at most one prompt per session
@@ -101,72 +103,151 @@ func (bw *blockWatcher) Retry(target proxy.Target) {
 	bw.targets[target] = st
 }
 
-// runBlockPrompter polls the control API for new blocked requests and calls
-// prompt for each unseen target, one at a time, until ctx is done. Poll
-// errors are retried on the next tick; prompt failures are for the prompt
-// function to report, see loggedPrompt. It returns early, with the reason,
-// once no more prompts can be shown: they are unavailable, or too many
-// targets were blocked.
+// runBlockPrompter follows the proxy's event stream and queues every unseen
+// target that allowing would unblock. When the queue has targets and no
+// prompt shows, it calls prompt with the queue, which keeps filling while
+// the prompt shows, until ctx is done. Feed errors are retried by the feed;
+// prompt failures are for the prompt function to report, see loggedPrompt.
+// It returns early, with the reason, once no more prompts can be shown:
+// they are unavailable, or too many targets were blocked.
 func runBlockPrompter(ctx context.Context, client *ControlClient, interval time.Duration, prompt promptFunc) error {
-	var bw blockWatcher
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	// Skip whatever was blocked before we started watching: start the
-	// cursor at the newest entry. Retry until that succeeds, otherwise the
-	// first poll would replay old blocks.
+	// An open stream makes the proxy hold requests, so it must not outlive
+	// the prompts.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	p := &promptLoop{client: client, q: newPromptQueue()}
+	// Tail 0 skips whatever was blocked before we started watching.
+	feed := startFeed(ctx, client, 0, interval)
+	var (
+		shown    chan error // the open prompt's result; nil while none shows
+		limitErr error
+	)
 	for {
-		entries, err := client.Logs()
-		if err == nil {
-			if len(entries) > 0 {
-				bw.cursor = entries[len(entries)-1].ID
+		if shown == nil {
+			if p.q.Len() > 0 && ctx.Err() == nil {
+				shown = make(chan error, 1)
+				p.showing = true
+				go func(done chan<- error) { done <- prompt(ctx, p.q) }(shown)
+			} else if limitErr != nil {
+				return limitErr
 			}
-			break
 		}
 		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
+		case b, ok := <-feed:
+			if !ok {
+				// ctx is done. Let an open prompt restore the screen first.
+				if shown != nil {
+					<-shown
+				}
+				return nil
+			}
+			if err := p.queue(b.Events); err != nil {
+				limitErr = err
+			}
+		case err := <-shown:
+			shown = nil
+			if err := p.settle(err); err != nil {
+				return err
+			}
 		}
 	}
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-		}
-		entries, err := client.LogsAfter(bw.cursor)
-		if err != nil {
+// promptLoop is the state runBlockPrompter keeps between prompts. Only its
+// goroutine adds to q; the open prompt removes what it decides.
+type promptLoop struct {
+	bw     blockWatcher
+	client *ControlClient
+	q      *promptQueue
+	// showing is set while a prompt is open. late holds the targets queued
+	// since its queue ran empty: the prompt quits on an empty queue, so it
+	// may never show them, and they weren't its to dismiss.
+	showing bool
+	late    []proxy.Target
+}
+
+// queue adds the targets in events that should be asked about to q. It
+// fails with errTooManyTargets once a new target is past maxPromptTargets.
+func (p *promptLoop) queue(events []proxy.Event) error {
+	var limitErr error
+	for _, ev := range events {
+		switch ev.Type {
+		case proxy.EventHoldEnd:
+			p.q.EndHold(ev.HoldEnd)
+			continue
+		case proxy.EventLog, proxy.EventHoldOpen:
+		default:
 			continue
 		}
-		fresh, limitErr := bw.Next(entries)
+		e := ev.Log
+		if !e.Allowable() {
+			continue
+		}
+		// A queued target is being asked about already: a new hold only
+		// restarts its countdown. A block changes nothing, and re-adding it
+		// could bring back a target the prompt just decided.
+		if p.q.Has(e.Target()) {
+			if e.Action == proxy.ActionHold {
+				p.add(e)
+			}
+			continue
+		}
+		fresh, err := p.bw.Next([]proxy.LogEntry{e})
+		if err != nil {
+			limitErr = err
+		}
 		for _, e := range fresh {
 			// Another client may have decided already. A failed check, e.g. an
 			// older proxy without /check, falls back to prompting.
-			if res, err := client.Check(e); err == nil && res.Decided() {
+			if res, err := p.client.Check(e); err == nil && res.Decided() {
 				continue
 			}
-			// A failed prompt may not have been seen: ask again on the next
-			// block. Without a shadow no prompt can be shown, now or later.
-			switch err := prompt(ctx, e); {
-			case err == nil:
-			case errors.Is(err, overlay.ErrUnavailable):
-				return err
-			case errors.Is(err, overlay.ErrBarrierTimeout), errors.Is(err, overlay.ErrSessionBusy):
-				// Nothing was shown, and it isn't the prompt's fault: after two
-				// timeouts in a row the terminal takes input after a pause in
-				// typing, which can't time out, and a busy session reads its
-				// input again.
-				bw.Forget(e.Target())
-			default:
-				bw.Retry(e.Target())
-			}
-		}
-		if limitErr != nil {
-			return limitErr
+			p.add(e)
 		}
 	}
+	return limitErr
+}
+
+func (p *promptLoop) add(e proxy.LogEntry) {
+	// Checking after the add can't miss an emptied queue: the prompt only
+	// removes targets, so if it ran empty before the add, e is alone now.
+	// A target the prompt goes on to show may be marked too; dismissing it
+	// then just asks again.
+	if p.q.Add(e) && p.showing && (len(p.late) > 0 || p.q.Len() == 1) {
+		p.late = append(p.late, e.Target())
+	}
+}
+
+// settle updates bw for the targets the prompt left in q after it returned
+// err and takes them out of q. A dismissed or failed prompt decided nothing,
+// so its targets may be asked about again on their next block. Late targets
+// stay queued for the next prompt. Without a shadow no prompt can be shown,
+// now or later: that error is returned.
+func (p *promptLoop) settle(err error) error {
+	if errors.Is(err, overlay.ErrUnavailable) {
+		return err
+	}
+	for _, it := range p.q.Items() {
+		t := it.Entry.Target()
+		if slices.Contains(p.late, t) {
+			continue
+		}
+		p.q.Remove(t)
+		switch {
+		case err == nil, errors.Is(err, overlay.ErrBarrierTimeout), errors.Is(err, overlay.ErrSessionBusy):
+			// A dismissal is not a decision. Barrier timeouts and a busy
+			// session showed nothing, and aren't the prompt's fault: after
+			// two timeouts in a row the terminal takes input after a pause
+			// in typing, which can't time out, and a busy session reads its
+			// input again.
+			p.bw.Forget(t)
+		default:
+			p.bw.Retry(t)
+		}
+	}
+	p.showing = false
+	p.late = nil
+	return nil
 }
 
 // prompterStopGrace bounds how long shutdown waits for an open prompt to
@@ -200,7 +281,7 @@ func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc
 // it the session's terminal, and a stop function.
 type blockPrompter struct {
 	hooks ctr.TerminalHooks // start prompting on the session's terminal; zero without --prompt
-	stop  func()            // ends polling and closes an open prompt; always safe to call
+	stop  func()            // ends prompting and closes an open prompt; always safe to call
 	notes *promptNotes      // what prompting couldn't show; nil without --prompt
 }
 
@@ -216,7 +297,7 @@ var noBlockPrompter = &blockPrompter{stop: func() {}}
 
 // startBlockPrompter sets up prompting when --prompt is set. The session
 // and the control client are resolved before the attach takes over the
-// terminal, so a failure prints normally and stops the command. Polling
+// terminal, so a failure prints normally and stops the command. Prompting
 // starts once the attach hands over the session's terminal.
 func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func() (*SessionInfo, error)) (*blockPrompter, error) {
 	if !cmd.Bool(promptFlag) {
@@ -244,10 +325,8 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 			return
 		}
 		// show puts the approve screen over the session.
-		show := func(ctx context.Context, entry proxy.LogEntry) error {
+		show := func(ctx context.Context, q *promptQueue) error {
 			header := &tui.HeaderInfo{ProjectDir: session.ProjectDir, SessionID: session.SessionID}
-			q := newPromptQueue()
-			q.Add(entry)
 			return t.Show(ctx, tui.NewWindow(header, newApproveScreen(session, cc, q)))
 		}
 		stopLoop = startPrompterLoop(ctx, cc, loggedPrompt(notes.Printf, show), notes.Printf)
@@ -272,10 +351,14 @@ func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func()
 // the terminal, so it's reported after the session. A prompt ended by the
 // session ending isn't a failure.
 func loggedPrompt(logf func(format string, args ...any), prompt promptFunc) promptFunc {
-	return func(ctx context.Context, e proxy.LogEntry) error {
-		err := prompt(ctx, e)
+	return func(ctx context.Context, q *promptQueue) error {
+		err := prompt(ctx, q)
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, overlay.ErrClosed) {
-			logf("prompt for %s: %v", e.Target(), err)
+			if items := q.Items(); len(items) > 0 {
+				logf("prompt for %s: %v", items[0].Entry.Target(), err)
+			} else {
+				logf("prompt: %v", err)
+			}
 		}
 		return err
 	}
