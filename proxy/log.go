@@ -10,6 +10,22 @@ type Action string
 const (
 	ActionAllow Action = "allow"
 	ActionBlock Action = "block"
+	// ActionHold marks a request the proxy is holding while a client decides
+	// whether to allow it. Its fate is recorded in LogEntry.Outcome.
+	ActionHold Action = "hold"
+)
+
+// HoldOutcome records how a held request ended. It lives here because the
+// hold's log entry carries it.
+type HoldOutcome string
+
+const (
+	HoldNone      HoldOutcome = ""
+	HoldAllowed   HoldOutcome = "allowed"
+	HoldDenied    HoldOutcome = "denied"
+	HoldTimeout   HoldOutcome = "timeout"
+	HoldAbandoned HoldOutcome = "abandoned"
+	HoldUnwatched HoldOutcome = "unwatched"
 )
 
 type Source string
@@ -38,11 +54,14 @@ type LogEntry struct {
 	Source Source    `json:"source"`
 	Reason string    `json:"reason,omitempty"`
 	Code   BlockCode `json:"code,omitempty"`
+	// Deadline and Outcome are only set on hold entries.
+	Deadline time.Time   `json:"deadline,omitzero"`
+	Outcome  HoldOutcome `json:"outcome,omitempty"`
 }
 
 // Allowable reports whether allowing the entry's target would unblock it.
 func (e LogEntry) Allowable() bool {
-	return e.Action == ActionBlock && AllowFixes(e.HostKey(), e.Code)
+	return (e.Action == ActionBlock || e.Action == ActionHold) && AllowFixes(e.HostKey(), e.Code)
 }
 
 // AllowFixes reports whether allowing k would fix a block with the given
@@ -100,6 +119,7 @@ type LogBuffer struct {
 	nextID   uint64
 	hosts    map[HostKey]*HostStats
 	maxHosts int
+	onAdd    func(LogEntry)
 }
 
 func NewLogBuffer(capacity int) *LogBuffer {
@@ -112,7 +132,17 @@ func NewLogBuffer(capacity int) *LogBuffer {
 	}
 }
 
-func (b *LogBuffer) Add(entry LogEntry) {
+// OnAdd registers a hook called with every added entry, ID included. It runs
+// while the buffer's lock is held so hooks see entries in ID order; it must
+// therefore not block and must not call back into the LogBuffer.
+func (b *LogBuffer) OnAdd(f func(LogEntry)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onAdd = f
+}
+
+// Add stores the entry and returns its assigned ID.
+func (b *LogBuffer) Add(entry LogEntry) uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -125,10 +155,39 @@ func (b *LogBuffer) Add(entry LogEntry) {
 	}
 
 	b.recordHostLocked(entry)
+	if b.onAdd != nil {
+		b.onAdd(entry)
+	}
+	return entry.ID
+}
+
+// SetHoldOutcome records how a hold ended. It returns false when the entry has
+// left the ring or isn't a hold. It doesn't call the OnAdd hook.
+func (b *LogBuffer) SetHoldOutcome(id uint64, o HoldOutcome) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	lastID := b.nextID - 1
+	if id == 0 || id > lastID || lastID-id >= uint64(b.cap) {
+		return false
+	}
+	// IDs are contiguous, so the newest sits just before pos.
+	idx := (b.pos - 1 - int(lastID-id) + 2*b.cap) % b.cap
+	e := &b.entries[idx]
+	if e.Action != ActionHold {
+		return false
+	}
+	e.Outcome = o
+	return true
 }
 
 // recordHostLocked updates the per-host stats. Caller must hold b.mu.
 func (b *LogBuffer) recordHostLocked(entry LogEntry) {
+	// A hold is undecided, so it counts as neither allowed nor blocked. The
+	// block or allow that follows is what the stats record.
+	if entry.Action == ActionHold {
+		return
+	}
 	key := entry.HostKey()
 	h, ok := b.hosts[key]
 	if !ok {
@@ -188,12 +247,31 @@ func (b *LogBuffer) Tail(n int) []LogEntry {
 func (b *LogBuffer) EntriesAfter(afterID uint64) []LogEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.entriesAfterLocked(afterID)
+}
 
+func (b *LogBuffer) entriesAfterLocked(afterID uint64) []LogEntry {
 	lastID := b.nextID - 1
 	if afterID >= lastID {
 		return nil
 	}
 	return b.lastLocked(int(min(lastID-afterID, uint64(b.cap))))
+}
+
+// TailAt is Tail plus the highest assigned ID, read under the same lock, so
+// callers can tell where history ends and live events begin.
+func (b *LogBuffer) TailAt(n int) ([]LogEntry, uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastLocked(n), b.nextID - 1
+}
+
+// EntriesAfterAt is EntriesAfter plus the highest assigned ID, read under the
+// same lock.
+func (b *LogBuffer) EntriesAfterAt(afterID uint64) ([]LogEntry, uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.entriesAfterLocked(afterID), b.nextID - 1
 }
 
 // lastLocked copies the newest n buffered entries. Caller must hold b.mu.
