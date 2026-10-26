@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/proxy"
+	"github.com/bernd/vibepit/tui"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,7 +87,7 @@ func TestHostsViewSort(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.sort.String(), func(t *testing.T) {
 			v := &hostsView{sort: tt.sort}
-			v.setHosts(hostsFixture())
+			v.setHosts(hostsFixture(), nil, hostsT0)
 			assert.Equal(t, tt.want, viewDomains(v))
 		})
 	}
@@ -108,7 +109,7 @@ func TestHostsViewSortTiesUseHostKey(t *testing.T) {
 					hosts = append(hosts, tied[i])
 				}
 				v := &hostsView{sort: sort}
-				v.setHosts(slices.Clone(hosts))
+				v.setHosts(slices.Clone(hosts), nil, hostsT0)
 				assert.Equal(t, want, viewDomains(v), "input order %v", order)
 			}
 		})
@@ -118,7 +119,7 @@ func TestHostsViewSortTiesUseHostKey(t *testing.T) {
 func TestHostsViewSelection(t *testing.T) {
 	t.Run("cycleSort cycles and keeps selection", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
 
 		for _, want := range []hostSort{sortHost, sortCount, sortNewest} {
@@ -132,7 +133,7 @@ func TestHostsViewSelection(t *testing.T) {
 
 	t.Run("s key cycles sort", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		assert.True(t, v.handleKey(keyPress("s")))
 		assert.Equal(t, sortHost, v.sort)
 	})
@@ -140,12 +141,12 @@ func TestHostsViewSelection(t *testing.T) {
 	t.Run("selection follows host across re-sort", func(t *testing.T) {
 		v := &hostsView{}
 		hosts := hostsFixture()
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "c.com", proxy.SourceDNS)
 		require.Equal(t, 2, v.cursor.Pos)
 
 		hosts[2].LastSeen = hostsT0.Add(time.Minute) // c.com becomes the newest
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 
 		sel, ok := v.selected()
 		require.True(t, ok)
@@ -156,16 +157,16 @@ func TestHostsViewSelection(t *testing.T) {
 	t.Run("selected host removed ends the selection", func(t *testing.T) {
 		v := &hostsView{}
 		hosts := hostsFixture()
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
 		v.handleKey(keyPress("enter"))
 
-		v.setHosts(slices.Clone(hosts[1:]))
+		v.setHosts(slices.Clone(hosts[1:]), nil, hostsT0)
 		_, ok := v.selected()
 		assert.False(t, ok, "the selection must not move to a neighbouring host")
 		assert.Nil(t, v.expanded)
 
-		v.setHosts(nil)
+		v.setHosts(nil, nil, hostsT0)
 		assert.NotPanics(t, func() { v.handleKey(keyPress("j")) })
 		assert.NotPanics(t, func() { v.handleKey(keyPress("enter")) })
 	})
@@ -173,7 +174,7 @@ func TestHostsViewSelection(t *testing.T) {
 	t.Run("enter toggles expansion; expansion follows host", func(t *testing.T) {
 		v := &hostsView{}
 		hosts := hostsFixture()
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "a.com", proxy.SourceProxy)
 
 		assert.True(t, v.handleKey(keyPress("enter")))
@@ -181,7 +182,7 @@ func TestHostsViewSelection(t *testing.T) {
 		assert.Equal(t, hosts[1].HostKey, *v.expanded)
 
 		hosts[1].LastSeen = hostsT0
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		require.NotNil(t, v.expanded)
 		assert.Equal(t, hosts[1].HostKey, *v.expanded)
 
@@ -195,7 +196,7 @@ func TestHostsViewRender(t *testing.T) {
 
 	t.Run("render header and statuses", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture()[:2])
+		v.setHosts(hostsFixture()[:2], nil, hostsT0)
 		out := renderPlain(v, allowState{}, 120, 20, now)
 
 		for _, want := range []string{"last seen ↓", "host", "source", "count", "status",
@@ -211,7 +212,7 @@ func TestHostsViewRender(t *testing.T) {
 
 	t.Run("count label stays in place when sorted", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		countAt := func() int {
 			header := lineContaining(renderPlain(v, allowState{}, 120, 20, now), "last seen")
 			return ansi.StringWidth(header[:strings.Index(header, "count")])
@@ -223,7 +224,7 @@ func TestHostsViewRender(t *testing.T) {
 
 	t.Run("sort arrow is highlighted", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		for _, tt := range []struct {
 			sort  hostSort
 			arrow string
@@ -243,7 +244,7 @@ func TestHostsViewRender(t *testing.T) {
 		hosts := hostsFixture()
 		hosts[0].Allowlisted = true
 		hosts[2].Allowlisted = true
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		allows := allowState{
 			hosts[0].HostKey: statusTemp,
 			hosts[2].HostKey: statusSaved,
@@ -256,7 +257,7 @@ func TestHostsViewRender(t *testing.T) {
 
 	t.Run("render details", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		selectDomain(t, v, "c.com", proxy.SourceDNS)
 		v.handleKey(keyPress("enter"))
 		out := renderPlain(v, allowState{}, 120, 30, now)
@@ -281,7 +282,7 @@ func TestHostsViewRender(t *testing.T) {
 		v := &hostsView{}
 		hosts := hostsFixture()
 		hosts[0].Allowlisted = true
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
 		v.handleKey(keyPress("enter"))
 
@@ -295,14 +296,14 @@ func TestHostsViewRender(t *testing.T) {
 	t.Run("inline hint", func(t *testing.T) {
 		v := &hostsView{}
 		hosts := hostsFixture()
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
 		line := lineContaining(renderPlain(v, allowState{}, 120, 20, now), "b.com")
 		assert.Contains(t, line, "a allow")
 		assert.Contains(t, line, "A allow+save")
 
 		hosts[0].LastBlockCode = proxy.BlockCIDR
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		line = lineContaining(renderPlain(v, allowState{}, 120, 20, now), "b.com")
 		assert.NotContains(t, line, "a allow")
 		assert.NotContains(t, line, "allow+save")
@@ -315,7 +316,7 @@ func TestHostsViewRender(t *testing.T) {
 	t.Run("host takes priority over the inline hint", func(t *testing.T) {
 		v := &hostsView{}
 		long := "sdmntprnorthcentralus.oaiusercontent.com"
-		v.setHosts([]proxy.HostStats{mkHost(long, "443", proxy.SourceProxy, hostsT0, 0, 8, proxy.ActionBlock)})
+		v.setHosts([]proxy.HostStats{mkHost(long, "443", proxy.SourceProxy, hostsT0, 0, 8, proxy.ActionBlock)}, nil, hostsT0)
 
 		line := lineContaining(renderPlain(v, allowState{}, 80, 20, now), "sdmntpr")
 		assert.Contains(t, line, "sdmntprnorthcentralus.oaiuserco")
@@ -344,7 +345,7 @@ func TestHostsViewRender(t *testing.T) {
 				if strings.HasPrefix(tt.name, "kept while sorting") {
 					v.sort = sortCount
 				}
-				v.setHosts([]proxy.HostStats{mkHost(tt.domain, "443", proxy.SourceProxy, hostsT0, 0, 8, proxy.ActionBlock)})
+				v.setHosts([]proxy.HostStats{mkHost(tt.domain, "443", proxy.SourceProxy, hostsT0, 0, 8, proxy.ActionBlock)}, nil, hostsT0)
 				out := renderPlain(v, allowState{}, tt.width, 20, now)
 				header := lineContaining(out, "last seen")
 				line := lineContaining(out, tt.wantHost)
@@ -366,7 +367,7 @@ func TestHostsViewRender(t *testing.T) {
 		v := &hostsView{}
 		hosts := append(hostsFixture(),
 			mkHost("a-very-long-subdomain.example.org", "443", proxy.SourceProxy, hostsT0, 0, 1, proxy.ActionBlock))
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "a-very-long-subdomain.example.org", proxy.SourceProxy)
 		v.handleKey(keyPress("enter"))
 
@@ -386,7 +387,7 @@ func TestHostsViewRender(t *testing.T) {
 
 	t.Run("expanded details taller than viewport keep row visible", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		v.cursor.Pos, v.selecting = 3, true
 		v.handleKey(keyPress("enter"))
 
@@ -403,8 +404,8 @@ func TestHostsViewRender(t *testing.T) {
 			v := &hostsView{}
 			h := mkHost("abcdefghijklmnopqrst.com", "443", proxy.SourceProxy, hostsT0, 0, 1, proxy.ActionBlock)
 			h.Allowlisted = true
-			v.setHosts([]proxy.HostStats{h})
-			out := ansi.Strip(renderHostRow(v.hosts[0], allowState{h.HostKey: statusTemp}, false, width, v.columns(width), now))
+			v.setHosts([]proxy.HostStats{h}, nil, hostsT0)
+			out := ansi.Strip(renderHostRow(v.hosts[0], allowState{h.HostKey: statusTemp}, nil, false, width, v.columns(width), now))
 			assert.LessOrEqual(t, ansi.StringWidth(out), width, "width %d: %q", width, out)
 			assert.True(t, strings.HasSuffix(out, "allowed*"), "width %d: %q", width, out)
 		}
@@ -412,7 +413,7 @@ func TestHostsViewRender(t *testing.T) {
 
 	t.Run("host column measures display width", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts([]proxy.HostStats{mkHost("bücherbücher.de", "", proxy.SourceDNS, hostsT0, 1, 0, proxy.ActionAllow)})
+		v.setHosts([]proxy.HostStats{mkHost("bücherbücher.de", "", proxy.SourceDNS, hostsT0, 1, 0, proxy.ActionAllow)}, nil, hostsT0)
 		assert.Equal(t, ansi.StringWidth("bücherbücher.de")+2, v.columns(120).hostW)
 	})
 
@@ -423,7 +424,7 @@ func TestHostsViewRender(t *testing.T) {
 				hostsT0.Add(time.Duration(-i)*time.Second), 1, 0, proxy.ActionAllow))
 		}
 		v := &hostsView{}
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		v.setHeight(20)
 		v.handleKey(keyPress("j"))
 		v.handleKey(keyPress("enter"))
@@ -444,7 +445,7 @@ func TestHostsViewRender(t *testing.T) {
 				hostsT0.Add(time.Duration(-i)*time.Second), 0, 1, proxy.ActionBlock))
 		}
 		v := &hostsView{}
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		v.handleKey(keyPress("G"))
 
 		out := renderPlain(v, allowState{}, 120, 10, now)
@@ -458,9 +459,9 @@ func TestHostsViewFooterKeys(t *testing.T) {
 
 	t.Run("blocked allowable", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
-		descs := footerKeyDescs(v.footerKeys(allowState{}))
+		descs := footerKeyDescs(v.footerKeys(allowState{}, nil, hostsT0))
 		assert.Contains(t, descs, "allow")
 		assert.Contains(t, descs, "allow+save")
 		assert.Contains(t, descs, "details")
@@ -469,19 +470,19 @@ func TestHostsViewFooterKeys(t *testing.T) {
 
 	t.Run("expanded shows collapse", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(slices.Clone(hosts))
+		v.setHosts(slices.Clone(hosts), nil, hostsT0)
 		v.handleKey(keyPress("j"))
 		v.handleKey(keyPress("enter"))
-		assert.Contains(t, footerKeyDescs(v.footerKeys(allowState{})), "collapse")
+		assert.Contains(t, footerKeyDescs(v.footerKeys(allowState{}, nil, hostsT0)), "collapse")
 	})
 
 	t.Run("temp allowed shows save", func(t *testing.T) {
 		v := &hostsView{}
 		allowed := slices.Clone(hosts)
 		allowed[0].Allowlisted = true
-		v.setHosts(allowed)
+		v.setHosts(allowed, nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
-		descs := footerKeyDescs(v.footerKeys(allowState{hosts[0].HostKey: statusTemp}))
+		descs := footerKeyDescs(v.footerKeys(allowState{hosts[0].HostKey: statusTemp}, nil, hostsT0))
 		assert.Contains(t, descs, "save")
 		assert.NotContains(t, descs, "allow+save")
 	})
@@ -490,9 +491,9 @@ func TestHostsViewFooterKeys(t *testing.T) {
 		cidr := slices.Clone(hosts)
 		cidr[0].LastBlockCode = proxy.BlockCIDR
 		v := &hostsView{}
-		v.setHosts(cidr)
+		v.setHosts(cidr, nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
-		descs := footerKeyDescs(v.footerKeys(allowState{}))
+		descs := footerKeyDescs(v.footerKeys(allowState{}, nil, hostsT0))
 		assert.NotContains(t, descs, "allow")
 		assert.NotContains(t, descs, "allow+save")
 	})
@@ -501,7 +502,7 @@ func TestHostsViewFooterKeys(t *testing.T) {
 func TestHostsViewSelectionExpired(t *testing.T) {
 	t.Run("selection on the expanded row stays", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
 		v.handleKey(keyPress("enter"))
 
@@ -513,7 +514,7 @@ func TestHostsViewSelectionExpired(t *testing.T) {
 
 	t.Run("selection moved off the expanded row ends", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(hostsFixture())
+		v.setHosts(hostsFixture(), nil, hostsT0)
 		selectDomain(t, v, "b.com", proxy.SourceProxy)
 		v.handleKey(keyPress("enter"))
 		selectDomain(t, v, "a.com", proxy.SourceProxy)
@@ -535,7 +536,11 @@ func lineContaining(out, needle string) string {
 }
 
 func renderPlain(v *hostsView, allows allowState, width, height int, now time.Time) string {
-	return ansi.Strip(v.render(allows, width, height, now))
+	return renderPlainHeld(v, allows, nil, width, height, now)
+}
+
+func renderPlainHeld(v *hostsView, allows allowState, held *heldTargets, width, height int, now time.Time) string {
+	return ansi.Strip(v.render(allows, held, width, height, now))
 }
 
 func TestHostsViewSelectionLifecycle(t *testing.T) {
@@ -557,7 +562,7 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 
 	t.Run("no selection by default", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(older(5))
+		v.setHosts(older(5), nil, hostsT0)
 		_, ok := v.selected()
 		assert.False(t, ok)
 		assert.NotContains(t, renderPlain(v, allowState{}, 120, 10, hostsT0), "➔")
@@ -567,8 +572,8 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 
 	t.Run("new hosts appear on top without a selection", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(older(5))
-		v.setHosts(withNewer(older(5), 10))
+		v.setHosts(older(5), nil, hostsT0)
+		v.setHosts(withNewer(older(5), 10), nil, hostsT0)
 		out := renderPlain(v, allowState{}, 120, 7, hostsT0)
 		assert.Contains(t, out, "new9.com")
 		assert.NotContains(t, out, "➔")
@@ -583,7 +588,7 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 	for _, tt := range tests {
 		t.Run("first "+tt.key+" selects", func(t *testing.T) {
 			v := &hostsView{}
-			v.setHosts(older(5))
+			v.setHosts(older(5), nil, hostsT0)
 			msg := keyPress(tt.key)
 			switch tt.key {
 			case "down":
@@ -600,7 +605,7 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 
 	t.Run("first page down selects the next page", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(older(30))
+		v.setHosts(older(30), nil, hostsT0)
 		v.setHeight(12)
 		v.handleKey(tea.KeyPressMsg{Code: tea.KeyPgDown})
 		assert.Equal(t, 10, v.cursor.Pos)
@@ -608,9 +613,9 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 
 	t.Run("selection stays on its host", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(older(5))
+		v.setHosts(older(5), nil, hostsT0)
 		v.handleKey(keyPress("j"))
-		v.setHosts(withNewer(older(5), 10))
+		v.setHosts(withNewer(older(5), 10), nil, hostsT0)
 
 		sel, ok := v.selected()
 		require.True(t, ok)
@@ -620,7 +625,7 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 
 	t.Run("expiry ends the selection and returns to the top", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(older(30))
+		v.setHosts(older(30), nil, hostsT0)
 		v.handleKey(keyPress("G"))
 		renderPlain(v, allowState{}, 120, 10, hostsT0)
 		require.Positive(t, v.cursor.Offset)
@@ -633,7 +638,7 @@ func TestHostsViewSelectionLifecycle(t *testing.T) {
 
 	t.Run("expiry keeps an expanded row", func(t *testing.T) {
 		v := &hostsView{}
-		v.setHosts(older(5))
+		v.setHosts(older(5), nil, hostsT0)
 		v.handleKey(keyPress("j"))
 		v.handleKey(keyPress("enter"))
 
@@ -671,7 +676,7 @@ func TestHostsViewRenderLargeCounts(t *testing.T) {
 	v.setHosts([]proxy.HostStats{
 		mkHost("big.com", "443", proxy.SourceProxy, hostsT0, 1234000, 567, proxy.ActionAllow),
 		mkHost("small.com", "443", proxy.SourceProxy, hostsT0.Add(-time.Second), 3, 0, proxy.ActionAllow),
-	})
+	}, nil, hostsT0)
 	v.handleKey(keyPress("j"))
 	v.handleKey(keyPress("enter"))
 	out := renderPlain(v, allowState{}, 120, 20, hostsT0)
@@ -701,4 +706,84 @@ func TestHostLabel(t *testing.T) {
 			assert.Equal(t, tt.want, hostLabel(tt.key))
 		})
 	}
+}
+
+func heldFixture(t *testing.T, domain string, id uint64, deadline time.Time) *heldTargets {
+	t.Helper()
+	held := &heldTargets{}
+	held.Apply(proxy.Event{Type: proxy.EventHoldOpen, Log: proxy.LogEntry{
+		ID: id, Time: hostsT0, Domain: domain, Port: "443", Action: proxy.ActionHold,
+		Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted, Deadline: deadline,
+	}})
+	return held
+}
+
+func TestHostsView_HeldPinnedFirst(t *testing.T) {
+	held := heldFixture(t, "zzz.example", 1, hostsT0.Add(7*time.Second))
+	for mode := range sortModes {
+		t.Run(mode.String(), func(t *testing.T) {
+			hosts := append(hostsFixture(), mkHost("zzz.example", "443", proxy.SourceProxy, hostsT0.Add(-time.Hour), 0, 1, proxy.ActionBlock))
+			v := &hostsView{sort: mode}
+			v.setHosts(hosts, held, hostsT0)
+			assert.Equal(t, "zzz.example", v.hosts[0].Domain)
+		})
+	}
+
+	t.Run("drops out of the group when the hold expires", func(t *testing.T) {
+		v := &hostsView{}
+		v.setHosts(append(hostsFixture(), mkHost("zzz.example", "443", proxy.SourceProxy, hostsT0.Add(-time.Hour), 0, 1, proxy.ActionBlock)), held, hostsT0)
+		v.refresh(held, hostsT0.Add(8*time.Second))
+		assert.Equal(t, "zzz.example", v.hosts[len(v.hosts)-1].Domain)
+	})
+
+	t.Run("older hold first", func(t *testing.T) {
+		h2 := heldFixture(t, "aaa.example", 2, hostsT0.Add(7*time.Second))
+		h2.Apply(proxy.Event{Type: proxy.EventHoldOpen, Log: held.open[proxy.HostKey{Source: proxy.SourceProxy, Domain: "zzz.example", Port: "443"}].Entry})
+		v := &hostsView{}
+		v.setHosts(nil, h2, hostsT0)
+		assert.Equal(t, []string{"zzz.example", "aaa.example"}, []string{v.hosts[0].Domain, v.hosts[1].Domain})
+	})
+}
+
+func TestHostsView_SynthesizesHeldRow(t *testing.T) {
+	held := heldFixture(t, "new.example", 1, hostsT0.Add(7*time.Second))
+	v := &hostsView{}
+	v.setHosts(hostsFixture(), held, hostsT0)
+	out := renderPlainHeld(v, allowState{}, held, 100, 12, hostsT0)
+	assert.Contains(t, lineContaining(out, "new.example"), "held 7s")
+
+	t.Run("disappears once no longer held and still unlisted", func(t *testing.T) {
+		v.refresh(held, hostsT0.Add(8*time.Second))
+		assert.Equal(t, -1, v.indexOf(proxy.HostKey{Source: proxy.SourceProxy, Domain: "new.example", Port: "443"}))
+	})
+
+	t.Run("feed event adds the row without a poll", func(t *testing.T) {
+		v := &hostsView{}
+		v.setHosts(hostsFixture(), &heldTargets{}, hostsT0)
+		v.refresh(held, hostsT0)
+		assert.Equal(t, "new.example", v.hosts[0].Domain)
+	})
+}
+
+func TestHostsView_SummaryCountsHeld(t *testing.T) {
+	held := heldFixture(t, "b.com", 1, hostsT0.Add(7*time.Second))
+	v := &hostsView{}
+	v.setHosts(hostsFixture(), held, hostsT0)
+	out := renderPlainHeld(v, allowState{}, held, 100, 12, hostsT0)
+	summary := strings.Split(out, "\n")[0]
+	assert.Contains(t, summary, "● 1 held")
+	assert.Contains(t, summary, "● 1 blocked", "b.com is held, only c.com is blocked")
+	assert.Contains(t, summary, "● 2 allowed")
+
+	v.setHosts(hostsFixture(), &heldTargets{}, hostsT0)
+	assert.NotContains(t, renderPlain(v, allowState{}, 100, 12, hostsT0), "held")
+}
+
+func TestHostsView_HeldRowFooterKeys(t *testing.T) {
+	held := heldFixture(t, "new.example", 1, hostsT0.Add(7*time.Second))
+	v := &hostsView{}
+	v.setHosts(hostsFixture(), held, hostsT0)
+	selectDomain(t, v, "new.example", proxy.SourceProxy)
+	keys := v.footerKeys(allowState{}, held, hostsT0)
+	assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "deny"}}, keys[:3])
 }

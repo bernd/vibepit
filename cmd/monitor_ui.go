@@ -133,7 +133,7 @@ func (s *monitorScreen) waitFeed() tea.Cmd {
 
 // applyFeed folds events into the hold table and appends their log lines.
 // A hold-open event has no line of its own; it only marks its host as held.
-func (s *monitorScreen) applyFeed(events []proxy.Event) {
+func (s *monitorScreen) applyFeed(events []proxy.Event, now time.Time) {
 	var entries []proxy.LogEntry
 	for _, e := range events {
 		s.held.Apply(e)
@@ -142,6 +142,7 @@ func (s *monitorScreen) applyFeed(events []proxy.Event) {
 		}
 	}
 	s.logs.appendEntries(entries)
+	s.hosts.refresh(&s.held, now)
 }
 
 // pollHosts starts a hosts poll unless one is in flight or cannot succeed.
@@ -258,6 +259,9 @@ func (s *monitorScreen) allowSelected(w *tui.Window, save bool) tea.Cmd {
 		w.SetFlash("select a host first")
 		return nil
 	}
+	if isHeld(&s.held, h.HostKey, w.Now()) {
+		return s.requestAllow(w, s.allows.forHeld(h.HostKey), save)
+	}
 	return s.requestAllow(w, s.allows.forHost(h), save)
 }
 
@@ -322,7 +326,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		case len(msg.batch.Events) == 0:
 			s.connected(w)
 		default:
-			s.applyFeed(msg.batch.Events)
+			s.applyFeed(msg.batch.Events, w.Now())
 		}
 		return s, s.waitFeed()
 
@@ -346,12 +350,13 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			// A snapshot taken before an allow finished would show the
 			// host as blocked again until the next poll.
 			if msg.gen == s.allowGen {
-				s.hosts.setHosts(msg.hosts)
+				s.hosts.setHosts(msg.hosts, &s.held, w.Now())
 			}
 		}
 
 	case tui.TickMsg:
 		s.idleTicks++
+		s.hosts.refresh(&s.held, w.Now()) // deadlines pass without an event
 		if s.idleTicks >= selectionTimeoutTicks {
 			s.hosts.selectionExpired()
 		}
@@ -425,7 +430,7 @@ func (s *monitorScreen) View(w *tui.Window) string {
 	if s.tab == tabLogs {
 		content = s.logs.render(s.allows, &s.held, w.Now())
 	} else {
-		content = s.hosts.render(s.allows, w.Width(), listHeight(w), w.Now())
+		content = s.hosts.render(s.allows, &s.held, w.Width(), listHeight(w), w.Now())
 	}
 	return s.renderTabs() + "\n" + content
 }
@@ -450,7 +455,7 @@ func (s *monitorScreen) FooterStatus(w *tui.Window) string {
 }
 
 func (s *monitorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
-	keys, other, cursor := s.hosts.footerKeys(s.allows), "logs", &s.hosts.cursor
+	keys, other, cursor := s.hosts.footerKeys(s.allows, &s.held, w.Now()), "logs", &s.hosts.cursor
 	if s.tab == tabLogs {
 		now := w.Now()
 		keys = s.logs.footerKeys(func(e proxy.LogEntry) allowTarget { return s.entryTarget(e, now) })
