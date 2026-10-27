@@ -52,8 +52,8 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 }
 
 // SetEvents enables the /events stream and lets allow and deny decisions end
-// held requests. Without it, /events answers 404 so clients fall back to
-// polling.
+// held requests. Without it, /events answers 404, as from a proxy that
+// predates the stream.
 func (a *ControlAPI) SetEvents(hub *EventHub, holds *Holds) {
 	a.hub = hub
 	a.holds = holds
@@ -159,22 +159,22 @@ func (a *ControlAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	// The server's ReadTimeout and WriteTimeout would end the stream, so
 	// lift the read deadline and give each write its own. Errors only mean
-	// the writer can't do deadlines (test recorders).
+	// the writer can't do deadlines (test recorders). Flushing waits for
+	// the end of a batch, so history and bursts go out in few writes.
 	rc.SetReadDeadline(time.Time{}) //nolint:errcheck
-	write := func(f func() error) error {
-		rc.SetWriteDeadline(time.Now().Add(eventsWriteTimeout)) //nolint:errcheck
-		if err := f(); err != nil {
-			return err
-		}
-		return rc.Flush()
-	}
 	send := func(e Event) error {
-		return write(func() error { return WriteEvent(w, e) })
+		rc.SetWriteDeadline(time.Now().Add(eventsWriteTimeout)) //nolint:errcheck
+		return WriteEvent(w, e)
+	}
+	flush := func() error {
+		rc.SetWriteDeadline(time.Now().Add(eventsWriteTimeout)) //nolint:errcheck
+		return rc.Flush()
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	if write(func() error { w.WriteHeader(http.StatusOK); return nil }) != nil {
+	w.WriteHeader(http.StatusOK)
+	if flush() != nil {
 		return
 	}
 
@@ -200,33 +200,43 @@ func (a *ControlAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if flush() != nil {
+		return
+	}
 
 	keepalive := time.NewTicker(eventsKeepalive)
 	defer keepalive.Stop()
 	for {
-		var err error
 		select {
 		case e, ok := <-events:
+			// Send this event and whatever else is already queued.
+			for ok {
+				if e.Type != EventLog || e.Log.ID > sent {
+					if e.Type == EventLog {
+						sent = e.Log.ID
+					}
+					if send(e) != nil {
+						return
+					}
+				}
+				if len(events) == 0 {
+					break
+				}
+				e, ok = <-events
+			}
 			if !ok {
 				// Dropped for falling behind; the client reconnects with after.
 				return
 			}
-			if e.Type == EventLog {
-				if e.Log.ID <= sent {
-					continue
-				}
-				sent = e.Log.ID
-			}
-			err = send(e)
 		case <-keepalive.C:
-			err = write(func() error {
-				_, err := io.WriteString(w, ": keepalive\n\n")
-				return err
-			})
+			rc.SetWriteDeadline(time.Now().Add(eventsWriteTimeout)) //nolint:errcheck
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
 		case <-r.Context().Done():
 			return
 		}
-		if err != nil {
+		if flush() != nil {
 			return
 		}
 	}

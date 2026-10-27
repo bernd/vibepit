@@ -374,13 +374,10 @@ func newEventsFixture(t *testing.T, holdTimeout time.Duration, configure func(*h
 	require.NoError(t, err)
 	f := &eventsFixture{
 		log:       NewLogBuffer(1000),
-		hub:       NewEventHub(),
 		allowlist: httpAL,
 	}
 	f.api = NewControlAPI(f.log, nil, httpAL, dnsAL)
-	// Server.Run wires these in production.
-	f.log.OnAdd(func(e LogEntry) { f.hub.Publish(Event{Type: EventLog, Log: e}) })
-	f.holds = NewHolds(holdTimeout, f.log, f.hub, f.api.Denied(), func(t Target) bool {
+	f.hub, f.holds = WireEvents(f.log, holdTimeout, f.api.Denied(), func(t Target) bool {
 		return httpAL.Allows(t.Host, t.Port)
 	})
 	f.api.SetEvents(f.hub, f.holds)

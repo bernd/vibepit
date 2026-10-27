@@ -54,7 +54,7 @@ func (p *HTTPProxy) checkRequest(ctx context.Context, hostname, port string) fil
 }
 
 func (p *HTTPProxy) filter(hostname, port string) filterResult {
-	notAllowlisted := filterResult{action: ActionBlock, reason: "domain not in allowlist", code: BlockNotAllowlisted}
+	notAllowlisted := filterResult{action: ActionBlock, reason: reasonNotAllowlisted, code: BlockNotAllowlisted}
 
 	if hostname == "host.vibepit" && p.hostGateway != "" {
 		if !p.isHostPortAllowed(port) && !p.allowlist.Allows(hostname, port) {

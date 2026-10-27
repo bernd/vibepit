@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -38,12 +39,7 @@ func newPromptItem(e proxy.LogEntry) promptItem {
 }
 
 func (q *promptQueue) index(t proxy.Target) int {
-	for i, it := range q.items {
-		if it.Entry.Target() == t {
-			return i
-		}
-	}
-	return -1
+	return slices.IndexFunc(q.items, func(it promptItem) bool { return it.Entry.Target() == t })
 }
 
 // Add queues e. It returns false when the target was already queued: a hold
@@ -80,7 +76,7 @@ func (q *promptQueue) EndHold(end proxy.HoldEnd) {
 	}
 	switch end.Outcome {
 	case proxy.HoldAllowed, proxy.HoldDenied:
-		q.items = append(q.items[:i], q.items[i+1:]...)
+		q.items = slices.Delete(q.items, i, i+1)
 	default:
 		if q.items[i].Entry.ID == end.ID {
 			q.items[i].Deadline = time.Time{}
@@ -104,7 +100,7 @@ func (q *promptQueue) Remove(t proxy.Target) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if i := q.index(t); i >= 0 {
-		q.items = append(q.items[:i], q.items[i+1:]...)
+		q.items = slices.Delete(q.items, i, i+1)
 	}
 }
 
@@ -112,7 +108,7 @@ func (q *promptQueue) Remove(t proxy.Target) {
 func (q *promptQueue) Items() []promptItem {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return append([]promptItem(nil), q.items...)
+	return slices.Clone(q.items)
 }
 
 func (q *promptQueue) Len() int {

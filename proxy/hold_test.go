@@ -29,13 +29,10 @@ func newHoldsFixture(t *testing.T, timeout time.Duration, watch bool) *holdsFixt
 	require.NoError(t, err)
 	f := &holdsFixture{
 		log:       NewLogBuffer(100),
-		hub:       NewEventHub(),
 		denied:    &DenySet{},
 		allowlist: al,
 	}
-	// The control API wires this hook in production.
-	f.log.OnAdd(func(e LogEntry) { f.hub.Publish(Event{Type: EventLog, Log: e}) })
-	f.holds = NewHolds(timeout, f.log, f.hub, f.denied, func(t Target) bool {
+	f.hub, f.holds = WireEvents(f.log, timeout, f.denied, func(t Target) bool {
 		return al.Allows(t.Host, t.Port)
 	})
 	if watch {

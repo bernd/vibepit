@@ -44,6 +44,14 @@ type Holds struct {
 	waiting int // requests waiting across all holds
 }
 
+// WireEvents connects log to a new event hub and hold registry. The hook
+// publishes under the log's lock, which keeps live log events in ID order.
+func WireEvents(log *LogBuffer, timeout time.Duration, denied *DenySet, allows func(Target) bool) (*EventHub, *Holds) {
+	hub := NewEventHub()
+	log.OnAdd(func(e LogEntry) { hub.Publish(Event{Type: EventLog, Log: e}) })
+	return hub, NewHolds(timeout, log, hub, denied, allows)
+}
+
 func NewHolds(timeout time.Duration, log *LogBuffer, hub *EventHub, denied *DenySet, allows func(Target) bool) *Holds {
 	h := &Holds{
 		timeout: timeout,
@@ -126,7 +134,7 @@ func (h *Holds) openLocked(t Target, k HostKey) *hold {
 			Port:     k.Port,
 			Action:   ActionHold,
 			Source:   SourceProxy,
-			Reason:   "domain not in allowlist",
+			Reason:   reasonNotAllowlisted,
 			Code:     BlockNotAllowlisted,
 			Deadline: now.Add(h.timeout),
 		},

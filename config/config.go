@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/proxy"
@@ -137,10 +136,8 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 	}
 
 	holdTimeout := cmp.Or(c.Project.HoldTimeout, c.Global.HoldTimeout, DefaultHoldTimeout)
-	if d, err := time.ParseDuration(holdTimeout); err != nil {
-		return MergedConfig{}, fmt.Errorf("hold-timeout: %w", err)
-	} else if d < 0 {
-		return MergedConfig{}, fmt.Errorf("hold-timeout: must not be negative, got %q", holdTimeout)
+	if _, err := proxy.ParseHoldTimeout(holdTimeout); err != nil {
+		return MergedConfig{}, err
 	}
 
 	return MergedConfig{

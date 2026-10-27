@@ -132,9 +132,6 @@ func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool, held 
 	reasonStyle := base
 	switch {
 	case e.Action == proxy.ActionHold:
-		if held == nil {
-			held = &heldTargets{}
-		}
 		if oh, ok := held.Open(e.HostKey(), now); ok && oh.ID == e.ID {
 			sourceColor = tui.ColorYellow
 			symbol = base.Foreground(sourceColor).Bold(true).Render("?")

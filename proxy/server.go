@@ -43,13 +43,27 @@ type ProxyConfig struct {
 
 // Server runs the HTTP proxy, DNS server, and control API.
 type Server struct {
-	config       ProxyConfig
-	holdDuration time.Duration
+	config ProxyConfig
+	// holdTimeout is how long a blocked request waits for approval. Zero
+	// means no holding, which is what configs without the key (tests,
+	// older CLIs) get.
+	holdTimeout time.Duration
 }
 
-// holdTimeout is how long a blocked request waits for approval. Zero means
-// no holding, which is what configs without the key (tests, older CLIs) get.
-func (s *Server) holdTimeout() time.Duration { return s.holdDuration }
+// ParseHoldTimeout parses a hold-timeout setting. Empty means no holding.
+func ParseHoldTimeout(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("hold-timeout: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("hold-timeout: must not be negative, got %q", s)
+	}
+	return d, nil
+}
 
 func NewServer(configPath string) (*Server, error) {
 	data, err := os.ReadFile(configPath)
@@ -66,18 +80,12 @@ func NewServer(configPath string) (*Server, error) {
 		cfg.UpstreamDNS = DefaultUpstreamDNS
 	}
 
-	var hold time.Duration
-	if cfg.HoldTimeout != "" {
-		hold, err = time.ParseDuration(cfg.HoldTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("hold-timeout: %w", err)
-		}
-		if hold < 0 {
-			return nil, fmt.Errorf("hold-timeout: must not be negative, got %q", cfg.HoldTimeout)
-		}
+	hold, err := ParseHoldTimeout(cfg.HoldTimeout)
+	if err != nil {
+		return nil, err
 	}
 
-	return &Server{config: cfg, holdDuration: hold}, nil
+	return &Server{config: cfg, holdTimeout: hold}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -96,10 +104,7 @@ func (s *Server) Run(ctx context.Context) error {
 	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.UpstreamDNS)
 	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
 
-	// Publishing under the log's lock keeps live log events in ID order.
-	hub := NewEventHub()
-	log.OnAdd(func(e LogEntry) { hub.Publish(Event{Type: EventLog, Log: e}) })
-	holds := NewHolds(s.holdTimeout(), log, hub, controlAPI.Denied(), func(t Target) bool {
+	hub, holds := WireEvents(log, s.holdTimeout, controlAPI.Denied(), func(t Target) bool {
 		return allowlist.Allows(t.Host, t.Port)
 	})
 	controlAPI.SetEvents(hub, holds)

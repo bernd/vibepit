@@ -98,11 +98,11 @@ func TestHeldTargets(t *testing.T) {
 			wantCount: 1,
 		},
 		{
-			name:      "unknown outcome reads as timeout",
+			name:      "unknown outcome is kept as received",
 			events:    []proxy.Event{logEv(hold(1, dl, "")), endEv(1, "bogus")},
 			now:       t0,
 			wantCount: 0,
-			outcomes:  []outcome{{1, proxy.HoldTimeout, true}},
+			outcomes:  []outcome{{1, "bogus", true}},
 		},
 		{
 			name:      "apply is idempotent",
@@ -129,7 +129,6 @@ func TestHeldTargets(t *testing.T) {
 			assert.Equal(t, tt.wantOpen != 0, ok)
 			if ok {
 				assert.Equal(t, tt.wantOpen, got.ID)
-				assert.Equal(t, got.Entry.Deadline, got.Deadline)
 			}
 			assert.Equal(t, tt.wantCount, h.Count(tt.now))
 			for _, w := range tt.outcomes {
@@ -161,6 +160,7 @@ func TestHoldOutcomeLabel(t *testing.T) {
 		proxy.HoldTimeout:   "timed out",
 		proxy.HoldAbandoned: "request gone",
 		proxy.HoldUnwatched: "nobody watching",
+		"bogus":             "timed out", // from a newer proxy
 	}
 	for o, want := range tests {
 		t.Run(string(o), func(t *testing.T) {

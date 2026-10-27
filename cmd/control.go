@@ -141,14 +141,9 @@ func (c *ControlClient) events(ctx context.Context, query string) (*EventStream,
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound:
+	if err := getStatus(path, resp); err != nil {
 		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s: %w", path, resp.Status, ErrUnsupportedEndpoint)
-	default:
-		resp.Body.Close()
-		return nil, &statusError{method: "GET", path: path, code: resp.StatusCode, status: resp.Status}
+		return nil, err
 	}
 	body := &streamBody{ReadCloser: resp.Body}
 	return &EventStream{body: body, r: bufio.NewReader(body)}, nil
@@ -241,11 +236,21 @@ func (c *ControlClient) get(path string, dest any) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("GET %s: %s: %w", path, resp.Status, ErrUnsupportedEndpoint)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &statusError{method: "GET", path: path, code: resp.StatusCode, status: resp.Status}
+	if err := getStatus(path, resp); err != nil {
+		return err
 	}
 	return json.NewDecoder(resp.Body).Decode(dest)
+}
+
+// getStatus turns a GET response other than 200 OK into an error. A 404
+// means the proxy predates the endpoint.
+func getStatus(path string, resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf("GET %s: %s: %w", path, resp.Status, ErrUnsupportedEndpoint)
+	default:
+		return &statusError{method: "GET", path: path, code: resp.StatusCode, status: resp.Status}
+	}
 }

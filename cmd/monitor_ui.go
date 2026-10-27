@@ -216,7 +216,7 @@ func (s *monitorScreen) clearSelection() bool {
 // host missing from the table (evicted, or an older proxy) falls back to
 // the line itself. The line of an open hold acts on the hold.
 func (s *monitorScreen) entryTarget(e proxy.LogEntry, now time.Time) allowTarget {
-	if s.openHoldLine(e, now) {
+	if s.held.OpenEntry(e, now) {
 		return s.allows.forHeld(e.HostKey())
 	}
 	if i := s.hosts.indexOf(e.HostKey()); i >= 0 {
@@ -225,29 +225,18 @@ func (s *monitorScreen) entryTarget(e proxy.LogEntry, now time.Time) allowTarget
 	return s.allows.forEntry(e)
 }
 
-// openHoldLine reports whether e is the entry of a hold that is still open.
-// Earlier hold lines of the same host have ended.
-func (s *monitorScreen) openHoldLine(e proxy.LogEntry, now time.Time) bool {
-	if e.Action != proxy.ActionHold {
-		return false
-	}
-	oh, ok := s.held.Open(e.HostKey(), now)
-	return ok && oh.ID == e.ID
-}
-
 // heldSelection returns the host of the selected log line or host row when
 // the proxy is holding requests for it.
 func (s *monitorScreen) heldSelection(now time.Time) (proxy.HostKey, bool) {
 	if s.tab == tabLogs {
 		e, ok := s.logs.selected()
-		return e.HostKey(), ok && s.openHoldLine(e, now)
+		return e.HostKey(), ok && s.held.OpenEntry(e, now)
 	}
 	h, ok := s.hosts.selected()
 	if !ok {
 		return proxy.HostKey{}, false
 	}
-	_, open := s.held.Open(h.HostKey, now)
-	return h.HostKey, open
+	return h.HostKey, s.held.Held(h.HostKey, now)
 }
 
 func (s *monitorScreen) allowSelected(w *tui.Window, save bool) tea.Cmd {
@@ -267,7 +256,7 @@ func (s *monitorScreen) allowSelected(w *tui.Window, save bool) tea.Cmd {
 		w.SetFlash("select a host first")
 		return nil
 	}
-	if isHeld(&s.held, h.HostKey, w.Now()) {
+	if s.held.Held(h.HostKey, w.Now()) {
 		return s.requestAllow(w, s.allows.forHeld(h.HostKey), save)
 	}
 	return s.requestAllow(w, s.allows.forHost(h), save)

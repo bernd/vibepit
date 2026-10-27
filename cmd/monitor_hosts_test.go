@@ -738,7 +738,7 @@ func TestHostsView_HeldPinnedFirst(t *testing.T) {
 
 	t.Run("older hold first", func(t *testing.T) {
 		h2 := heldFixture(t, "aaa.example", 2, hostsT0.Add(7*time.Second))
-		h2.Apply(proxy.Event{Type: proxy.EventHoldOpen, Log: held.open[proxy.HostKey{Source: proxy.SourceProxy, Domain: "zzz.example", Port: "443"}].Entry})
+		h2.Apply(proxy.Event{Type: proxy.EventHoldOpen, Log: held.open[proxy.HostKey{Source: proxy.SourceProxy, Domain: "zzz.example", Port: "443"}]})
 		v := &hostsView{}
 		v.setHosts(nil, h2, hostsT0)
 		assert.Equal(t, []string{"zzz.example", "aaa.example"}, []string{v.hosts[0].Domain, v.hosts[1].Domain})

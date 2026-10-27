@@ -34,7 +34,7 @@ func TestNewServerHoldTimeout(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, s.holdTimeout())
+			assert.Equal(t, tt.want, s.holdTimeout)
 		})
 	}
 }

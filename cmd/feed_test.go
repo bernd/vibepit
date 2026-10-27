@@ -27,16 +27,10 @@ type eventsProxy struct {
 
 func newEventsProxy(t *testing.T) *eventsProxy {
 	t.Helper()
-	ep := &eventsProxy{log: proxy.NewLogBuffer(100), hub: proxy.NewEventHub()}
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	ep.api = proxy.NewControlAPI(ep.log, nil, httpAL, dnsAL)
-	ep.log.OnAdd(func(e proxy.LogEntry) { ep.hub.Publish(proxy.Event{Type: proxy.EventLog, Log: e}) })
-	ep.holds = proxy.NewHolds(10*time.Second, ep.log, ep.hub, ep.api.Denied(), func(proxy.Target) bool { return false })
+	tp := newTestProxy(t)
+	ep := &eventsProxy{log: tp.log, api: tp.api, client: tp.client}
+	ep.hub, ep.holds = proxy.WireEvents(ep.log, 10*time.Second, ep.api.Denied(), func(proxy.Target) bool { return false })
 	ep.api.SetEvents(ep.hub, ep.holds)
-	ep.client = testControlClient(t, ep.api)
 	return ep
 }
 
@@ -87,10 +81,12 @@ func (h *cutStream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	cw := &cutWriter{ResponseWriter: w}
 	if h.drop != nil {
-		cw.flushed = func(e proxy.Event) {
+		cw.drop = func(e proxy.Event) bool {
 			if h.drop(conn, e) {
 				cancel()
+				return true
 			}
+			return false
 		}
 	}
 	h.api.ServeHTTP(cw, r.WithContext(ctx))
@@ -102,26 +98,38 @@ func (h *cutStream) recorded() []string {
 	return append([]string(nil), h.queries...)
 }
 
-// cutWriter decodes each event the handler flushes; the handler flushes
-// after every event.
+// cutWriter passes on what the handler flushes one event at a time and
+// stops right after the first event drop selects, however many events the
+// handler batched into that flush.
 type cutWriter struct {
 	http.ResponseWriter
-	buf     bytes.Buffer
-	flushed func(proxy.Event)
+	buf  bytes.Buffer
+	drop func(proxy.Event) bool // nil never cuts
+	cut  bool
 }
 
 func (w *cutWriter) Write(p []byte) (int, error) {
-	w.buf.Write(p)
-	return w.ResponseWriter.Write(p)
+	if !w.cut {
+		w.buf.Write(p)
+	}
+	return len(p), nil
 }
 
 func (w *cutWriter) Flush() {
-	if w.flushed != nil && w.buf.Len() > 0 {
-		if e, err := proxy.ReadEvent(bufio.NewReader(&w.buf)); err == nil {
-			w.flushed(e)
+	for !w.cut {
+		i := bytes.Index(w.buf.Bytes(), []byte("\n\n"))
+		if i < 0 {
+			break
+		}
+		frame := bytes.Clone(w.buf.Next(i + 2))
+		w.ResponseWriter.Write(frame) //nolint:errcheck
+		if w.drop == nil {
+			continue
+		}
+		if e, err := proxy.ReadEvent(bufio.NewReader(bytes.NewReader(frame))); err == nil && w.drop(e) {
+			w.cut = true
 		}
 	}
-	w.buf.Reset()
 	w.ResponseWriter.(http.Flusher).Flush()
 }
 
@@ -177,7 +185,7 @@ func TestStartFeed_ReconnectsFromLastID(t *testing.T) {
 	gate := make(chan struct{})
 	h := &cutStream{
 		api:  ep.api,
-		drop: func(conn int, e proxy.Event) bool { return conn == 1 && e.Type == proxy.EventLog && e.Log.ID == 2 },
+		drop: func(conn int, e proxy.Event) bool { return conn == 1 && e.Type == proxy.EventCursor },
 		before: func(conn int) {
 			if conn == 2 {
 				<-gate
@@ -202,7 +210,7 @@ func TestStartFeed_ReplaysOutcomeOfHoldEndedWhileDisconnected(t *testing.T) {
 	gate := make(chan struct{})
 	h := &cutStream{
 		api:  ep.api,
-		drop: func(conn int, e proxy.Event) bool { return conn == 1 && e.Type == proxy.EventLog && e.Log.ID == 7 },
+		drop: func(conn int, e proxy.Event) bool { return conn == 1 && e.Type == proxy.EventCursor },
 		before: func(conn int) {
 			if conn == 2 {
 				<-gate

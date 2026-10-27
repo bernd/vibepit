@@ -389,11 +389,9 @@ func recordMonitorCast(t *testing.T) *cast {
 	}
 
 	api := proxy.NewControlAPI(p.log, map[string]any{}, allowlist, dnsAllowlist)
-	// The event stream delivers each request as it happens. Polling would
-	// run on the wall clock, which the recording must not depend on.
-	hub := proxy.NewEventHub()
-	p.log.OnAdd(func(e proxy.LogEntry) { hub.Publish(proxy.Event{Type: proxy.EventLog, Log: e}) })
-	api.SetEvents(hub, proxy.NewHolds(0, p.log, hub, api.Denied(), func(proxy.Target) bool { return false }))
+	// The event stream delivers each request as it happens, independent of
+	// the wall clock the recording must not depend on.
+	api.SetEvents(proxy.WireEvents(p.log, 0, api.Denied(), func(proxy.Target) bool { return false }))
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	client := &ControlClient{http: srv.Client(), stream: srv.Client(), baseURL: srv.URL}

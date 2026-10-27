@@ -77,7 +77,6 @@ type hostsView struct {
 	longestHost int
 	countW      int
 	blocked     int
-	held        int
 }
 
 func (v *hostsView) selected() (proxy.HostStats, bool) {
@@ -115,10 +114,29 @@ func (v *hostsView) setHosts(hosts []proxy.HostStats, held *heldTargets, now tim
 // refresh merges again when hold state may have changed without a poll: a
 // feed event arrived or a deadline passed.
 func (v *hostsView) refresh(held *heldTargets, now time.Time) {
-	if len(v.holdIDs) == 0 && (held == nil || len(held.open) == 0) {
-		return
+	if v.holdsChanged(held, now) {
+		v.merge(held, now)
 	}
-	v.merge(held, now)
+}
+
+// holdsChanged reports whether the open holds differ from the ones the rows
+// were merged with. Merging re-measures and re-sorts every row, so it runs
+// only when a hold opened, ended or expired, not on every tick.
+func (v *hostsView) holdsChanged(held *heldTargets, now time.Time) bool {
+	n := 0
+	if held != nil {
+		for k := range held.open {
+			oh, ok := held.Open(k, now)
+			if !ok {
+				continue
+			}
+			if id, merged := v.holdIDs[k]; !merged || id != oh.ID {
+				return true
+			}
+			n++
+		}
+	}
+	return n != len(v.holdIDs)
 }
 
 // merge rebuilds the rows from the last poll and the open holds. A held host
@@ -132,22 +150,22 @@ func (v *hostsView) merge(held *heldTargets, now time.Time) {
 		listed := make(map[proxy.HostKey]bool, len(v.polled))
 		for _, h := range v.polled {
 			listed[h.HostKey] = true
-			if oh, ok := held.Open(h.HostKey, now); ok {
-				v.setHold(h.HostKey, oh.ID)
-			}
 		}
 		for k := range held.open {
 			oh, ok := held.Open(k, now)
-			if !ok || listed[k] {
+			if !ok {
 				continue
 			}
 			v.setHold(k, oh.ID)
+			if listed[k] {
+				continue
+			}
 			v.hosts = append(v.hosts, proxy.HostStats{
 				HostKey:     k,
-				FirstSeen:   oh.Entry.Time,
-				FirstAction: oh.Entry.Action,
-				LastSeen:    oh.Entry.Time,
-				LastAction:  oh.Entry.Action,
+				FirstSeen:   oh.Time,
+				FirstAction: oh.Action,
+				LastSeen:    oh.Time,
+				LastAction:  oh.Action,
 			})
 		}
 	}
@@ -210,7 +228,7 @@ func (v *hostsView) markAllowlisted(k proxy.HostKey) {
 }
 
 func (v *hostsView) measure() {
-	v.longestHost, v.countW, v.blocked, v.held = 0, hostsCountWidth, 0, len(v.holdIDs)
+	v.longestHost, v.countW, v.blocked = 0, hostsCountWidth, 0
 	for _, h := range v.hosts {
 		v.longestHost = max(v.longestHost, ansi.StringWidth(hostLabel(h.HostKey)))
 		v.countW = max(v.countW, len(formatCount(h.Allowed+h.Blocked)))
@@ -337,12 +355,13 @@ func (v *hostsView) renderSummary() string {
 	if v.err != nil {
 		return lipgloss.NewStyle().Foreground(tui.ColorOrange).Render("cannot load hosts: " + v.err.Error())
 	}
-	allowed, blocked := len(v.hosts)-v.blocked-v.held, v.blocked
+	held := len(v.holdIDs)
+	allowed, blocked := len(v.hosts)-v.blocked-held, v.blocked
 	summary := lipgloss.NewStyle().Foreground(tui.ColorField).Render(fmt.Sprintf("%d hosts", len(v.hosts))) + "  " +
 		lipgloss.NewStyle().Foreground(tui.ColorCyan).Render(fmt.Sprintf("● %d allowed", allowed)) + "  " +
 		lipgloss.NewStyle().Foreground(tui.ColorError).Render(fmt.Sprintf("● %d blocked", blocked))
-	if v.held > 0 {
-		summary += "  " + lipgloss.NewStyle().Foreground(tui.ColorYellow).Render(fmt.Sprintf("● %d held", v.held))
+	if held > 0 {
+		summary += "  " + lipgloss.NewStyle().Foreground(tui.ColorYellow).Render(fmt.Sprintf("● %d held", held))
 	}
 	return summary
 }
@@ -350,18 +369,10 @@ func (v *hostsView) renderSummary() string {
 // hostKeys are the keys that act on host h, for the footer and the row's
 // inline hint alike.
 func hostKeys(allows allowState, held *heldTargets, h proxy.HostStats, now time.Time) []tui.FooterKey {
-	if isHeld(held, h.HostKey, now) {
+	if held.Held(h.HostKey, now) {
 		return append(allowFooterKeys(allows.forHeld(h.HostKey)), tui.FooterKey{Key: "n", Desc: "deny"})
 	}
 	return allowFooterKeys(allows.forHost(h))
-}
-
-func isHeld(held *heldTargets, k proxy.HostKey, now time.Time) bool {
-	if held == nil {
-		return false
-	}
-	_, ok := held.Open(k, now)
-	return ok
 }
 
 var sortArrowStyle = lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true)
@@ -458,11 +469,7 @@ func (v *hostsView) scroll(expandedAt, detailsH, listH int) {
 func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, selected bool, width int, cols hostColumns, now time.Time) string {
 	base, marker := tui.LineStyle(selected)
 	st := allows.hostStatus(h)
-	var oh openHold
-	isHeld := false
-	if held != nil {
-		oh, isHeld = held.Open(h.HostKey, now)
-	}
+	oh, isHeld := held.Open(h.HostKey, now)
 	statusColor, statusLabel := st.color(), st.label()
 	if isHeld {
 		tint := "#1f2119"

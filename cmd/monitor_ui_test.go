@@ -713,7 +713,7 @@ func TestMonitor_ProxyRestartResetsTheFeedState(t *testing.T) {
 	s.Update(logEvents(s, proxy.LogEntry{ID: 1, Time: approveEpoch, Domain: "old.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy}, hold), w)
 	s.Update(tea.KeyPressMsg{Code: tea.KeyUp}, w)
 	require.True(t, s.logs.selecting)
-	require.Equal(t, 1, s.hosts.held, "the held host has a row")
+	require.Len(t, s.hosts.holdIDs, 1, "the held host has a row")
 
 	_, cmd := s.Update(feedMsg{from: s, batch: feedBatch{Reset: true}}, w)
 	assert.NotNil(t, cmd, "the feed is read on")
@@ -730,7 +730,7 @@ func TestMonitor_ProxyRestartResetsTheFeedState(t *testing.T) {
 	assert.False(t, s.logs.selecting, "the selected line is gone")
 	assert.Zero(t, s.held.Count(clock.now))
 	assert.Equal(t, -1, s.hosts.indexOf(hold.HostKey()), "no stale held row")
-	assert.Zero(t, s.hosts.held)
+	assert.Empty(t, s.hosts.holdIDs)
 	view := ansi.Strip(w.View().Content)
 	assert.NotContains(t, view, "held.com")
 	assert.Contains(t, view, "LOGS (2)")

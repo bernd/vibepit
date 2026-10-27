@@ -45,6 +45,10 @@ const (
 	BlockResolutionFailed BlockCode = "resolution_failed"
 )
 
+// reasonNotAllowlisted is the reason logged for BlockNotAllowlisted, by
+// blocks and holds alike.
+const reasonNotAllowlisted = "domain not in allowlist"
+
 type LogEntry struct {
 	ID     uint64    `json:"id"`
 	Time   time.Time `json:"time"`
@@ -236,26 +240,16 @@ const TailSize = 25
 
 // Tail returns the last n entries in chronological order.
 func (b *LogBuffer) Tail(n int) []LogEntry {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.lastLocked(n)
+	entries, _ := b.TailAt(n)
+	return entries
 }
 
 // EntriesAfter returns every buffered entry with ID > afterID in
 // chronological order. afterID 0 means all of them. IDs are contiguous, so
 // only the new entries are copied, not the whole ring.
 func (b *LogBuffer) EntriesAfter(afterID uint64) []LogEntry {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.entriesAfterLocked(afterID)
-}
-
-func (b *LogBuffer) entriesAfterLocked(afterID uint64) []LogEntry {
-	lastID := b.nextID - 1
-	if afterID >= lastID {
-		return nil
-	}
-	return b.lastLocked(int(min(lastID-afterID, uint64(b.cap))))
+	entries, _ := b.EntriesAfterAt(afterID)
+	return entries
 }
 
 // TailAt is Tail plus the highest assigned ID, read under the same lock, so
@@ -271,7 +265,11 @@ func (b *LogBuffer) TailAt(n int) ([]LogEntry, uint64) {
 func (b *LogBuffer) EntriesAfterAt(afterID uint64) ([]LogEntry, uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.entriesAfterLocked(afterID), b.nextID - 1
+	lastID := b.nextID - 1
+	if afterID >= lastID {
+		return nil, lastID
+	}
+	return b.lastLocked(int(min(lastID-afterID, uint64(b.cap)))), lastID
 }
 
 // lastLocked copies the newest n buffered entries. Caller must hold b.mu.
