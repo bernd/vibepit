@@ -182,22 +182,29 @@ func (s *approveScreen) View(w *tui.Window) string {
 	label := lipgloss.NewStyle().Foreground(tui.ColorField)
 	value := lipgloss.NewStyle().Bold(true)
 
-	title := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render("blocked")
+	// A hold that ended keeps its title, dimmed: it is the same prompt, and
+	// the proxy may have refused nothing, e.g. when the agent hung up.
+	heldTitle := lipgloss.NewStyle().Foreground(tui.ColorYellow).Bold(true)
 	lines := []string{""}
 	if first.Held(now) {
-		title = lipgloss.NewStyle().Foreground(tui.ColorYellow).Bold(true).Render("held")
 		lines = append(lines,
-			fmt.Sprintf("  %s %s", title, value.Render(target)),
+			fmt.Sprintf("  %s %s", heldTitle.Render("held"), value.Render(target)),
 			"  the agent is waiting · "+fmt.Sprintf("%ds left", secondsLeft(first.Deadline, now)),
 		)
+	} else if outcome, ended := first.HoldEnded(now); ended {
+		lines = append(lines,
+			fmt.Sprintf("  %s %s", heldTitle.Faint(true).Render("held"), value.Render(target)),
+			"  hold ended · "+holdOutcomeLabel(outcome),
+		)
 	} else {
+		title := lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render("blocked")
 		lines = append(lines, fmt.Sprintf("  %s %s", title, value.Render(target)))
 	}
 	lines = append(lines,
 		"",
 		fmt.Sprintf("  %s %s", label.Render("source:"), string(entry.Source)),
 		fmt.Sprintf("  %s %s", label.Render("reason:"), reason),
-		fmt.Sprintf("  %s %s", label.Render("time:  "), entry.Time.Format("15:04:05")),
+		fmt.Sprintf("  %s %s", label.Render("time:  "), entry.Time.Local().Format("15:04:05")),
 		"",
 		"  Allow this connection?",
 	)
@@ -231,6 +238,8 @@ func (s *approveScreen) othersView(rest []promptItem, now time.Time, room int) [
 		target := tui.SanitizeText(it.Entry.Target().String())
 		if it.Held(now) {
 			lines = append(lines, held.Render(fmt.Sprintf("  ? %s  held %ds", target, secondsLeft(it.Deadline, now))))
+		} else if outcome, ended := it.HoldEnded(now); ended {
+			lines = append(lines, held.Faint(true).Render(fmt.Sprintf("  ? %s  hold ended · %s", target, holdOutcomeLabel(outcome))))
 		} else {
 			lines = append(lines, blocked.Render(fmt.Sprintf("  x %s  blocked", target)))
 		}

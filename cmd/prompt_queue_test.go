@@ -107,6 +107,32 @@ func TestPromptQueue(t *testing.T) {
 			wantHosts: []string{"a.example.com"},
 			check: func(t *testing.T, q *promptQueue) {
 				assert.True(t, q.Items()[0].Deadline.IsZero())
+				assert.Equal(t, proxy.HoldTimeout, q.Items()[0].Ended)
+			},
+		},
+		{
+			name: "abandoned clears the deadline and records why",
+			run: func(q *promptQueue) {
+				q.Add(a)
+				q.EndHold(proxy.HoldEnd{ID: 1, HostKey: a.HostKey(), Outcome: proxy.HoldAbandoned})
+			},
+			wantHosts: []string{"a.example.com"},
+			check: func(t *testing.T, q *promptQueue) {
+				assert.True(t, q.Items()[0].Deadline.IsZero())
+				assert.Equal(t, proxy.HoldAbandoned, q.Items()[0].Ended)
+			},
+		},
+		{
+			name: "a new hold clears how the last one ended",
+			run: func(q *promptQueue) {
+				q.Add(a)
+				q.EndHold(proxy.HoldEnd{ID: 1, HostKey: a.HostKey(), Outcome: proxy.HoldAbandoned})
+				q.Add(queueEntry("a.example.com", proxy.ActionHold, 9, later))
+			},
+			wantHosts: []string{"a.example.com"},
+			check: func(t *testing.T, q *promptQueue) {
+				assert.Equal(t, later, q.Items()[0].Deadline)
+				assert.Empty(t, q.Items()[0].Ended)
 			},
 		},
 		{
@@ -118,6 +144,7 @@ func TestPromptQueue(t *testing.T) {
 			wantHosts: []string{"a.example.com"},
 			check: func(t *testing.T, q *promptQueue) {
 				assert.Equal(t, later, q.Items()[0].Deadline)
+				assert.Empty(t, q.Items()[0].Ended)
 			},
 		},
 		{

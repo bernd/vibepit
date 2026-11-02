@@ -12,11 +12,24 @@ import (
 type promptItem struct {
 	Entry    proxy.LogEntry // the hold entry when held; its ID matches HoldEnd.ID
 	Deadline time.Time      // zero: plain block
+	// Ended is how the last hold on the target ended without a decision;
+	// empty while held and for a target that was never held.
+	Ended proxy.HoldOutcome
 }
 
 // Held reports whether the proxy is still holding the request at now.
 func (it promptItem) Held(now time.Time) bool {
 	return !it.Deadline.IsZero() && now.Before(it.Deadline)
+}
+
+// HoldEnded reports whether the target was held and no longer is at now, and
+// how the hold ended. A passed deadline whose end event hasn't arrived yet
+// reports HoldNone, which reads as a timeout.
+func (it promptItem) HoldEnded(now time.Time) (proxy.HoldOutcome, bool) {
+	if it.Ended != proxy.HoldNone {
+		return it.Ended, true
+	}
+	return proxy.HoldNone, !it.Deadline.IsZero() && !it.Held(now)
 }
 
 // promptQueue is the ordered set of targets the approve screen works through.
@@ -31,9 +44,13 @@ func newPromptQueue() *promptQueue { return &promptQueue{} }
 
 func newPromptItem(e proxy.LogEntry) promptItem {
 	it := promptItem{Entry: e}
-	// A hold that already ended is just a block; the countdown would lie.
-	if e.Action == proxy.ActionHold && e.Outcome == proxy.HoldNone {
-		it.Deadline = e.Deadline
+	if e.Action == proxy.ActionHold {
+		// A hold that already ended gets no countdown; it would lie.
+		if e.Outcome == proxy.HoldNone {
+			it.Deadline = e.Deadline
+		} else {
+			it.Ended = e.Outcome
+		}
 	}
 	return it
 }
@@ -65,8 +82,8 @@ func (q *promptQueue) Has(t proxy.Target) bool {
 }
 
 // EndHold applies the end of a hold. An allow or deny settles the target; any
-// other outcome only stops the countdown, and only for the hold it names, so a
-// late event can't cancel a newer hold on the same target.
+// other outcome only stops the countdown and records why, and only for the
+// hold it names, so a late event can't cancel a newer hold on the same target.
 func (q *promptQueue) EndHold(end proxy.HoldEnd) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -80,6 +97,7 @@ func (q *promptQueue) EndHold(end proxy.HoldEnd) {
 	default:
 		if q.items[i].Entry.ID == end.ID {
 			q.items[i].Deadline = time.Time{}
+			q.items[i].Ended = end.Outcome
 		}
 	}
 }

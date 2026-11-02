@@ -92,12 +92,90 @@ func TestApproveScreen_HeldCountdown(t *testing.T) {
 	assert.Contains(t, view, "the agent is waiting · 7s left")
 }
 
-func TestApproveScreen_HeldBecomesBlockedAtDeadline(t *testing.T) {
+func TestApproveScreen_HoldEndsAtDeadline(t *testing.T) {
 	f := makeApproveSetup(t, heldEntry("docs.example.com", 1, approveEpoch.Add(5*time.Second)))
 	f.clock.now = approveEpoch.Add(5 * time.Second)
 	view := f.s.View(f.w)
-	assert.Contains(t, view, "blocked")
+	assert.Contains(t, view, "hold ended · timed out")
 	assert.NotContains(t, view, "waiting")
+	assert.NotContains(t, view, "blocked")
+}
+
+// titleLine returns the view's line naming the first target.
+func titleLine(t *testing.T, view, target string) string {
+	t.Helper()
+	for line := range strings.SplitSeq(view, "\n") {
+		if strings.Contains(line, target) {
+			return line
+		}
+	}
+	t.Fatalf("no line names %s in %q", target, view)
+	return ""
+}
+
+// A hold that ends without a decision is still the same prompt: the title
+// keeps saying held, only dimmed, and the line under it says why it ended.
+// The proxy refused nothing when the agent's request went away, so the
+// screen must not claim a block.
+func TestApproveScreen_SaysWhyHoldEnded(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome proxy.HoldOutcome // empty: the deadline passed before the event
+		want    string
+	}{
+		{"request gone", proxy.HoldAbandoned, "hold ended · request gone"},
+		{"timeout", proxy.HoldTimeout, "hold ended · timed out"},
+		{"nobody watching", proxy.HoldUnwatched, "hold ended · nobody watching"},
+		{"deadline passed", "", "hold ended · timed out"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := heldEntry("docs.example.com", 1, approveEpoch.Add(5*time.Second))
+			f := makeApproveSetup(t, e)
+			live := titleLine(t, f.s.View(f.w), "docs.example.com:443")
+			if tt.outcome != "" {
+				f.q.EndHold(proxy.HoldEnd{ID: 1, HostKey: e.HostKey(), Outcome: tt.outcome})
+			} else {
+				f.clock.now = approveEpoch.Add(5 * time.Second)
+			}
+			view := f.s.View(f.w)
+			ended := titleLine(t, view, "docs.example.com:443")
+			assert.Contains(t, ended, "held")
+			assert.NotEqual(t, live, ended, "the title is dimmed once nothing waits")
+			assert.Contains(t, view, tt.want)
+			assert.NotContains(t, view, "blocked")
+			assert.NotContains(t, view, "waiting")
+		})
+	}
+}
+
+func TestApproveScreen_ListsEndedHoldsAsHeld(t *testing.T) {
+	gone := heldEntry("two.example.com", 2, approveEpoch.Add(5*time.Second))
+	f := makeApproveSetup(t,
+		blockedEntry,
+		gone,
+		proxy.LogEntry{Domain: "three.example.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy},
+	)
+	f.q.EndHold(proxy.HoldEnd{ID: 2, HostKey: gone.HostKey(), Outcome: proxy.HoldAbandoned})
+	view := f.s.View(f.w)
+	assert.Contains(t, view, "? two.example.com:443  hold ended · request gone")
+	assert.Contains(t, view, "x three.example.com:443  blocked")
+}
+
+func TestApproveScreen_PlainBlockSaysNothingAboutHolds(t *testing.T) {
+	f := makeApproveSetup(t, blockedEntry)
+	assert.NotContains(t, f.s.View(f.w), "no longer held")
+}
+
+// The proxy runs in UTC; the user reads the time on their own clock.
+func TestApproveScreen_ShowsLocalTime(t *testing.T) {
+	orig := time.Local
+	time.Local = time.FixedZone("UTC+1", 3600)
+	t.Cleanup(func() { time.Local = orig })
+	e := blockedEntry
+	e.Time = time.Date(2026, 11, 2, 7, 26, 3, 0, time.UTC)
+	f := makeApproveSetup(t, e)
+	assert.Contains(t, f.s.View(f.w), "08:26:03")
 }
 
 func TestApproveScreen_ListsOtherTargets(t *testing.T) {
