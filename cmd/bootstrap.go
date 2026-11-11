@@ -290,7 +290,7 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		selfBinary = proxyBinary
 	}
 
-	if _, err := client.EnsureImage(ctx, u.Image, false); err != nil {
+	if _, err := client.EnsureImage(ctx, u.Image); err != nil {
 		return nil, cleanups, fmt.Errorf("image: %w", err)
 	}
 	if !cmd.Bool(localFlag) {
@@ -303,7 +303,7 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 			return nil, cleanups, fmt.Errorf("sandbox image verification: %w", err)
 		}
 	}
-	if _, err := client.EnsureImage(ctx, ctr.ProxyImage, false); err != nil {
+	if _, err := client.EnsureImage(ctx, ctr.ProxyImage); err != nil {
 		return nil, cleanups, fmt.Errorf("proxy image: %w", err)
 	}
 	proxyDigestRef, err := client.ImageRepoDigest(ctx, ctr.ProxyImage)
