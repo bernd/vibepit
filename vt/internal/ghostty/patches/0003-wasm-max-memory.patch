@@ -1,0 +1,24 @@
+Add a wasm-max-memory build option that sets the module's maximum linear
+memory. wasm2go turns that maximum into a constant, and vibepit uses it
+to cap each emulator instance.
+
+Upstream: not yet proposed.
+
+diff --git a/src/build/GhosttyLibVt.zig b/src/build/GhosttyLibVt.zig
+index a200209af..ab837467b 100644
+--- a/src/build/GhosttyLibVt.zig
++++ b/src/build/GhosttyLibVt.zig
+@@ -65,6 +65,13 @@ pub fn initWasm(
+     // comment but lets do 128KB to be safe. We can lower later.
+     exe.stack_size = 128 * 1024;
+ 
++    // Linear memory can grow to 4 GiB unless an embedder caps it here.
++    if (b.option(
++        u64,
++        "wasm-max-memory",
++        "Maximum linear memory of the wasm module in bytes, a multiple of 64 KiB",
++    )) |max| exe.max_memory = max;
++
+     // Zig's WASM linker doesn't support --growable-table, so the table
+     // is emitted with max == min and can't be grown from JS. Run a
+     // small Zig build tool that patches the binary's table section to
