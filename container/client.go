@@ -55,6 +55,12 @@ const (
 	SessionStatePath = "/tmp/vibed-sessions.json"
 )
 
+const (
+	// pingTimeout bounds each daemon probe, so an unreachable daemon does
+	// not hang every command until the OS gives up on the connection.
+	pingTimeout = 10 * time.Second
+)
+
 var (
 	// sshContainerPort is SSHContainerPort as a network.Port.
 	sshContainerPort, _ = network.PortFrom(2222, network.TCP)
@@ -86,10 +92,23 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 		}
 	}
 
-	// First try the regular Docker environment chain.
-	if cli := pingedClient(client.debug, "Docker", dockerclient.FromEnv); cli != nil {
+	// First try the regular Docker environment chain. If DOCKER_HOST names a
+	// daemon, or the DOCKER_* settings are invalid, any failure is an error:
+	// falling back would silently use a different runtime or different
+	// settings than the ones the user configured.
+	cli, defaultErr := pingedClient(client.debug, dockerclient.FromEnv)
+	if defaultErr == nil {
 		client.docker = cli
 		return client, nil
+	}
+	if host := os.Getenv(dockerclient.EnvOverrideHost); host != "" {
+		return nil, fmt.Errorf("%s=%s (unset it to use a local socket): %w", dockerclient.EnvOverrideHost, host, defaultErr)
+	}
+	if errors.Is(defaultErr, errClientConfig) {
+		return nil, defaultErr
+	}
+	if client.debug {
+		tui.Debug("Could not use default Docker host: %v", defaultErr)
 	}
 
 	// Then fall back to manual socket detection.
@@ -106,7 +125,9 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 		fmt.Sprintf("unix:///run/user/%s/podman/podman.sock", u.Uid),
 	)
 	if err != nil {
-		return nil, err
+		// Report the default host too: its error (e.g. permission denied on
+		// /var/run/docker.sock) is often the one that explains the failure.
+		return nil, fmt.Errorf("couldn't find a Docker socket: %w", errors.Join(defaultErr, err))
 	}
 
 	client.docker = detectedCli
@@ -126,39 +147,49 @@ func displayDockerHost(debug bool, cli *dockerclient.Client) {
 	tui.Debug("Using container daemon at %s", host)
 }
 
+// findSocket returns a client for the first socket whose daemon is usable.
+// Every socket is tried, so one stale or unsupported daemon does not hide a
+// working one. The error lists why each socket failed.
 func findSocket(debug bool, paths ...string) (*dockerclient.Client, error) {
+	var errs []error
 	for _, path := range paths {
 		if debug {
 			tui.Debug("Trying socket: %s", path)
 		}
-		if cli := pingedClient(debug, "socket", dockerclient.WithHost(path)); cli != nil {
+		cli, err := pingedClient(debug, dockerclient.WithHost(path))
+		if err == nil {
 			return cli, nil
 		}
+		if debug {
+			tui.Debug("Could not use socket: %v", err)
+		}
+		errs = append(errs, err)
 	}
 
-	return nil, errors.New("couldn't find a Docker socket")
+	return nil, errors.Join(errs...)
 }
 
-// pingedClient returns a client for opts whose daemon answered a ping, or nil.
-// The ping negotiates the API version, so an unsupported daemon is rejected
-// here rather than on the first real call.
-func pingedClient(debug bool, what string, opts ...dockerclient.Opt) *dockerclient.Client {
+// errClientConfig marks a client that could not be created from its
+// options, as opposed to a daemon that could not be reached.
+var errClientConfig = errors.New("invalid Docker client configuration")
+
+// pingedClient returns a client for opts whose daemon answered a ping. The
+// ping negotiates the API version, so an unsupported daemon fails here
+// rather than on the first real call.
+func pingedClient(debug bool, opts ...dockerclient.Opt) (*dockerclient.Client, error) {
 	cli, err := dockerclient.New(opts...)
 	if err != nil {
-		if debug {
-			tui.Debug("Could not connect to %s: %v", what, err)
-		}
-		return nil
+		return nil, fmt.Errorf("%w: %w", errClientConfig, err)
 	}
-	if _, err := cli.Ping(context.Background(), dockerclient.PingOptions{NegotiateAPIVersion: true}); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	if _, err := cli.Ping(ctx, dockerclient.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		host := cli.DaemonHost()
 		_ = cli.Close()
-		if debug {
-			tui.Debug("Could not ping %s: %v", what, err)
-		}
-		return nil
+		return nil, fmt.Errorf("%s: %w", host, err)
 	}
 	displayDockerHost(debug, cli)
-	return cli
+	return cli, nil
 }
 
 func (c *Client) Close() error { return c.docker.Close() }
