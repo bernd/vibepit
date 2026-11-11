@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ghostty_commit:
-        description: "ghostty commit to build (default: head of main)"
+        description: "ghostty commit or vt-X.Y.Z tag to build (default: newest vt-X.Y.Z tag)"
         required: false
         default: ""
   schedule:
@@ -36,6 +36,7 @@ jobs:
     outputs:
       skip: "${{ steps.resolve.outputs.skip }}"
       want: "${{ steps.resolve.outputs.want }}"
+      tag: "${{ steps.resolve.outputs.tag }}"
       commit: "${{ steps.build.outputs.commit }}"
       status: "${{ steps.build.outputs.status }}"
       category: "${{ steps.build.outputs.category }}"
@@ -59,14 +60,36 @@ jobs:
         with:
           version: "0.17.0"
 
+      # Releases only: main is the next minor's development branch. A
+      # pre-release tag (vt-1.1.0-rc1) doesn't match vt-X.Y.Z.
       - name: "Resolve ghostty commit"
         id: "resolve"
         env:
           WANT: "${{ inputs.ghostty_commit }}"
         run: |
           want="$WANT"
-          if [ -z "$want" ]; then
-            want="$(git ls-remote https://github.com/ghostty-org/ghostty.git refs/heads/main | cut -f1)"
+          tag=""
+          if [ -z "$want" ] || [[ "$want" =~ ^vt-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            refs="$(git ls-remote --tags https://github.com/ghostty-org/ghostty.git 'refs/tags/vt-*')"
+            # An annotated tag is listed twice: the tag object, and with
+            # ^{} the commit it points to. Keep the commit.
+            tags="$(awk '{
+                name = $2; sub(/^refs\/tags\//, "", name); peeled = 0
+                if (substr(name, length(name) - 2) == "^{}") { name = substr(name, 1, length(name) - 3); peeled = 1 }
+                if (name !~ /^vt-[0-9]+\.[0-9]+\.[0-9]+$/) next
+                if (peeled || !(name in sha)) sha[name] = $1
+              } END { for (n in sha) print n, sha[n] }' <<<"$refs" | sort -V)"
+            if [ -z "$want" ]; then
+              line="$(tail -n 1 <<<"$tags")"
+            else
+              line="$(awk -v t="$want" '$1 == t' <<<"$tags")"
+            fi
+            if [ -z "$line" ]; then
+              echo "::error::no ghostty release tag ${want:-vt-X.Y.Z}"
+              exit 1
+            fi
+            tag="${line%% *}"
+            want="${line##* }"
           fi
           # The value ends up in a git checkout and in the PR title.
           if [[ ! "$want" =~ ^[0-9a-f]{7,40}$ ]]; then
@@ -76,6 +99,7 @@ jobs:
           current="$(sed -n 's/^commit=//p' vt/internal/ghostty/internal/wasmvt/GHOSTTY_COMMIT)"
           {
             echo "want=$want"
+            echo "tag=$tag"
             if [[ "$current" == "$want"* ]]; then
               echo "skip=true"
             fi
@@ -206,6 +230,7 @@ jobs:
         env:
           GH_TOKEN: "${{ github.token }}"
           GHOSTTY_NEW: "${{ needs.build.outputs.commit || needs.build.outputs.want }}"
+          GHOSTTY_TAG: "${{ needs.build.outputs.tag }}"
           STATUS: "${{ needs.build.outputs.status }}"
           CATEGORY: "${{ needs.build.outputs.category }}"
         run: ".github/scripts/ghostty-wasm-pr.sh"

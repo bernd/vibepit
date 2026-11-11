@@ -33,7 +33,11 @@ the modes, which vibepit's restores don't ask for, so 0002 keeps the rest.
 ## Upgrading
 
 Normally the `ghostty-wasm` workflow does this weekly and opens a PR on
-the `ghostty-wasm-update` branch. It needs "Allow GitHub Actions to create
+the `ghostty-wasm-update` branch. It builds the newest libghostty-vt
+release, the commit of the highest `vt-X.Y.Z` tag, and skips the run when
+that is already pinned. Upstream's `main` is the next minor's development
+branch, so it is never built unless asked for. A manual run takes a commit
+or a `vt-X.Y.Z` tag. It needs "Allow GitHub Actions to create
 and approve pull requests" under Settings → Actions → General → Workflow
 permissions; without it the first run fails at `gh pr create`.
 
