@@ -19,6 +19,10 @@ const (
 	positionQuery = "\x1b[6n"
 	// promptInputMax bounds what the prompt's input buffers.
 	promptInputMax = 64 << 10
+	// stdinReadSize is the most the stdin pump reads at once. It routes
+	// about that much past a full session input queue: a held barrier
+	// reply prefix and the app's replies can add a few bytes.
+	stdinReadSize = 4096
 )
 
 type inputMode uint8
@@ -89,7 +93,7 @@ func (m *inputMux) Done() <-chan struct{} { return m.done }
 
 // Run reads stdin until it ends. It returns nil at EOF.
 func (m *inputMux) Run() error {
-	buf := make([]byte, 4096)
+	buf := make([]byte, stdinReadSize)
 	for {
 		n, err := m.src.Read(buf)
 		if n > 0 && m.route(buf[:n]) {
@@ -175,9 +179,9 @@ type roomWaiter interface {
 // waitSession is the stdin pump's backpressure: it waits, outside the
 // lock, until a queueing session input has room. The prompt's input never
 // waits for the session. While the handoff waits for the barrier reply
-// the limit is the queue's size, so the reply is read even when the
-// session stopped reading; a full queue fails the handoff instead. The
-// session's input is never dropped.
+// the limit is sessionInputMax, so the reply is read even when the
+// session stopped reading; reaching it before the reply fails the handoff
+// instead. The session's input is never dropped.
 func (m *inputMux) waitSession() {
 	w, ok := m.session.(roomWaiter)
 	if !ok {
@@ -338,7 +342,8 @@ func (m *inputMux) Drain() {
 
 // AwaitBarrier is the handoff: it waits for the barrier reply and returns the
 // prompt's input. It fails with ErrBarrierTimeout after timeout, and with
-// ErrSessionBusy when the session's input before the reply fills its queue.
+// ErrSessionBusy when the session's input pending before the reply reaches
+// sessionInputMax.
 func (m *inputMux) AwaitBarrier(ctx context.Context, timeout time.Duration) (io.Reader, error) {
 	m.mu.Lock()
 	barrier, prompt, stalled := m.barrier, m.prompt, m.stalled

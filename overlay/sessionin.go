@@ -1,17 +1,25 @@
 package overlay
 
 import (
+	"bytes"
 	"io"
 	"sync"
 )
 
 const (
-	// sessionInputRoom is how much queued input makes the stdin pump wait
+	// sessionInputRoom is how much pending input makes the stdin pump wait
 	// for the session: the backpressure a plain copy would have.
 	sessionInputRoom = 64 << 10
-	// sessionInputMax bounds the queue. Past it the shadow's answers are
-	// dropped. Stdin is never dropped: its pump waits for room, at
-	// sessionInputMax only while the handoff waits for the barrier reply.
+	// sessionInputChunk is the most one write to the session takes, so
+	// room comes back as a slow session reads, not only after a whole
+	// burst. Half the room lets stdin be read while a chunk is written.
+	sessionInputChunk = sessionInputRoom / 2
+	// sessionInputMax caps the shadow's answers: past it they are dropped.
+	// Stdin is never dropped. Its pump checks for room after each read,
+	// so what is pending, the write in flight included, passes the limit
+	// by about one read, plus a few bytes of replies and reports the input
+	// side passes on outside that check. While the handoff waits for the
+	// barrier reply the pump waits only at sessionInputMax.
 	sessionInputMax = 4 << 20
 )
 
@@ -22,13 +30,15 @@ const (
 type sessionInput struct {
 	w io.Writer
 
-	mu     sync.Mutex
-	cond   *sync.Cond
-	buf    []byte
-	spare  []byte // the buffer of the last write, reused for the next queue
-	busy   bool   // a write to the session is in flight
-	failed bool   // the session's input is gone; drop everything
-	closed bool
+	mu   sync.Mutex
+	cond *sync.Cond
+	q    bytes.Buffer
+	// inflight is the size of the write to the session in flight. It
+	// counts toward the room: a session stalled on a write must not let
+	// stdin read past what the queue bounds.
+	inflight int
+	failed   bool // the session's input is gone; drop everything
+	closed   bool
 }
 
 func newSessionInput(w io.Writer) *sessionInput {
@@ -55,50 +65,58 @@ func (c *sessionInput) queue(p []byte, bounded bool) (int, error) {
 	if c.closed {
 		return 0, io.ErrClosedPipe
 	}
-	if !c.failed && (!bounded || len(c.buf)+len(p) <= sessionInputMax) {
-		c.buf = append(c.buf, p...)
+	if !c.failed && (!bounded || c.pendingLocked()+len(p) <= sessionInputMax) {
+		c.q.Write(p)
 		c.cond.Broadcast()
 	}
 	return len(p), nil
 }
 
-// run writes the queue to the session until close.
+// run writes the queue to the session, at most sessionInputChunk at a
+// time, until close.
 func (c *sessionInput) run() {
+	p := make([]byte, sessionInputChunk)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for {
-		for len(c.buf) == 0 && !c.closed {
+		for c.q.Len() == 0 && !c.closed {
 			c.cond.Wait()
 		}
 		if c.closed {
 			return
 		}
-		p := c.buf
-		c.buf, c.spare, c.busy = c.spare, nil, true
-		c.mu.Unlock()
-		_, err := c.w.Write(p)
-		c.mu.Lock()
-		c.busy = false
-		if cap(p) <= sessionInputRoom {
+		n, _ := c.q.Read(p)
+		if c.q.Len() == 0 && c.q.Cap() > sessionInputRoom {
 			// Larger buffers only come from bursts; let them go.
-			c.spare = p[:0]
+			c.q = bytes.Buffer{}
 		}
+		c.inflight = n
+		c.mu.Unlock()
+		_, err := c.w.Write(p[:n])
+		c.mu.Lock()
+		c.inflight = 0
 		if err != nil {
 			c.failed = true
-			c.buf = nil
+			c.q = bytes.Buffer{}
 		}
 		c.cond.Broadcast()
 	}
 }
 
-// hasRoom tells whether the queue holds less than limit.
+// pendingLocked is what hasn't reached the session: the queue and the
+// write in flight.
+func (c *sessionInput) pendingLocked() int {
+	return c.q.Len() + c.inflight
+}
+
+// hasRoom tells whether less than limit is pending.
 func (c *sessionInput) hasRoom(limit int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.roomLocked(limit)
 }
 
-// waitRoom blocks until the queue holds less than limit or stop is closed.
+// waitRoom blocks until less than limit is pending or stop is closed.
 // Callers must not hold a lock.
 func (c *sessionInput) waitRoom(limit int, stop <-chan struct{}) {
 	c.mu.Lock()
@@ -123,10 +141,10 @@ func (c *sessionInput) waitRoom(limit int, stop <-chan struct{}) {
 	}
 }
 
-// roomLocked tells whether the queue holds less than limit. A failed or
+// roomLocked tells whether less than limit is pending. A failed or
 // closed queue always has room: it drops what it gets.
 func (c *sessionInput) roomLocked(limit int) bool {
-	return len(c.buf) < limit || c.failed || c.closed
+	return c.pendingLocked() < limit || c.failed || c.closed
 }
 
 // flush blocks until everything queued reached the session, so a
@@ -134,7 +152,7 @@ func (c *sessionInput) roomLocked(limit int) bool {
 func (c *sessionInput) flush() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for (len(c.buf) > 0 || c.busy) && !c.failed && !c.closed {
+	for c.pendingLocked() > 0 && !c.failed && !c.closed {
 		c.cond.Wait()
 	}
 }
@@ -144,6 +162,6 @@ func (c *sessionInput) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
-	c.buf = nil
+	c.q = bytes.Buffer{}
 	c.cond.Broadcast()
 }

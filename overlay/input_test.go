@@ -475,7 +475,7 @@ func TestInputMuxHandoffPastAStalledSession(t *testing.T) {
 	require.Eventually(t, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		return len(c.buf) >= sessionInputRoom
+		return c.pendingLocked() >= sessionInputRoom
 	}, 5*time.Second, time.Millisecond)
 
 	mux.Drain()
@@ -487,7 +487,7 @@ func TestInputMuxHandoffPastAStalledSession(t *testing.T) {
 	assert.Equal(t, "q", readN(t, in, 1), "the prompt gets its keys")
 	mux.Release(0, false, func() {})
 
-	close(w.gate)
+	w.release()
 	src.send(t, "after")
 	require.Eventually(t, func() bool { return w.out.String() == "x"+paste+"after" }, 5*time.Second, time.Millisecond,
 		"the queued paste reaches the session in order")
@@ -514,7 +514,7 @@ func TestInputMuxHandoffFailsRatherThanDropSessionInput(t *testing.T) {
 	// The stall outlasts the strip window: waiting for the session doesn't
 	// count against it.
 	time.Sleep(4 * strip)
-	close(w.gate)
+	w.release()
 	require.True(t, <-sent)
 	require.Eventually(t, func() bool { return w.out.String() == "x"+paste+"after" }, 5*time.Second, time.Millisecond,
 		"the session gets all its input and not the barrier reply")

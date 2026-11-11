@@ -161,8 +161,10 @@ func TestAStalledSessionInputFailsTheHandoffRatherThanLoseInput(t *testing.T) {
 	h := newHarness(t, 20, 5, stalledSessionInput(gate))
 	t.Cleanup(release)
 	<-h.term.aligned
-	// More than the queue holds besides a write in flight.
-	paste := strings.Repeat("p", sessionInputMax+2*sessionInputRoom)
+	// More than is ever pending: the limit counts the write in flight, and
+	// past it the pump reads about one more buffer, so it never gets to
+	// the barrier reply.
+	paste := strings.Repeat("p", sessionInputMax+2*stdinReadSize)
 	h.keys(paste)
 	require.ErrorIs(t, h.result(h.show(context.Background(), promptModel)), ErrSessionBusy)
 	assert.NotContains(t, screenText(h.real), "PROMPT", "nothing was drawn")
