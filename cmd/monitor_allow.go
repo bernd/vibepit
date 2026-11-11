@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 )
@@ -78,12 +77,12 @@ func (s allowState) hostStatus(h proxy.HostStats) hostStatus {
 }
 
 func isBlocked(h proxy.HostStats) bool {
-	return h.LastAction == proxy.ActionBlock && (!h.Allowlisted || !allowable(h.LastBlockCode))
+	return h.LastAction == proxy.ActionBlock && (!h.Allowlisted || !proxy.AllowFixes(h.HostKey, h.LastBlockCode))
 }
 
 // entryStatus returns the allow marker for a log line.
 func (s allowState) entryStatus(e proxy.LogEntry) allowStatus {
-	if e.Action == proxy.ActionBlock && !allowable(e.Code) {
+	if e.Action == proxy.ActionBlock && !proxy.AllowFixes(e.HostKey(), e.Code) {
 		return statusNone
 	}
 	return s[e.HostKey()]
@@ -113,7 +112,7 @@ func (s allowState) forEntry(e proxy.LogEntry) allowTarget {
 
 // canAllow reports whether the a and A keys add an allowlist entry.
 func (t allowTarget) canAllow() bool {
-	return t.current == statusNone && t.blocked && allowable(t.code)
+	return t.current == statusNone && t.blocked && proxy.AllowFixes(t.key, t.code)
 }
 
 // canSave reports whether A saves a temporary allow.
@@ -121,17 +120,8 @@ func (t allowTarget) canSave() bool {
 	return t.current == statusTemp
 }
 
-// allowable reports whether an allowlist entry would fix a block. An empty
-// code comes from a proxy that predates block codes; keep allowing those.
-func allowable(code proxy.BlockCode) bool {
-	return code == proxy.BlockNotAllowlisted || code == ""
-}
-
 func allowValue(k proxy.HostKey) string {
-	if k.Source == proxy.SourceProxy && k.Port != "" {
-		return k.Domain + ":" + k.Port
-	}
-	return k.Domain
+	return k.Target().String()
 }
 
 // allowResultMsg is returned by the async allow command.
@@ -144,35 +134,8 @@ type allowResultMsg struct {
 
 func (s *monitorScreen) allowCmd(key proxy.HostKey, save bool) tea.Cmd {
 	return func() tea.Msg {
-		value := allowValue(key)
-
-		var err error
-		switch key.Source {
-		case proxy.SourceDNS:
-			_, err = s.client.AllowDNS([]string{value})
-		default:
-			_, err = s.client.AllowHTTP([]string{value})
-		}
-		if err != nil {
-			return allowResultMsg{from: s, key: key, err: err}
-		}
-
-		status := statusTemp
-		if save {
-			status = statusSaved
-			projectPath := config.DefaultProjectPath(s.session.ProjectDir)
-			switch key.Source {
-			case proxy.SourceDNS:
-				err = config.AppendAllowDNS(projectPath, []string{value})
-			default:
-				err = config.AppendAllowHTTP(projectPath, []string{value})
-			}
-			if err != nil {
-				// The proxy already allows the host for this session.
-				return allowResultMsg{from: s, key: key, status: statusTemp, err: err}
-			}
-		}
-		return allowResultMsg{from: s, key: key, status: status}
+		status, err := allowEntry(s.client, s.session, key, save)
+		return allowResultMsg{from: s, key: key, status: status, err: err}
 	}
 }
 
@@ -194,7 +157,12 @@ func (s *monitorScreen) requestAllow(w *tui.Window, t allowTarget, save bool) te
 	case t.canAllow() || save && t.canSave():
 		return s.allowCmd(t.key, save)
 	case t.current == statusNone && t.blocked:
-		w.SetFlash("cannot allow: " + t.reason)
+		reason := t.reason
+		if t.code == proxy.BlockNotAllowlisted || t.code == "" {
+			// An allowlist block the allowlist can't fix, e.g. an IPv6 literal.
+			reason = "the allowlist can't hold " + allowValue(t.key)
+		}
+		w.SetFlash("cannot allow: " + reason)
 	default:
 		w.SetFlash("already allowed")
 	}

@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strconv"
+
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
@@ -12,7 +14,7 @@ func RunCommand() *cli.Command {
 	return &cli.Command{
 		Name:   "run",
 		Usage:  "Start the sandbox",
-		Flags:  sandboxFlags(),
+		Flags:  append(sandboxFlags(), promptCLIFlag),
 		Action: RunAction,
 	}
 }
@@ -37,8 +39,18 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	if existing != nil {
 		warnIgnoredSandboxFlags(cmd)
+		prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+			return sessionInfoForRunning(ctx, client, existing.SessionID, projectRoot)
+		})
+		if err != nil {
+			return err
+		}
+		defer prompter.stop()
 		tui.Status("Attaching", "to running session in %s", projectRoot)
-		return client.ExecSession(ctx, existing.ContainerID)
+		err = client.ExecSession(ctx, existing.ContainerID, prompter.hooks)
+		prompter.stop()
+		prompter.report()
+		return err
 	}
 
 	infra, cleanups, err := startSessionInfra(ctx, cmd, client, projectRoot, u, infraOptions{})
@@ -58,8 +70,23 @@ func RunAction(ctx context.Context, cmd *cli.Command) error {
 	}()
 	reportSandboxMemory(ctx, client, sandboxContainer, infra)
 
+	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
+		return &SessionInfo{
+			ControlPort: strconv.Itoa(infra.Merged.ControlAPIPort),
+			SessionID:   infra.SessionID,
+			ProjectDir:  projectRoot,
+		}, nil
+	})
+	if err != nil {
+		return err
+	}
+	defer prompter.stop()
+
 	tui.Status("Starting", "sandbox container")
 	tui.Status("Attaching", "shell session")
 	fmt.Println()
-	return client.AttachAndStartSession(ctx, sandboxContainer)
+	err = client.AttachAndStartSession(ctx, sandboxContainer, prompter.hooks)
+	prompter.stop()
+	prompter.report()
+	return err
 }

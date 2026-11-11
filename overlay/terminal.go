@@ -1,0 +1,479 @@
+package overlay
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"os"
+	"sync"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/bernd/vibepit/vt"
+	"github.com/charmbracelet/colorprofile"
+)
+
+// barrierTimeoutsBeforeDegraded consecutive barrier timeouts switch the
+// handoff to waiting for input silence.
+const barrierTimeoutsBeforeDegraded = 2
+
+// maxBarrierWait bounds how long a slow terminal's barrier reply is waited
+// for. Output is held back meanwhile.
+const maxBarrierWait = 2 * time.Second
+
+// Config connects a Terminal to the local terminal and the session.
+type Config struct {
+	Stdin      io.Reader // the local terminal, already in raw mode
+	Stdout     io.Writer
+	SessionIn  io.Writer
+	SessionOut io.Reader
+	// CloseInput half-closes the session's input after stdin ends.
+	CloseInput func() error
+	// Resize resizes the session's PTY.
+	Resize func(cols, rows int)
+	// Size reports the local terminal's size.
+	Size func() (cols, rows int, err error)
+	// Environ is the prompt program's environment; nil means os.Environ.
+	// Its TERM picks the sequences Bubble Tea's renderer uses.
+	Environ []string
+	// Logf receives diagnostics; nil discards them.
+	Logf func(format string, args ...any)
+	// NoShadow skips the emulator for sessions that never prompt. Output
+	// passes through, and Show returns ErrUnavailable.
+	NoShadow bool
+}
+
+// timing holds the waits and limits of the alignment, the cut and the
+// handoff; tests shorten them.
+type timing struct {
+	positionWait time.Duration // Run: wait for the cursor position reply
+	groundWait   time.Duration // cut: longest wait for ground before a forced cut
+	groundBytes  int           // cut: most bytes forwarded while waiting for ground
+	barrierWait  time.Duration // handoff: wait for the barrier reply
+	silence      time.Duration // handoff without barrier support: input quiet time
+	silenceMax   time.Duration // handoff without barrier support: longest wait for quiet
+	lateStrip    time.Duration // after a barrier or position timeout: drop a late reply
+	nudgeGap     time.Duration // between the two resizes of a repaint nudge
+	logMax       int           // raw log cap
+}
+
+var defaultTiming = timing{
+	positionWait: 500 * time.Millisecond,
+	groundWait:   250 * time.Millisecond,
+	groundBytes:  64 << 10,
+	barrierWait:  500 * time.Millisecond,
+	silence:      100 * time.Millisecond,
+	silenceMax:   time.Second,
+	lateStrip:    10 * time.Second,
+	nudgeGap:     100 * time.Millisecond,
+	logMax:       4 << 20,
+}
+
+var errNoShadow = errors.New("no shadow terminal")
+
+// Terminal forwards a session to the local terminal and shows
+// prompts over it. Create it with New and run it with Run.
+type Terminal struct {
+	cfg       Config
+	timing    timing
+	in        *inputMux
+	sessionIn *sessionInput
+	profile   colorprofile.Profile
+	done      chan struct{} // closed when Run returns
+	aligned   chan struct{} // closed when align is done
+
+	showMu sync.Mutex // one Show at a time; finish takes it to wait for one
+	// resizeMu orders whole resizes and repaint nudges, so the shadow and
+	// the session end at the same, latest size. The session's resize
+	// runs outside mu.
+	resizeMu sync.Mutex
+
+	mu              sync.Mutex // guards everything below
+	shadow          *vt.Terminal
+	shadowErr       error // set: prompts are unavailable
+	cols, rows      int
+	detach          *detachReq // a cut waiting for ground
+	cut             *cutState  // from the cut to the leave; set: detached
+	log             rawLog     // output since the cut
+	answers         []byte     // the shadow's answers during the current call
+	answered        bool       // the shadow answered a query while detached
+	resized         bool       // resized while detached
+	resyncing       bool       // drop output up to the next ground
+	misaligned      bool       // the shadow's cursor may not be the real one's
+	missed          bool       // a write failed: the real terminal may lack output the shadow has
+	prog            *tea.Program
+	barrierTimeouts int
+	// snapshot is snapshotLeave; tests replace it to inject failures.
+	snapshot func(*vt.Terminal, *cutState, entered) ([]byte, bool, error)
+}
+
+// detachReq is a pending cut: the pump cuts at the next byte where the
+// shadow is at ground.
+type detachReq struct {
+	done      chan struct{}
+	forwarded int   // bytes forwarded while waiting for ground
+	err       error // why no cut happened
+}
+
+// rawLog holds the session output since the cut, for raw replay.
+type rawLog struct {
+	buf      []byte
+	overflow bool
+}
+
+// append keeps p unless the log would pass limit. Past it the log is dropped,
+// which rules out raw replay; the pump never waits.
+func (l *rawLog) append(p []byte, limit int) {
+	if l.overflow {
+		return
+	}
+	if len(l.buf)+len(p) > limit {
+		l.buf, l.overflow = nil, true
+		return
+	}
+	l.buf = append(l.buf, p...)
+}
+
+// New sets up a Terminal. A shadow that can't be created only turns
+// prompts off.
+func New(cfg Config) *Terminal {
+	if cfg.Environ == nil {
+		cfg.Environ = os.Environ()
+	}
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
+	}
+	t := &Terminal{
+		cfg:      cfg,
+		timing:   defaultTiming,
+		done:     make(chan struct{}),
+		aligned:  make(chan struct{}),
+		snapshot: snapshotLeave,
+	}
+	t.profile = colorprofile.Detect(cfg.Stdout, cfg.Environ)
+	t.cfg.Stdout = newBlockingWriter(cfg.Stdout)
+	t.sessionIn = newSessionInput(cfg.SessionIn)
+	t.in = newInputMux(cfg.Stdin, t.sessionIn)
+	t.cols, t.rows = t.size()
+	if cfg.NoShadow {
+		t.shadowErr = errNoShadow
+		return t
+	}
+	// vt's defaults fit: the snapshot uses only the visible screen, and
+	// 64 KiB of continuation covers OSC 52 clipboard writes and kitty
+	// graphics.
+	sh, err := vt.NewTerminal(uint16(t.cols), uint16(t.rows),
+		// Runs inside shadow calls, which all hold t.mu.
+		vt.WithWritePty(func(b []byte) { t.answers = append(t.answers, b...) }),
+	)
+	if err != nil {
+		t.shadowErr = err
+		t.cfg.Logf("overlay: no shadow terminal, prompts disabled: %v", err)
+		return t
+	}
+	t.shadow = sh
+	return t
+}
+
+// Run forwards stdin and the session's output until the output ends or
+// ctx is done. When stdin ends it half-closes the session's input and
+// keeps forwarding output.
+func (t *Terminal) Run(ctx context.Context) error {
+	defer t.finish()
+	go t.sessionIn.run()
+	inDone := make(chan struct{})
+	go func() {
+		defer close(inDone)
+		if err := t.in.Run(); err != nil {
+			t.cfg.Logf("overlay: stdin: %v", err)
+		}
+		t.sessionIn.flush()
+		if t.cfg.CloseInput != nil {
+			_ = t.cfg.CloseInput()
+		}
+	}()
+	outDone := make(chan error, 1)
+	go func() {
+		t.align(ctx)
+		outDone <- t.pump()
+	}()
+	select {
+	case err := <-outDone:
+		return err
+	case <-inDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-outDone:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// finish ends the session for Show. A prompt that is showing is cancelled
+// and restores the screen before Run returns. Output that still arrives
+// passes through without the shadow.
+func (t *Terminal) finish() {
+	close(t.done)
+	t.sessionIn.close()
+	t.showMu.Lock()
+	defer t.showMu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if reset := t.endResetLocked(); len(reset) > 0 {
+		t.writeLocked(reset)
+	}
+	if t.shadowErr == nil {
+		t.shadowErr = ErrClosed
+	}
+	if t.shadow != nil {
+		_ = t.shadow.Close()
+	}
+}
+
+// endReset turns off what an app turns on for itself: the report modes,
+// the keyboard protocols, a hidden cursor, synchronized output and the pen.
+// An app that exits cleanly turns them off itself, but one that dies, say
+// with its container, leaves them to garble the user's shell. Every
+// sequence is a no-op when the mode is already off.
+const endReset = "\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1016l" +
+	"\x1b[?2004l\x1b[?2026l\x1b[?25h" + keyboardReset + "\x1b[0m"
+
+// endResetModes are the DEC modes endReset turns off.
+var endResetModes = []uint16{9, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1016, 2004, 2026}
+
+// endResetLocked is what the real terminal needs once the session ended:
+// endReset, after leaving the alternate screen, or nothing if the shadow
+// shows the app cleaned up. Without the shadow it is endReset alone.
+func (t *Terminal) endResetLocked() []byte {
+	if t.shadowErr != nil {
+		return []byte(endReset)
+	}
+	alt, err := t.shadow.AltScreen()
+	if err != nil {
+		return []byte(endReset)
+	}
+	if alt {
+		modes, err := t.shadow.Modes()
+		if err != nil {
+			return []byte(endReset)
+		}
+		// The kitty flags are per screen: reset them on both.
+		return []byte(keyboardReset + screenSeq(modeMap(modes), false) + endReset)
+	}
+	if on, err := leftOn(t.shadow); err == nil && !on {
+		return nil
+	}
+	return []byte(endReset)
+}
+
+// leftOn reports whether the shadow has anything on that endReset turns
+// off.
+func leftOn(sh *vt.Terminal) (bool, error) {
+	for _, m := range endResetModes {
+		if on, err := sh.Mode(m, false); err != nil || on {
+			return on, err
+		}
+	}
+	if visible, err := sh.CursorVisible(); err != nil || !visible {
+		return !visible, err
+	}
+	if flags, err := sh.KittyKeyboardFlags(); err != nil || flags != 0 {
+		return flags != 0, err
+	}
+	extras, err := sh.Format(vt.FormatOptions{Region: vt.RegionNone, Extras: vt.Extras{Keyboard: true, Style: true}})
+	// The pen extra always starts with SGR 0.
+	return string(extras) != "\x1b[0m", err
+}
+
+// align moves the shadow's cursor to the real terminal's before any
+// output: the session starts wherever the host left the cursor, the shadow
+// at its top left, and the raw leave restores the cursor by absolute
+// position. Lines above the session stay blank in the shadow. Without a
+// reply the leave restores from the shadow instead. A Show waits for it:
+// a cut before it would take the cursor from an unaligned shadow, and the
+// position reply would reach the prompt as a key.
+func (t *Terminal) align(ctx context.Context) {
+	defer close(t.aligned)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.shadowErr != nil {
+		return
+	}
+	t.in.ExpectPosition()
+	t.writeLocked([]byte(positionQuery))
+	row, col, err := t.in.AwaitPosition(ctx, t.timing.positionWait, t.timing.lateStrip)
+	if err != nil {
+		t.misaligned = true
+		t.cfg.Logf("overlay: no cursor position from the terminal, prompts restore the screen from the shadow: %v", err)
+		return
+	}
+	t.shadowWriteLocked(fmt.Appendf(nil, "\x1b[%d;%dH", row, col))
+}
+
+func (t *Terminal) pump() error {
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := t.cfg.SessionOut.Read(buf)
+		if n > 0 {
+			t.output(buf[:n])
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// output handles one chunk of session output. Resync runs first: while
+// it drops a sequence tail the shadow isn't at ground, so a pending detach
+// can only cut after it.
+func (t *Terminal) output(p []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.resyncing && t.shadowErr == nil {
+		p = t.resyncLocked(p)
+	}
+	if t.detach != nil {
+		p = t.advanceDetachLocked(p)
+	}
+	t.shadowWriteLocked(p)
+	switch {
+	case len(p) == 0:
+	case t.cut == nil:
+		t.writeLocked(p)
+	default:
+		t.log.append(p, t.timing.logMax)
+	}
+}
+
+// writeLocked writes p to the real terminal. A failed write is logged
+// once and rules out raw replay from then on.
+func (t *Terminal) writeLocked(p []byte) {
+	if _, err := t.cfg.Stdout.Write(p); err != nil && !t.missed {
+		t.missed = true
+		t.cfg.Logf("overlay: writing to the terminal failed, prompts restore the screen from the shadow: %v", err)
+	}
+}
+
+func (t *Terminal) shadowWriteLocked(p []byte) {
+	if t.shadowErr != nil || len(p) == 0 {
+		return
+	}
+	if _, err := t.shadow.Write(p); err != nil {
+		t.failLocked(err)
+	}
+	t.flushAnswersLocked()
+}
+
+// failLocked turns prompts off after the shadow failed. Output keeps
+// passing through.
+func (t *Terminal) failLocked(err error) {
+	if t.shadowErr != nil {
+		return
+	}
+	t.shadowErr = err
+	t.cfg.Logf("overlay: shadow terminal failed, prompts disabled: %v", err)
+}
+
+// flushAnswersLocked sends the shadow's answers to the session while
+// detached. While attached the real terminal answers the same queries, so
+// the shadow's answers are dropped; its answers to DSR 5n tell input which
+// CSI 0n replies are the app's and not the barrier's. The shadow answers
+// before the output reaches the terminal.
+func (t *Terminal) flushAnswersLocked() {
+	if len(t.answers) == 0 {
+		return
+	}
+	switch {
+	case t.cut != nil:
+		t.sessionIn.writeAnswers(t.answers)
+		t.answered = true
+	case !t.barrierUnsupportedLocked():
+		if n := bytes.Count(t.answers, []byte(barrierReply)); n > 0 {
+			t.in.ExpectAppReplies(n)
+		}
+	}
+	t.answers = t.answers[:0]
+}
+
+// Resize applies the local terminal's size: to the shadow first, so its
+// layout matches what the app redraws for, then to the session, then to
+// a prompt that is showing.
+func (t *Terminal) Resize() {
+	t.resizeMu.Lock()
+	defer t.resizeMu.Unlock()
+	cols, rows := t.size()
+	t.mu.Lock()
+	changed := cols != t.cols || rows != t.rows
+	t.cols, t.rows = cols, rows
+	if changed && t.shadowErr == nil {
+		if err := t.shadow.Resize(uint16(cols), uint16(rows)); err != nil {
+			t.failLocked(err)
+		}
+		t.flushAnswersLocked()
+	}
+	if changed && t.cut != nil {
+		// The log was written for the old geometry.
+		t.resized = true
+	}
+	prog := t.prog
+	t.mu.Unlock()
+	if t.cfg.Resize != nil {
+		t.cfg.Resize(cols, rows)
+	}
+	if prog != nil {
+		// Bubble Tea can't see SIGWINCH: its output isn't a TTY.
+		go prog.Send(tea.WindowSizeMsg{Width: cols, Height: rows})
+	}
+}
+
+// size is the local terminal's size, or 80x24 when unknown.
+func (t *Terminal) size() (int, int) {
+	cols, rows := 80, 24
+	if t.cfg.Size != nil {
+		if c, r, err := t.cfg.Size(); err == nil && c > 0 && r > 0 {
+			cols, rows = c, r
+		}
+	}
+	return min(cols, math.MaxUint16), min(rows, math.MaxUint16)
+}
+
+func (t *Terminal) isDone() bool { return isClosed(t.done) }
+
+// noteLateBarrierLocked resumes barrier queries after a late barrier reply:
+// the terminal answers DSR 5n, only slowly. The wait grows to twice the
+// delay, unless that is too long to hold output back.
+func (t *Terminal) noteLateBarrierLocked() {
+	d, ok := t.in.TakeLateReply()
+	if !ok || 2*d > max(t.timing.barrierWait, maxBarrierWait) {
+		return
+	}
+	t.timing.barrierWait = max(t.timing.barrierWait, 2*d)
+	if t.barrierTimeouts > 0 {
+		t.barrierTimeouts = 0
+		t.cfg.Logf("overlay: the terminal answered DSR 5n after %v; prompts wait up to %v for it", d.Round(time.Millisecond), t.timing.barrierWait)
+	}
+}
+
+// barrierUnsupportedLocked tells whether the handoff waits for input silence
+// instead of the barrier reply. The count stops once it is reached.
+func (t *Terminal) barrierUnsupportedLocked() bool {
+	return t.barrierTimeouts >= barrierTimeoutsBeforeDegraded
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}

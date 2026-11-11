@@ -5,6 +5,8 @@
 // The runTTYSession function implements interactive terminal forwarding
 // between the host and a hijacked Docker connection. It is modelled after
 // the Docker CLI's hijackedIOStreamer (cli/command/container/hijack.go).
+// It forwards through an overlay.Terminal, which can show prompts over
+// the session (see TerminalHooks).
 //
 // The following gaps relative to the Docker CLI are known and deferred:
 //
@@ -30,14 +32,16 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"sync"
 	"time"
 
+	"github.com/bernd/vibepit/overlay"
 	"github.com/docker/docker/api/types"
 	"golang.org/x/term"
 )
 
-func watchResizeSignals(sigCh <-chan os.Signal, done <-chan struct{}, onResize func()) {
+// WatchResizeSignals calls onResize for each signal on sigCh until done is
+// closed.
+func WatchResizeSignals(sigCh <-chan os.Signal, done <-chan struct{}, onResize func()) {
 	for {
 		select {
 		case <-done:
@@ -58,31 +62,65 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
-// runTTYSession puts the host terminal into raw mode, forwards stdio to/from
-// the hijacked Docker connection, and handles SIGWINCH for terminal resizing.
-// The resizeFn is called with (height, width) whenever the terminal changes
-// size. The function blocks until the container-side stream ends, then
-// returns any error.
-func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint)) error {
+// TerminalHooks let the caller show prompts over an interactive session
+// started by AttachAndStartSession or ExecSession. The zero value runs the
+// session without a shadow terminal, so it can't prompt.
+type TerminalHooks struct {
+	// OnTerminal gets the session's terminal before any data flows.
+	OnTerminal func(*overlay.Terminal)
+	// Logf receives the terminal's diagnostics. The session owns the
+	// screen, so they can't go to stderr.
+	Logf func(format string, args ...any)
+}
+
+// NewTerminal creates the session's terminal from cfg and hands it to
+// OnTerminal. Without OnTerminal the terminal has no shadow.
+func (h TerminalHooks) NewTerminal(cfg overlay.Config) *overlay.Terminal {
+	cfg.Logf = h.Logf
+	cfg.NoShadow = h.OnTerminal == nil
+	t := overlay.New(cfg)
+	if h.OnTerminal != nil {
+		h.OnTerminal(t)
+	}
+	return t
+}
+
+// newSessionTerminal connects a hijacked session to the local terminal.
+func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.Writer, size func() (int, int, error), resizeFn func(height, width uint), hooks TerminalHooks) *overlay.Terminal {
+	return hooks.NewTerminal(overlay.Config{
+		Stdin:      stdin,
+		Stdout:     stdout,
+		SessionIn:  resp.Conn,
+		SessionOut: resp.Reader,
+		CloseInput: resp.CloseWrite,
+		Resize:     func(cols, rows int) { resizeFn(uint(rows), uint(cols)) },
+		Size:       size,
+	})
+}
+
+// runTTYSession puts the host terminal into raw mode, forwards stdio to and
+// from the hijacked Docker connection through an overlay.Terminal, and
+// handles SIGWINCH for terminal resizing. The resizeFn is called with
+// (height, width) whenever the terminal changes size. The function blocks
+// until the container-side stream ends, then returns any error.
+func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint), hooks TerminalHooks) error {
 	fd := int(os.Stdin.Fd())
 
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		return err
 	}
-	// Use sync.Once so whichever goroutine finishes first restores the
-	// terminal immediately, rather than waiting for defer on return.
-	restoreOnce := sync.OnceFunc(func() {
-		term.Restore(fd, oldState)
-	})
-	defer restoreOnce()
+	defer term.Restore(fd, oldState)
+
+	size := func() (int, int, error) { return term.GetSize(fd) }
+	t := newSessionTerminal(resp, os.Stdin, os.Stdout, size, resizeFn, hooks)
 
 	// Set initial terminal size with retry. The container/exec process may
 	// not be ready to accept a resize immediately after attach.
 	go func() {
 		for attempt := range 5 {
-			if w, h, err := term.GetSize(fd); err == nil {
-				resizeFn(uint(h), uint(w))
+			if _, _, err := size(); err == nil {
+				t.Resize()
 				return
 			}
 			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
@@ -91,52 +129,17 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 
 	// Forward SIGWINCH to the container.
 	sigCh := make(chan os.Signal, 1)
-	notifyResize(sigCh)
+	NotifyResize(sigCh)
 	defer signal.Stop(sigCh)
 	// signal.Stop unregisters delivery but does not close sigCh.
 	// done gives the resize watcher an explicit shutdown path.
 	done := make(chan struct{})
 	defer close(done)
-	go func() {
-		watchResizeSignals(sigCh, done, func() {
-			if w, h, err := term.GetSize(fd); err == nil {
-				resizeFn(uint(h), uint(w))
-			}
-		})
-	}()
+	go WatchResizeSignals(sigCh, done, t.Resize)
 
-	outputDone := make(chan error, 1)
-	inputDone := make(chan error, 1)
-
-	// Copy container output to stdout.
-	go func() {
-		_, err := io.Copy(os.Stdout, resp.Reader)
-		restoreOnce()
-		outputDone <- err
-	}()
-
-	// Copy stdin to the container.
-	go func() {
-		_, err := io.Copy(resp.Conn, os.Stdin)
-		resp.CloseWrite()
-		inputDone <- err
-	}()
-
-	select {
-	case err := <-outputDone:
-		return err
-	case <-inputDone:
-		// Stdin finished (e.g. Ctrl-D). Wait for output to drain or
-		// context to cancel.
-		select {
-		case err := <-outputDone:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// Run returns when the output ends, so the deferred restore runs as
+	// soon as the container is done, as before.
+	return t.Run(ctx)
 }
 
 // terminalSize returns the current terminal dimensions, or nil if

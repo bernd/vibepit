@@ -43,6 +43,7 @@ func makeTestSetup(n int) (*monitorScreen, *tui.Window) {
 		s.logs.items = append(s.logs.items, proxy.LogEntry{
 			ID:     uint64(i + 1),
 			Domain: fmt.Sprintf("domain%d.com", i),
+			Port:   "443",
 			Action: proxy.ActionBlock,
 			Source: proxy.SourceProxy,
 			Code:   proxy.BlockNotAllowlisted,
@@ -299,6 +300,45 @@ func TestMonitorScreen_CursorNavigation(t *testing.T) {
 	})
 }
 
+func TestMonitorScreen_NotAllowable(t *testing.T) {
+	tests := []struct {
+		name  string
+		edit  func(e *proxy.LogEntry)
+		flash string
+	}{
+		{
+			name: "resolution failed",
+			edit: func(e *proxy.LogEntry) {
+				e.Code = proxy.BlockResolutionFailed
+				e.Reason = "DNS resolution failed during CIDR check"
+			},
+			flash: "cannot allow: DNS resolution failed during CIDR check",
+		},
+		{
+			name:  "IPv6 literal",
+			edit:  func(e *proxy.LogEntry) { e.Domain = "2001:db8::1" },
+			flash: "cannot allow: the allowlist can't hold [2001:db8::1]:443",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, w := makeTestSetup(5)
+			tt.edit(&s.logs.items[2])
+			s.logs.cursor.Pos = 2
+
+			descs := footerKeyDescs(s.FooterKeys(w))
+			assert.NotContains(t, descs, "allow")
+			assert.NotContains(t, descs, "allow+save")
+
+			for _, key := range []string{"a", "A"} {
+				_, cmd := s.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key}, w)
+				assert.Nil(t, cmd, "key %s", key)
+				assert.Equal(t, tt.flash, w.Flash())
+			}
+		})
+	}
+}
+
 func TestMonitorScreen_Footer(t *testing.T) {
 	t.Run("shows base keybindings", func(t *testing.T) {
 		s, w := makeTestSetup(5)
@@ -499,14 +539,42 @@ func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
 		_, followCmd := s.Update(msg, w)
 		assert.Nil(t, followCmd)
 	}
-	assert.ElementsMatch(t, []string{"/logs?after=0", "/hosts"}, requests)
+	assert.ElementsMatch(t, []string{"/logs", "/hosts"}, requests, "first poll asks for the recent tail")
 	assert.False(t, s.logsPollInFlight)
 	assert.False(t, s.hostsPollInFlight)
 	require.Len(t, s.logs.items, 1)
 	assert.Equal(t, uint64(11), s.logs.pollCursor)
+	assert.True(t, s.logs.loaded)
 	require.Len(t, s.hosts.hosts, 1)
 	assert.Contains(t, w.View().Content, "HOSTS (1)")
 	assert.Contains(t, w.View().Content, "LOGS (1)")
+}
+
+func TestMonitorScreen_PollUsesStrictCursorAfterFirstLoad(t *testing.T) {
+	var queries []string
+	client := &ControlClient{
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				queries = append(queries, req.URL.RawQuery)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader("[]")),
+					Header:     make(http.Header),
+				}, nil
+			}),
+		},
+		baseURL: "https://proxy.local",
+	}
+	s := newMonitorScreen(&SessionInfo{SessionID: "test123456"}, client, nil)
+	w := tui.NewWindow(&tui.HeaderInfo{SessionID: "test123456"}, s)
+	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	// First load on an empty log, then a later poll: the cursor stays 0 but
+	// the second request must be strict, not another tail.
+	s.Update(s.pollLogsCmd()(), w)
+	s.pollLogsCmd()()
+	assert.Equal(t, []string{"", "after=0"}, queries)
 }
 
 func TestMonitorScreen_Tabs(t *testing.T) {
@@ -716,6 +784,20 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, cfg.Project.AllowDNS, "internal.example.com")
 		assert.NotContains(t, cfg.Project.AllowHTTP, "internal.example.com")
+	})
+
+	t.Run("a failed save keeps the live allow", func(t *testing.T) {
+		screen, httpAllowlist, _, projectPath := makeScreen(t)
+		// A directory where the config file should be makes the save fail.
+		require.NoError(t, os.Remove(projectPath))
+		require.NoError(t, os.Mkdir(projectPath, 0o755))
+
+		key := proxy.HostKey{Source: proxy.SourceProxy, Domain: "api.openai.com", Port: "443"}
+		result, ok := screen.allowCmd(key, true)().(allowResultMsg)
+		require.True(t, ok)
+		require.Error(t, result.err)
+		assert.Equal(t, statusTemp, result.status)
+		assert.True(t, httpAllowlist.Allows("api.openai.com", "443"))
 	})
 }
 

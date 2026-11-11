@@ -144,8 +144,34 @@ func TestHTTPProxy(t *testing.T) {
 
 		result := p.checkRequest("example.com", "443")
 		assert.Equal(t, ActionBlock, result.action)
-		assert.Equal(t, "DNS resolution failed during CIDR check", result.reason)
+		entries := log.Entries()
+		require.NotEmpty(t, entries)
+		assert.Equal(t, "DNS resolution failed during CIDR check", entries[len(entries)-1].Reason)
 	})
+}
+
+func TestHTTPProxyBlockMessage(t *testing.T) {
+	al, err := NewHTTPAllowlist([]string{"10.0.0.1:80"})
+	require.NoError(t, err)
+	p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), NewLogBuffer(10), DefaultUpstreamDNS)
+	srv := httptest.NewServer(p.Handler())
+	defer srv.Close()
+	proxyURL, _ := url.Parse(srv.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+	for _, tt := range []struct{ url, want string }{
+		{"http://evil.com/", "not in the allowlist"},
+		{"http://10.0.0.1/", "resolves to a blocked IP"},
+	} {
+		t.Run(tt.url, func(t *testing.T) {
+			resp, err := client.Get(tt.url)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+			assert.Contains(t, string(body), tt.want)
+		})
+	}
 }
 
 func TestHTTPProxyHostVibepit(t *testing.T) {

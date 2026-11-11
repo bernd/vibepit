@@ -119,3 +119,26 @@ func AllowDNSCommand() *cli.Command {
 		},
 	}
 }
+
+// allowEntry adds k's target to the running proxy's allowlist and, when
+// save is set, persists it to the project config. Shared by the monitor
+// and approve screens. A failed save returns statusTemp with the error:
+// the proxy allows the target for this session all the same.
+func allowEntry(client *ControlClient, session *SessionInfo, k proxy.HostKey, save bool) (allowStatus, error) {
+	value := k.Target().String()
+	live, persist := client.AllowHTTP, config.AppendAllowHTTP
+	if k.Source == proxy.SourceDNS {
+		live, persist = client.AllowDNS, config.AppendAllowDNS
+	}
+
+	if _, err := live([]string{value}); err != nil {
+		return statusNone, err
+	}
+	if !save {
+		return statusTemp, nil
+	}
+	if err := persist(config.DefaultProjectPath(session.ProjectDir), []string{value}); err != nil {
+		return statusTemp, err
+	}
+	return statusSaved, nil
+}

@@ -157,28 +157,60 @@ func TestLogBufferHosts(t *testing.T) {
 	})
 }
 
+func TestTail(t *testing.T) {
+	t.Run("returns last n entries", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for range 30 {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.Tail(25)
+		require.Len(t, entries, 25)
+		assert.Equal(t, uint64(6), entries[0].ID)
+		assert.Equal(t, uint64(30), entries[24].ID)
+	})
+
+	t.Run("fewer entries than n returns all", func(t *testing.T) {
+		buf := NewLogBuffer(100)
+		for range 5 {
+			buf.Add(LogEntry{Domain: "a.com"})
+		}
+
+		entries := buf.Tail(25)
+		require.Len(t, entries, 5)
+		assert.Equal(t, uint64(1), entries[0].ID)
+	})
+
+	t.Run("empty buffer returns nil", func(t *testing.T) {
+		assert.Nil(t, NewLogBuffer(10).Tail(25))
+	})
+
+	t.Run("works after buffer wraps", func(t *testing.T) {
+		buf := NewLogBuffer(3)
+		for i := range 5 {
+			buf.Add(LogEntry{Domain: fmt.Sprintf("%d.com", i+1)})
+		}
+		entries := buf.Tail(2)
+		require.Len(t, entries, 2)
+		assert.Equal(t, "4.com", entries[0].Domain)
+		assert.Equal(t, "5.com", entries[1].Domain)
+	})
+}
+
 func TestEntriesAfter(t *testing.T) {
-	t.Run("zero afterID returns last 25 entries", func(t *testing.T) {
+	t.Run("zero afterID returns every buffered entry", func(t *testing.T) {
 		buf := NewLogBuffer(100)
 		for range 30 {
 			buf.Add(LogEntry{Domain: "a.com"})
 		}
 
 		entries := buf.EntriesAfter(0)
-		require.Len(t, entries, 25)
-		assert.Equal(t, uint64(6), entries[0].ID)
-		assert.Equal(t, uint64(30), entries[24].ID)
+		require.Len(t, entries, 30)
+		assert.Equal(t, uint64(1), entries[0].ID)
 	})
 
-	t.Run("zero afterID with fewer than 25 entries returns all", func(t *testing.T) {
-		buf := NewLogBuffer(100)
-		for range 5 {
-			buf.Add(LogEntry{Domain: "a.com"})
-		}
-
-		entries := buf.EntriesAfter(0)
-		require.Len(t, entries, 5)
-		assert.Equal(t, uint64(1), entries[0].ID)
+	t.Run("zero afterID on empty buffer returns nil", func(t *testing.T) {
+		assert.Nil(t, NewLogBuffer(10).EntriesAfter(0))
 	})
 
 	t.Run("returns entries after given ID", func(t *testing.T) {
@@ -231,4 +263,32 @@ func TestEntriesAfter(t *testing.T) {
 		assert.Equal(t, uint64(5), entries[0].ID)
 		assert.Equal(t, "5.com", entries[0].Domain)
 	})
+}
+
+func TestLogEntryAllowable(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry LogEntry
+		want  bool
+	}{
+		{"allowlist miss", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockNotAllowlisted}, true},
+		{"block without code", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock}, true},
+		{"dns allowlist miss", LogEntry{Domain: "a.com", Source: SourceDNS, Action: ActionBlock, Code: BlockNotAllowlisted}, true},
+		{"IPv4 literal", LogEntry{Domain: "192.0.2.1", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockNotAllowlisted}, true},
+		// The allowlist can't hold an IPv6 literal, so allowing would fail.
+		{"IPv6 literal", LogEntry{Domain: "2001:db8::1", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockNotAllowlisted}, false},
+		// The sandbox names the host; allowing a '*' in it would add a pattern.
+		{"wildcard host", LogEntry{Domain: "**.*", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockNotAllowlisted}, false},
+		{"wildcard label", LogEntry{Domain: "*.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockNotAllowlisted}, false},
+		{"wildcard port", LogEntry{Domain: "a.com", Port: "*", Source: SourceProxy, Action: ActionBlock, Code: BlockNotAllowlisted}, false},
+		{"dns wildcard", LogEntry{Domain: "*.*", Source: SourceDNS, Action: ActionBlock, Code: BlockNotAllowlisted}, false},
+		{"blocked IP", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockCIDR}, false},
+		{"resolve failed", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockResolutionFailed}, false},
+		{"allowed", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionAllow}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.entry.Allowable())
+		})
+	}
 }

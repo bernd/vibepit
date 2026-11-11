@@ -85,7 +85,7 @@ var (
 // RenderStatusBar renders a full-width status bar with the given message.
 // alert selects the orange alert style; otherwise the cyan default style is used.
 func RenderStatusBar(message string, cols int, alert bool) string {
-	msg := " " + sanitizeMessage(message) + " "
+	msg := " " + tui.SanitizeText(message) + " "
 	style := defaultBarStyle
 	if alert {
 		style = alertBarStyle
@@ -100,13 +100,13 @@ func RenderStatusBar(message string, cols int, alert bool) string {
 func RenderCommandBar(target string, hints []KeyHint, cols int, hasAlert bool) string {
 	var parts []string
 	if target != "" {
-		parts = append(parts, sanitizeMessage(target))
+		parts = append(parts, tui.SanitizeText(target))
 	}
 	for _, h := range hints {
 		if h.RequireAlert && !hasAlert {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("[%s] %s", string(h.Key), sanitizeMessage(h.Desc)))
+		parts = append(parts, fmt.Sprintf("[%s] %s", string(h.Key), tui.SanitizeText(h.Desc)))
 	}
 	parts = append(parts, "[esc] cancel")
 	msg := " " + strings.Join(parts, "  ") + " "
@@ -122,17 +122,4 @@ func renderMessage(style lipgloss.Style, cols int, msg string) string {
 	}
 	fill := max(cols-prefixLen-msgWidth, 0) + 1
 	return prefix + style.Render(msg) + style.Render(strings.Repeat(padChar, fill))
-}
-
-// sanitizeMessage strips control characters (C0, C1, and DEL) from a message
-// to prevent terminal escape injection.
-func sanitizeMessage(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		if r == '\t' || (r >= ' ' && r != 0x7F && (r < 0x80 || r > 0x9F)) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }

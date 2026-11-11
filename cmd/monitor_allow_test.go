@@ -118,26 +118,8 @@ func TestAllowStateEntryStatus(t *testing.T) {
 	}
 }
 
-func TestAllowable(t *testing.T) {
-	tests := []struct {
-		name string
-		code proxy.BlockCode
-		want bool
-	}{
-		{"not allowlisted", proxy.BlockNotAllowlisted, true},
-		{"legacy entries without code are allowable", "", true},
-		{"blocked CIDR", proxy.BlockCIDR, false},
-		{"resolution failed", proxy.BlockResolutionFailed, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, allowable(tt.code))
-		})
-	}
-}
-
 func TestAllowValue(t *testing.T) {
 	assert.Equal(t, "a.com:443", allowValue(proxy.HostKey{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}))
 	assert.Equal(t, "a.com", allowValue(proxy.HostKey{Source: proxy.SourceDNS, Domain: "a.com"}))
+	assert.Equal(t, "[2001:db8::1]:443", allowValue(proxy.HostKey{Source: proxy.SourceProxy, Domain: "2001:db8::1", Port: "443"}))
 }

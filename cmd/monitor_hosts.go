@@ -439,7 +439,7 @@ func renderHostDetails(h proxy.HostStats, st hostStatus, width int) []string {
 		sep,
 		"",
 		label("status:") + status,
-		label("host:") + lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true).Render(h.Domain),
+		label("host:") + lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true).Render(tui.SanitizeText(h.Domain)),
 		label("port:") + port,
 		label("source:") + source,
 		label("first seen:") + field.Render(h.FirstSeen.Format(time.TimeOnly)) + "  " + action(h.FirstAction),
@@ -449,7 +449,7 @@ func renderHostDetails(h proxy.HostStats, st hostStatus, width int) []string {
 			lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render(formatCount(h.Blocked)+" blocked"),
 	}
 	if st == hostBlocked {
-		lines = append(lines, label("reason:")+h.LastBlockReason)
+		lines = append(lines, label("reason:")+tui.SanitizeText(h.LastBlockReason))
 	}
 	return append(lines, "", sep)
 }
@@ -457,9 +457,9 @@ func renderHostDetails(h proxy.HostStats, st hostStatus, width int) []string {
 // hostLabel omits the HTTPS default port to keep the common case uncluttered.
 func hostLabel(k proxy.HostKey) string {
 	if k.Port == "443" {
-		return k.Domain
+		return tui.SanitizeText(k.Domain)
 	}
-	return allowValue(k)
+	return tui.SanitizeText(allowValue(k))
 }
 
 func padRight(s string, n int) string {

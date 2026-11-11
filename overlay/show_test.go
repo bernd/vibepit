@@ -1,0 +1,515 @@
+package overlay
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// keyModel shows its text and width full-screen and quits on the first
+// key.
+type keyModel struct {
+	text       string
+	panicOnKey bool
+	width      int
+}
+
+func (m keyModel) Init() tea.Cmd { return nil }
+
+func (m keyModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+	case tea.KeyPressMsg:
+		if m.panicOnKey {
+			panic("prompt failed")
+		}
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m keyModel) View() tea.View {
+	v := tea.NewView(fmt.Sprintf("%s W=%d", m.text, m.width))
+	v.AltScreen = true
+	return v
+}
+
+var promptModel = keyModel{text: "PROMPT"}
+
+// prompt shows promptModel, waits until it is drawn, and answers it with
+// a key.
+func (h *harness) prompt(during func()) {
+	h.t.Helper()
+	done := h.show(context.Background(), promptModel)
+	h.waitScreen("PROMPT")
+	if during != nil {
+		during()
+	}
+	h.keys("x")
+	require.NoError(h.t, h.result(done))
+	assert.NotContains(h.t, screenText(h.real), "PROMPT", "the prompt is gone")
+}
+
+func TestShowRestoresThePrimaryScreenByReplay(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ls\r\nfile\r\n\x1b[2;5r\x1b[4h\x1b(0\x1b[31m\x1b[6;1H" + strings.Repeat("x", 20) + "\x1b7")
+	h.prompt(func() { h.app("q\x1b[0m\r\nmore") })
+	assert.False(t, h.snapshotted(), "raw replay")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowOnTheAlternateScreenRestoresFromTheShadow(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[2;3Hvim")
+	h.prompt(func() { h.app("\x1b[3;1H~edited") })
+	assert.True(t, h.snapshotted(), "the prompt drew over the app's screen")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowChangesOnlySetD(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("\x1b[?2004h\x1b[?1004h\x1b[?1000h\x1b[>1u\x1b]2;app\x07\x1b]7;file://h/p\x07\x1b[3 qtext")
+	before := stateOf(t, h.real)
+	setD := map[modeKey]bool{
+		modeIRM: true, {20, true}: true, {5, false}: true, {6, false}: true,
+		{7, false}: true, {25, false}: true, modeSync: true, {1047, false}: true,
+	}
+	h.prompt(func() {
+		during := stateOf(t, h.real)
+		for i, m := range during.Modes {
+			if !setD[modeKey{m.Mode, m.ANSI}] {
+				assert.Equal(t, before.Modes[i].Value, m.Value, "mode %d (ANSI %v) changed", m.Mode, m.ANSI)
+			}
+		}
+		assert.Equal(t, before.Title, during.Title)
+		assert.Equal(t, before.Pwd, during.Pwd)
+		assert.Equal(t, before.Cursor, during.Cursor)
+	})
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowAnswersQueriesWhilePromptingOnce(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.prompt(func() {
+		h.app("\x1b[6n")
+		h.waitSessionInput("\x1b[1;1R")
+	})
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, "\x1b[1;1R", h.sessionIn.String(), "answered once")
+	assert.True(t, h.snapshotted(), "a replay would make the real terminal answer again")
+}
+
+func TestShowKeepsTheSavedCursor(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("ab\x1b7cd")
+	h.prompt(nil)
+	h.app("\x1b8Z")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowKeepsTheKittyStack(t *testing.T) {
+	for name, before := range map[string]string{
+		"primary screen":   "\x1b[>1u\x1b[>3u",
+		"alternate screen": "\x1b[?1049h\x1b[>1u\x1b[>3u",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, 20, 6)
+			h.app(before)
+			h.prompt(nil)
+			for range 2 {
+				h.app("\x1b[<u")
+				want, err := h.term.shadow.KittyKeyboardFlags()
+				require.NoError(t, err)
+				got, err := h.real.KittyKeyboardFlags()
+				require.NoError(t, err)
+				assert.Equal(t, want, got)
+			}
+		})
+	}
+}
+
+func TestShowKeysGoToThePrompt(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.keys("before")
+	h.waitSessionInput("before")
+	h.prompt(nil)
+	h.keys("after")
+	h.waitSessionInput("beforeafter")
+}
+
+func TestShowPassesOnFocusChanges(t *testing.T) {
+	tests := []struct {
+		name   string
+		before string // app output before the prompt
+		during string // app output while prompting
+		want   string
+	}{
+		{name: "app takes focus reports", before: "\x1b[?1004h", want: "\x1b[O"},
+		{name: "app takes no focus reports"},
+		{name: "app turned them off while prompting", before: "\x1b[?1004h", during: "\x1b[?1004l"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, 20, 6)
+			h.app(tt.before)
+			h.prompt(func() {
+				h.app(tt.during)
+				h.keys("\x1b[O")
+			})
+			h.keys("after")
+			h.waitSessionInput(tt.want + "after")
+		})
+	}
+}
+
+func TestShowBarrierTimeout(t *testing.T) {
+	h := newHarness(t, 20, 6, silentTerminal(), withTiming(func(tm *timing) { tm.barrierWait = 50 * time.Millisecond }))
+	h.app("$ ")
+	for range barrierTimeoutsBeforeDegraded {
+		assert.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrBarrierTimeout)
+	}
+	assert.NotContains(t, h.stdout.String(), "\x1b[?1047h", "nothing was drawn")
+	h.locked(func(tm *Terminal) { assert.True(t, tm.barrierUnsupportedLocked()) })
+	h.prompt(nil)
+	assert.Equal(t, barrierTimeoutsBeforeDegraded, strings.Count(h.stdout.String(), barrierQuery),
+		"no barrier query once degraded")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowHandoffWaitsForTheAppsBarrierReplies(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	// The terminal is slow: the app's DSR 5n and 6n are unanswered at the
+	// cut, so their replies come before the barrier's CSI 0n.
+	h.holdReplies()
+	h.app("\x1b[5n\x1b[6n")
+	done := h.show(context.Background(), promptModel)
+	require.Eventually(t, func() bool { return strings.Count(h.stdout.String(), barrierQuery) == 2 },
+		5*time.Second, time.Millisecond, "the barrier query went out")
+	replies := h.releaseReplies()
+	require.True(t, strings.HasSuffix(replies, barrierReply))
+	// The prompt would take the CPR for Alt+F3.
+	h.waitSessionInput(strings.TrimSuffix(replies, barrierReply))
+	h.waitScreen("PROMPT")
+	h.keys("x")
+	require.NoError(t, h.result(done))
+}
+
+func TestShowResumesBarrierQueriesAfterALateReply(t *testing.T) {
+	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.barrierWait = 50 * time.Millisecond }))
+	h.app("$ ")
+	h.holdReplies()
+	for range barrierTimeoutsBeforeDegraded {
+		require.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrBarrierTimeout)
+	}
+	h.locked(func(tm *Terminal) { require.True(t, tm.barrierUnsupportedLocked()) })
+	h.releaseReplies()
+	require.Eventually(t, func() bool {
+		var n int
+		h.term.in.mu.Lock()
+		n = len(h.term.in.lateSent)
+		h.term.in.mu.Unlock()
+		return n == 0
+	}, 5*time.Second, time.Millisecond, "the late replies arrived")
+	h.prompt(nil)
+	assert.Equal(t, barrierTimeoutsBeforeDegraded+1, strings.Count(h.stdout.String(), barrierQuery),
+		"the terminal answers, so barrier queries resume")
+	h.locked(func(tm *Terminal) {
+		assert.False(t, tm.barrierUnsupportedLocked())
+		assert.Greater(t, tm.timing.barrierWait, 50*time.Millisecond)
+	})
+	assert.Empty(t, h.sessionIn.String(), "no late reply reached the app")
+}
+
+func TestShowRestoresWhenTheProgramPanics(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	done := h.show(context.Background(), keyModel{text: "PROMPT", panicOnKey: true})
+	h.waitScreen("PROMPT")
+	h.keys("x")
+	assert.ErrorIs(t, h.result(done), tea.ErrProgramPanic)
+	assert.NotContains(t, screenText(h.real), "PROMPT")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	h.keys("k")
+	h.waitSessionInput("k")
+}
+
+func TestShowCancelled(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := h.show(ctx, promptModel)
+	h.waitScreen("PROMPT")
+	cancel()
+	assert.ErrorIs(t, h.result(done), context.Canceled)
+	assert.NotContains(t, screenText(h.real), "PROMPT")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowEndsWhenTheSessionExits(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	done := h.show(context.Background(), promptModel)
+	h.waitScreen("PROMPT")
+	h.out.close()
+	assert.ErrorIs(t, h.result(done), ErrClosed)
+	<-h.done
+	assert.NoError(t, h.err)
+	assert.NotContains(t, screenText(h.real), "PROMPT")
+}
+
+func TestShowEndsAtStdinEOF(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	done := h.show(context.Background(), promptModel)
+	h.waitScreen("PROMPT")
+	require.NoError(t, h.stdin.Close())
+	assert.ErrorIs(t, h.result(done), ErrClosed)
+	assert.NotContains(t, screenText(h.real), "PROMPT")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowAfterRunReturned(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.out.close()
+	<-h.done
+	written := h.stdout.String()
+	assert.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrClosed)
+	assert.Equal(t, written, h.stdout.String(), "nothing written")
+}
+
+func TestShowLeaveIsAtomic(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	stop, flooded := make(chan struct{}), make(chan struct{})
+	h.prompt(func() {
+		go func() {
+			defer close(flooded)
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if !h.out.push(fmt.Sprintf("\x1b[3%dm%d\x1b[0m\r\n", i%8, i)) {
+					return
+				}
+			}
+		}()
+	})
+	close(stop)
+	<-flooded
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+// A Show that comes before Run aligned the shadow waits for it. Cutting
+// first would send the alignment's position query during the prompt, and
+// its reply would reach the prompt as a key (F3).
+func TestShowWaitsForTheAlignment(t *testing.T) {
+	h := newHarness(t, 20, 6, runLater())
+	done := h.show(context.Background(), promptModel)
+	time.Sleep(20 * time.Millisecond)
+	h.startRun()
+	h.waitScreen("PROMPT")
+	h.keys("x")
+	require.NoError(t, h.result(done))
+	out := h.stdout.String()
+	require.Contains(t, out, positionQuery)
+	assert.Less(t, strings.Index(out, positionQuery), strings.Index(out, barrierQuery), "aligned before the cut")
+}
+
+func TestShowWaitsForAnEarlierShow(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	first := h.show(context.Background(), keyModel{text: "FIRST"})
+	h.waitScreen("FIRST")
+	second := h.show(context.Background(), keyModel{text: "SECOND"})
+	time.Sleep(50 * time.Millisecond)
+	assert.NotContains(t, screenText(h.real), "SECOND")
+	h.keys("x")
+	require.NoError(t, h.result(first))
+	h.waitScreen("SECOND")
+	h.keys("x")
+	require.NoError(t, h.result(second))
+}
+
+func TestShowWithoutShadowIsUnavailable(t *testing.T) {
+	h := newHarness(t, 20, 6, withoutShadow())
+	assert.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrUnavailable)
+}
+
+func TestResizeWhilePrompting(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	h.prompt(func() {
+		h.waitScreen("PROMPT W=20")
+		h.resize(30, 8)
+		h.waitScreen("PROMPT W=30")
+		h.app("output for the new width")
+	})
+	assert.True(t, h.snapshotted(), "the log was written for the old size")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowFloodPastLogCap(t *testing.T) {
+	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.logMax = 1024 }))
+	h.prompt(func() {
+		start := time.Now()
+		for i := range 200 {
+			h.app(fmt.Sprintf("y %d\r\n", i))
+		}
+		assert.Less(t, time.Since(start), 5*time.Second, "output never waits for the prompt")
+		h.locked(func(tm *Terminal) { assert.True(t, tm.log.overflow) })
+	})
+	assert.True(t, h.snapshotted())
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowReplaysBelowHostOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		app  string
+		want string
+	}{
+		{
+			name: "session below the host lines",
+			host: "host1\r\nhost2\r\n",
+			app:  "$ ls\r\nfile\r\n$ ",
+			want: "host1\nhost2\n$ ls\nfile\n$ date\nnow\n$",
+		},
+		{
+			name: "session scrolled the host lines",
+			host: "host1\r\nhost2\r\nhost3\r\nhost4\r\n",
+			app:  "$ ls\r\nfile\r\n$ ",
+			want: "host3\nhost4\n$ ls\nfile\n$ date\nnow\n$",
+		},
+		{
+			name: "session starts mid-line",
+			host: "host1\r\nhost> ",
+			app:  "x\r\n$ ",
+			want: "host1\nhost> x\n$ date\nnow\n$",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, 20, 7, hostOutput(tt.host))
+			h.app(tt.app)
+			h.prompt(nil)
+			assert.False(t, h.snapshotted(), "raw replay")
+			h.app("date\r\nnow\r\n$ ")
+			assert.Equal(t, tt.want, screenText(h.real))
+			assert.Empty(t, h.sessionIn.String(), "the position reply isn't the app's input")
+		})
+	}
+}
+
+func TestShowRestoresFromTheShadowWhenTheCursorMoved(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ls\r\nfile\r\n$ ")
+	// The real terminal handled a resize differently, e.g. reflowed where
+	// the shadow didn't: its lines and cursor are two rows higher.
+	feed(t, h.real, "\x1b[2S\x1b[2A")
+	h.prompt(func() { h.app("date\r\nnow\r\n$ ") })
+	assert.True(t, h.snapshotted(), "the cut's cursor isn't the real one")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	assert.Empty(t, h.sessionIn.String(), "the position reply isn't the app's input")
+}
+
+// clearToCursor is what kitty's clear_terminal to_cursor_scroll and
+// Cmd+K in other terminals do without telling the app: the rows above the
+// cursor go to the scrollback and the cursor's row moves to the top.
+func clearToCursor(rows int) string { return fmt.Sprintf("\x1b[%dS\x1b[%dA", rows, rows) }
+
+func TestShowKeepsAClearTheTerminalDidItself(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the cut's cursor isn't the real one")
+	assert.Equal(t, "$", screenText(h.real))
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowKeepsAClearTheTerminalDidItselfBelowLaterOutput(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.prompt(func() {
+		require.Eventually(t, func() bool {
+			var first string
+			h.locked(func(tm *Terminal) { first = firstLine(tm.shadow) })
+			return first == "$"
+		}, 5*time.Second, time.Millisecond, "the shadow never followed the clear")
+		h.app("ls\r\nfile\r\n$ ")
+	})
+	assert.Equal(t, "$ ls\nfile\n$", screenText(h.real))
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowDoesNotShiftTheShadowAfterOutputBeforeThePositionReply(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n$ ")
+	feed(t, h.real, clearToCursor(5))
+	h.holdPositionReplies()
+	h.prompt(func() {
+		// Scrolls the shadow, so the clear's shift would push these lines
+		// off the screen.
+		h.app("ls\r\nfile\r\n$ ")
+		require.NotEmpty(t, h.releaseReplies())
+	})
+	assert.True(t, h.snapshotted())
+	assert.Equal(t, "three\nfour\nfive\n$ ls\nfile\n$", screenText(h.real), "repainted from the unshifted shadow")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowDoesNotShiftTheShadowWhenTheColumnMoved(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("one\r\ntwo\r\n$ ")
+	feed(t, h.real, clearToCursor(2)+"\x1b[C")
+	h.prompt(nil)
+	assert.True(t, h.snapshotted())
+	assert.Equal(t, "one\ntwo\n$", screenText(h.real), "repainted from the unshifted shadow")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}
+
+func TestShowWithoutAPositionReplyAtTheCutRestoresFromTheShadow(t *testing.T) {
+	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.positionWait = 50 * time.Millisecond }))
+	h.app("$ ")
+	h.holdPositionReplies()
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the cut's cursor is unconfirmed")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	require.NotEmpty(t, h.releaseReplies(), "the reply comes after the prompt")
+	h.keys("after")
+	h.waitSessionInput("after")
+}
+
+func TestShowRestoresFromTheShadowAfterAFailedWrite(t *testing.T) {
+	h := newHarness(t, 20, 6)
+	h.app("$ ")
+	// The real terminal misses output that leaves its cursor where it
+	// was, so the position check can't tell.
+	h.failWrites(true)
+	h.app("ls")
+	h.app("\b\b")
+	h.failWrites(false)
+	h.prompt(nil)
+	assert.True(t, h.snapshotted(), "the real terminal lacks output")
+	assertSameTerminal(t, h.term.shadow, h.real)
+	assert.Equal(t, 1, strings.Count(h.logs.String(), "\n"), "logged once: %s", h.logs.String())
+}
+
+func TestShowWithoutAPositionRestoresFromTheShadow(t *testing.T) {
+	h := newHarness(t, 20, 6, hostOutput("host1\r\nhost2\r\n"), silentTerminal(),
+		withTiming(func(tm *timing) { tm.barrierWait = time.Millisecond }))
+	h.app("$ ")
+	require.ErrorIs(t, h.term.Show(context.Background(), promptModel), ErrBarrierTimeout)
+	assert.True(t, h.snapshotted(), "the cut's cursor may be on another row")
+	assertSameTerminal(t, h.term.shadow, h.real)
+}

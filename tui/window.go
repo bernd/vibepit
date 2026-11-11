@@ -169,7 +169,7 @@ func (w *Window) renderFooter() string {
 	var windowStatus string
 	if w.err != nil {
 		windowStatus = lipgloss.NewStyle().Foreground(ColorError).
-			Render(fmt.Sprintf("connection error: %v", w.err))
+			Render(fmt.Sprintf("error: %v", w.err))
 	} else if w.flash != "" && w.Now().Before(w.flashExp) {
 		windowStatus = lipgloss.NewStyle().Foreground(ColorOrange).Render(w.flash)
 	}

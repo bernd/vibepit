@@ -18,6 +18,7 @@ type logView struct {
 	cursor     tui.Cursor
 	selecting  bool // Pos is a selection the user made; see selectionTimeout
 	pollCursor uint64
+	loaded     bool // first poll done; later polls use the strict cursor
 	newCount   int
 }
 
@@ -63,6 +64,7 @@ func (v *logView) clearNewIfAtBottom() {
 // tailing; otherwise new entries are counted so the footer can announce them.
 func (v *logView) appendEntries(entries []proxy.LogEntry) {
 	v.items = append(v.items, entries...)
+	v.loaded = true
 	if len(entries) > 0 {
 		v.pollCursor = entries[len(entries)-1].ID
 	}
@@ -128,11 +130,11 @@ func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool) strin
 		symbol = base.Foreground(tui.ColorCyan).Render("+")
 		sourceColor = tui.ColorCyan
 	}
-	host := allowValue(e.HostKey())
+	host := tui.SanitizeText(allowValue(e.HostKey()))
 	ts := base.Foreground(tui.ColorField).Render(e.Time.Format(time.TimeOnly))
 	src := base.Foreground(sourceColor).Render(fmt.Sprintf("%-5s", string(e.Source)))
 	hostStr := base.Render(host)
-	reasonStr := base.Render(e.Reason)
+	reasonStr := base.Render(tui.SanitizeText(e.Reason))
 	sp := base.Render(" ")
 	return marker + base.Render("[") + ts + base.Render("]") + sp + symbol + sp + src + sp + hostStr + sp + reasonStr
 }

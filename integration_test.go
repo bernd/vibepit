@@ -136,4 +136,24 @@ func TestProxyServerIntegration(t *testing.T) {
 	defer blockedResp.Body.Close()
 
 	assert.Equal(t, http.StatusForbidden, blockedResp.StatusCode, "blocked status")
+
+	// A blocked target is neither allowed nor denied until a user decides.
+	checkURL := fmt.Sprintf("https://127.0.0.1:%d/check?source=proxy&target=evil.com:80", controlPort)
+	checkResp, err := tlsClient.Get(checkURL)
+	require.NoError(t, err, "control API check")
+	defer checkResp.Body.Close()
+	var check struct{ Allowed, Denied bool }
+	require.NoError(t, json.NewDecoder(checkResp.Body).Decode(&check))
+	assert.Equal(t, struct{ Allowed, Denied bool }{}, check)
+
+	denyResp := controlAPIPostJSON(t, tlsClient, fmt.Sprintf("https://127.0.0.1:%d/deny", controlPort), `{"source":"proxy","target":"evil.com:80"}`)
+	defer denyResp.Body.Close()
+	assert.Equal(t, http.StatusOK, denyResp.StatusCode, "control API deny status")
+
+	deniedResp, err := tlsClient.Get(checkURL)
+	require.NoError(t, err, "control API check after deny")
+	defer deniedResp.Body.Close()
+	require.NoError(t, json.NewDecoder(deniedResp.Body).Decode(&check))
+	assert.True(t, check.Denied, "deny is recorded")
+	assert.False(t, check.Allowed, "deny doesn't allow")
 }

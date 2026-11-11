@@ -37,6 +37,7 @@ go run .                     # default command: run
 go run . -L                  # use local image instead of published one
 go run . -a example.com:443  # allow additional domain:port
 go run . -p vcs-github       # enable additional network preset
+go run . --prompt            # prompt to allow blocked connections
 go run . --reconfigure       # re-run interactive setup
 go run . up                  # start in daemon mode with SSH server
 go run . connect             # connect to running daemon-mode session
@@ -83,13 +84,16 @@ When docs and behavior differ, treat `cmd/root.go` and command files under
 Built with `urfave/cli/v3`.
 
 - `run` creates an isolated network, starts proxy + sandbox containers, and
-  manages persistent `vibepit-home` volume and per-session networking.
+  manages persistent `vibepit-home` volume and per-session networking. With
+  `--prompt` it polls the control API for blocked connections and shows the
+  approve screen over the session through `overlay`.
 - `up` creates the same infrastructure as `run` but in daemon mode — containers
   run in the background with an SSH server. Returns immediately after startup.
 - `down` stops and removes all containers for a session and cleans up
   credentials.
 - `connect` connects to a running daemon-mode session via SSH with ephemeral
-  Ed25519 keys. Opens an interactive shell.
+  Ed25519 keys. Opens an interactive shell. With `--prompt` it shows the
+  approve screen like `run`.
 - `exec` executes a command in the sandbox via SSH and returns its exit code.
 - `status` shows session info including container uptime and published ports.
 - `allow-http` / `allow-dns` call the control API and can persist to project
@@ -164,6 +168,19 @@ bindings and the feature tests that pin libghostty behaviour; only `vt` may
 import it. See `vt/internal/ghostty/README.md` before upgrading the module
 or wasm2go.
 
+### Overlay (`overlay/`)
+
+Shows a Bubble Tea program over a `run` or `connect` session in any
+terminal. A shadow `vt.Terminal` sees every session byte but never sits
+between the session and the screen. `Terminal.Show` stops forwarding output
+at a byte where the shadow's parser is at ground, hands stdin to the prompt
+at the terminal's reply to a DSR 5n barrier query, and restores the screen
+by replaying the output logged meanwhile or from the shadow. `inputMux` is
+the only reader of stdin. `NewFilter` passes only the prompt output the
+restore can undo. Used by `container.runTTYSession` and
+`cmd.runSSHTerminal`; `cmd/prompt.go` shows the approve screen through it.
+Only `overlay` imports `vt` on the host side.
+
 ### Embedded proxy binary (`embed/`)
 
 Used during release builds to embed the Linux arm64 proxy binary for macOS
@@ -235,7 +252,6 @@ Five CI workflows under `.github/workflows/`:
   and on tags: `make release-archive release-publish`.
 - `pages.yml` -- deploys MkDocs documentation to GitHub Pages when docs content
   or config changes on `main`.
-
 - `ghostty-wasm.yml` -- weekly and on demand: rebuilds the libghostty-vt
   `.wasm` at a newer ghostty commit, regenerates its Go translation, runs
   the feature tests, and opens or updates a PR on `ghostty-wasm-update`.

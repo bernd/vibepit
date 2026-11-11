@@ -1,0 +1,333 @@
+package overlay
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/bernd/vibepit/vt"
+)
+
+// can aborts the escape sequence a terminal is in the middle of.
+const can = 0x18
+
+// detachAt is the cut: it stops forwarding output at a byte where the shadow's
+// parser is at ground, or after the budget with a forced cut. Without an
+// error the terminal is detached, and the caller must end with leave.
+func (t *Terminal) detachAt(ctx context.Context) error {
+	if isClosed(t.in.Done()) {
+		return ErrClosed
+	}
+	select {
+	case <-t.aligned:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.done:
+		return ErrClosed
+	}
+	t.mu.Lock()
+	switch {
+	case t.isDone():
+		// isDone: Run is returning, and finish waits for this Show. Nothing
+		// may reach the terminal after the session output ended.
+		t.mu.Unlock()
+		return ErrClosed
+	case t.shadowErr != nil:
+		err := t.shadowErr
+		t.mu.Unlock()
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	t.noteLateBarrierLocked()
+	req := &detachReq{done: make(chan struct{})}
+	t.detach = req
+	switch ground, err := t.shadow.AtGround(); {
+	case err != nil:
+		t.abortDetachLocked(err)
+	case ground:
+		t.cutLocked(false)
+	}
+	t.mu.Unlock()
+
+	timer := time.NewTimer(t.timing.groundWait)
+	defer timer.Stop()
+	var stop error
+	select {
+	case <-req.done:
+	case <-timer.C:
+	case <-ctx.Done():
+		stop = ctx.Err()
+	case <-t.done:
+		stop = ErrClosed
+	}
+	t.mu.Lock()
+	if t.detach == req {
+		if stop != nil {
+			t.endDetachLocked(stop)
+		} else {
+			// No ground within the time budget, e.g. a stalled OSC.
+			t.cutLocked(true)
+		}
+	}
+	t.mu.Unlock()
+	<-req.done
+	return req.err
+}
+
+// endDetachLocked finishes the pending cut; err says why no cut happened.
+func (t *Terminal) endDetachLocked(err error) {
+	t.detach.err = err
+	close(t.detach.done)
+	t.detach = nil
+}
+
+// abortDetachLocked finishes the pending cut after the shadow failed.
+func (t *Terminal) abortDetachLocked(err error) {
+	t.failLocked(err)
+	t.endDetachLocked(fmt.Errorf("%w: %w", ErrUnavailable, err))
+}
+
+// cutLocked makes the cut at the current byte: capture the cut, stop
+// forwarding, and send the barrier query. After a forced cut, CAN aborts the
+// sequence the real terminal is in the middle of.
+func (t *Terminal) cutLocked(forced bool) {
+	c, err := captureCut(t.shadow)
+	if err != nil {
+		t.abortDetachLocked(err)
+		return
+	}
+	c.forced = forced
+	c.barrierSent = !t.barrierUnsupportedLocked()
+	// The handoff compares the cursor only after a barrier reply: replies
+	// to the app's own DSR 6n come before it. A forced cut leaves the
+	// shadow inside a sequence, and a terminal that didn't answer at the
+	// start won't now.
+	if c.barrierSent && !forced && !t.misaligned {
+		if c.row, c.col, err = t.shadowPositionLocked(); err != nil {
+			t.abortDetachLocked(err)
+			return
+		}
+	}
+	t.cut = c
+	t.log = rawLog{}
+	t.answered, t.resized = false, false
+	// Drain before the query goes out: a local terminal can answer before
+	// the next statement runs.
+	t.in.Drain()
+	var b []byte
+	if forced {
+		b = append(b, can)
+	}
+	if c.modes[modeSync] {
+		// The real terminal must not hold back drawing during the prompt.
+		b = append(b, modeSeq(modeSync, false)...)
+	}
+	if c.barrierSent {
+		b = append(b, barrierQuery...)
+	}
+	t.writeLocked(b)
+	t.endDetachLocked(nil)
+}
+
+// shadowPositionLocked asks the shadow for its cursor position the way the
+// handoff asks the real terminal, so both answer in the same terms, origin
+// mode and a pending wrap included. The answer goes nowhere else. It
+// returns 0, 0 if the shadow didn't answer.
+func (t *Terminal) shadowPositionLocked() (int, int, error) {
+	if _, err := t.shadow.Write([]byte(positionQuery)); err != nil {
+		return 0, 0, err
+	}
+	reply := t.answers
+	t.answers = t.answers[:0]
+	if len(reply) == 0 {
+		return 0, 0, nil
+	}
+	if st, row, col := matchPosition(reply); st == posComplete {
+		return row, col, nil
+	}
+	return 0, 0, nil
+}
+
+// advanceDetachLocked forwards p up to the byte where the shadow reaches
+// ground, cuts there, and returns the rest for the shadow and the log.
+func (t *Terminal) advanceDetachLocked(p []byte) []byte {
+	n, ground, err := t.writeToGroundLocked(p)
+	if n > 0 {
+		t.writeLocked(p[:n])
+		t.detach.forwarded += n
+		p = p[n:]
+	}
+	switch {
+	case err != nil:
+		t.abortDetachLocked(err)
+	case ground:
+		t.cutLocked(false)
+	case t.detach.forwarded >= t.timing.groundBytes:
+		t.cutLocked(true)
+	}
+	return p
+}
+
+// resyncLocked drops output up to the next ground: the real terminal never
+// got the start of the sequence the shadow is in.
+func (t *Terminal) resyncLocked(p []byte) []byte {
+	if len(p) == 0 {
+		return p
+	}
+	n, ground, err := t.writeToGroundLocked(p)
+	if err != nil {
+		t.failLocked(err)
+		ground = true
+	}
+	if ground {
+		t.resyncing = false
+	}
+	return p[n:]
+}
+
+// writeToGroundLocked feeds the shadow p up to the byte where its parser
+// reaches ground and returns how much it took: nothing when the parser is
+// at ground already, or on an error.
+func (t *Terminal) writeToGroundLocked(p []byte) (int, bool, error) {
+	if len(p) == 0 {
+		ground, err := t.shadow.AtGround()
+		return 0, ground, err
+	}
+	n, ground, err := t.shadow.WriteUntilGround(p)
+	if err != nil {
+		return 0, false, err
+	}
+	t.flushAnswersLocked()
+	return n, ground, nil
+}
+
+// leave restores the screen and switches back to the session. Holding
+// t.mu, and the inputMux lock through Release, it writes the leave
+// sequence, attaches output and hands input back, so no session output and
+// no input slips in between. drawn tells whether the enter sequence was
+// written.
+func (t *Terminal) leave(drawn bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.cut
+	var e entered
+	if drawn {
+		e = enterFor(c)
+	}
+	var strip time.Duration
+	if !drawn && c.barrierSent {
+		// The barrier reply may still come; it must not reach the app.
+		strip = t.timing.lateStrip
+	}
+	var nudge bool
+	t.in.Release(strip, t.reportsFocusLocked(), func() {
+		out, resync, reset := t.leaveBytesLocked(c, e, drawn)
+		t.writeLocked(out)
+		t.cut = nil
+		t.resyncing = resync
+		nudge = reset
+	})
+	t.log = rawLog{}
+	if nudge {
+		go t.nudge()
+	}
+}
+
+// leaveBytesLocked picks the leave: raw replay when the log reproduces the
+// screen exactly, else a snapshot from the shadow, else a reset. It returns
+// the bytes, whether output up to the next ground must be dropped, and
+// whether it reset the terminal.
+func (t *Terminal) leaveBytesLocked(c *cutState, e entered, drawn bool) ([]byte, bool, bool) {
+	drewOverAlt := drawn && c.alt
+	raw := !c.forced && // the real terminal may show a replacement character
+		!t.log.overflow && // bytes are missing
+		!t.missed && // the real terminal lacks output the shadow has
+		!t.resized && // the log was written for another geometry
+		!t.answered && // a replayed query would be answered twice
+		t.cursorKnownLocked(c) && // the cut's cursor may be on another row
+		!drewOverAlt // the prompt drew over the app's alternate screen
+	if raw {
+		return rawLeave(c, e, t.log.buf), false, false
+	}
+	if t.shadowErr == nil {
+		out, resync, err := t.snapshot(t.shadow, c, e)
+		if err == nil {
+			return out, resync, false
+		}
+		// A screen too large to format under the memory limit leaves the
+		// shadow usable; anything else means it can't be trusted.
+		if !errors.Is(err, vt.ErrOutOfMemory) {
+			t.failLocked(err)
+		}
+		t.cfg.Logf("overlay: snapshot restore failed, resetting the terminal: %v", err)
+	}
+	return resetLeave(e), false, true
+}
+
+// cursorKnownLocked tells whether the shadow's cursor at the cut is the
+// real terminal's, which the raw leave writes back. A resize can move them
+// apart, because terminals reflow and pull back scrollback in different
+// ways, so the alignment at the start isn't enough once the real terminal
+// was asked.
+func (t *Terminal) cursorKnownLocked(c *cutState) bool {
+	if c.posAsked {
+		return c.posConfirmed
+	}
+	return !t.misaligned
+}
+
+// followLocalClear makes the shadow follow a clear the real terminal did
+// without telling the app, such as kitty's clear_terminal to_cursor_scroll
+// or Cmd+K: row and col are the real cursor at the cut. Those clears move
+// the rows above the cursor into the scrollback and keep the column, so a
+// real cursor higher up in the same column means the shadow must scroll by
+// the difference, or the snapshot paints the cleared rows back.
+func (t *Terminal) followLocalClear(c *cutState, row, col int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// On the alternate screen there is no clear to follow, and after a
+	// forced cut the shadow is inside a sequence the shift would garble.
+	if t.shadowErr != nil || c.alt || c.forced || row >= c.row || col != c.col {
+		return
+	}
+	// Output since the cut may have scrolled the shadow, and the shift
+	// would then push it off the screen. Painting the cleared rows back
+	// loses nothing.
+	if len(t.log.buf) > 0 || t.log.overflow {
+		return
+	}
+	n := c.row - row
+	t.shadowWriteLocked(fmt.Appendf(nil, "\x1b[%dS\x1b[%dA", n, n))
+}
+
+// reportsFocusLocked tells whether the app takes focus reports (mode
+// 1004), so the ones the prompt got while it owned the input are the
+// app's too.
+func (t *Terminal) reportsFocusLocked() bool {
+	if t.shadowErr != nil {
+		return false
+	}
+	on, err := t.shadow.Mode(1004, false)
+	return err == nil && on
+}
+
+// nudge makes the app repaint after a reset: a size change delivers
+// SIGWINCH, which the kernel skips when the size stays the same.
+func (t *Terminal) nudge() {
+	if t.cfg.Resize == nil {
+		return
+	}
+	// A resize in the gap waits, so the nudge can't put back an old size.
+	t.resizeMu.Lock()
+	defer t.resizeMu.Unlock()
+	t.mu.Lock()
+	cols, rows := t.cols, t.rows
+	t.mu.Unlock()
+	if rows > 1 {
+		t.cfg.Resize(cols, rows-1)
+	} else {
+		t.cfg.Resize(cols+1, rows)
+	}
+	time.Sleep(t.timing.nudgeGap)
+	t.cfg.Resize(cols, rows)
+}

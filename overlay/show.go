@@ -1,0 +1,153 @@
+package overlay
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// Show runs model over the session and restores the screen afterwards. It
+// waits for an earlier Show to finish. It returns ErrUnavailable when the
+// session has no working shadow, ErrBarrierTimeout when the terminal
+// didn't confirm the input switch, ErrSessionBusy when the session
+// stopped reading its input before the switch (nothing was drawn in
+// either case), and ErrClosed when the session ends first. After the detach every path restores the screen,
+// also when the program fails.
+func (t *Terminal) Show(ctx context.Context, model tea.Model) error {
+	t.showMu.Lock()
+	defer t.showMu.Unlock()
+	if err := t.detachAt(ctx); err != nil {
+		return err
+	}
+	in, err := t.awaitBarrier(ctx)
+	if err != nil {
+		t.leave(false)
+		return err
+	}
+	return t.runPrompt(ctx, in, model)
+}
+
+// awaitBarrier is the handoff. After barrierTimeoutsBeforeDegraded timeouts in
+// a row, the session waits for input silence instead.
+func (t *Terminal) awaitBarrier(ctx context.Context) (io.Reader, error) {
+	ctx, cancel := t.untilEnd(ctx, nil)
+	defer cancel()
+	t.mu.Lock()
+	degraded := t.barrierUnsupportedLocked()
+	t.mu.Unlock()
+	if degraded {
+		in, err := t.in.AwaitSilence(ctx, t.timing.silence, t.timing.silenceMax)
+		return in, t.closedErr(err)
+	}
+	in, err := t.in.AwaitBarrier(ctx, t.timing.barrierWait)
+	err = t.closedErr(err)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch {
+	case err == nil:
+		t.barrierTimeouts = 0
+	case errors.Is(err, ErrBarrierTimeout):
+		t.barrierTimeouts++
+		if t.barrierUnsupportedLocked() {
+			t.cfg.Logf("overlay: the terminal doesn't answer DSR 5n; prompts now take input after %v without typing, so a reply or key in flight may reach the wrong side", t.timing.silence)
+		}
+	}
+	return in, err
+}
+
+// runPrompt writes the enter sequence, runs the program and always ends
+// with the leave.
+func (t *Terminal) runPrompt(ctx context.Context, in io.Reader, model tea.Model) (err error) {
+	t.mu.Lock()
+	c := t.cut
+	seq := enterSeq(enterFor(c))
+	if c.row > 0 {
+		// The replies the app was owed came before the barrier's, so the
+		// next position reply answers this query. The terminal answers it
+		// before the prompt moves the cursor.
+		t.in.ExpectPosition()
+		seq = positionQuery + seq
+		c.posAsked = true
+	}
+	t.writeLocked([]byte(seq))
+	cols, rows := t.cols, t.rows
+	wait, strip := t.timing.positionWait, t.timing.lateStrip
+	t.mu.Unlock()
+	defer t.leave(true)
+	if c.posAsked {
+		// Waited for alongside the prompt, which holds an ESC that might
+		// start the reply only until the wait ends. Background, not the
+		// prompt's context: a late reply must still be stripped.
+		confirmed := make(chan bool, 1)
+		go func() {
+			row, col, err := t.in.AwaitPosition(context.Background(), wait, strip)
+			if err == nil {
+				t.followLocalClear(c, row, col)
+			}
+			confirmed <- err == nil && row == c.row && col == c.col
+		}()
+		defer func() { c.posConfirmed = <-confirmed }()
+	}
+
+	// The session ending cancels the program.
+	pctx, cancel := t.untilEnd(ctx, t.in.Done())
+	defer cancel()
+	p := tea.NewProgram(model,
+		tea.WithContext(pctx),
+		tea.WithInput(in),
+		tea.WithOutput(NewFilter(t.cfg.Stdout)),
+		tea.WithWindowSize(cols, rows),
+		tea.WithColorProfile(t.profile),
+		tea.WithEnvironment(t.cfg.Environ),
+		tea.WithoutSignalHandler(),
+	)
+	t.setProgram(p)
+	defer t.setProgram(nil)
+	defer func() {
+		// Bubble Tea recovers panics in the model; this covers its own
+		// code, so the leave still runs.
+		if r := recover(); r != nil {
+			err = fmt.Errorf("overlay: prompt panicked: %v", r)
+		}
+	}()
+	_, err = p.Run()
+	switch {
+	case t.isDone(), isClosed(t.in.Done()):
+		return ErrClosed
+	case ctx.Err() != nil:
+		return ctx.Err()
+	}
+	return err
+}
+
+// closedErr is ErrClosed for a wait that failed because the session ended.
+func (t *Terminal) closedErr(err error) error {
+	if err != nil && t.isDone() {
+		return ErrClosed
+	}
+	return err
+}
+
+func (t *Terminal) setProgram(p *tea.Program) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.prog = p
+}
+
+// untilEnd derives a context that is also cancelled when the session's
+// output ends or input closes; a nil input isn't watched.
+func (t *Terminal) untilEnd(ctx context.Context, input <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-t.done:
+		case <-input:
+		case <-ctx.Done():
+		}
+		cancel()
+	}()
+	return ctx, cancel
+}

@@ -99,9 +99,18 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 	return s.onBack()
 }
 
-func (s *monitorScreen) pollLogsCmd(afterID uint64) tea.Cmd {
+// pollLogsCmd fetches a recent tail on first load and every newer entry
+// afterwards, so a burst between polls cannot be cut off.
+func (s *monitorScreen) pollLogsCmd() tea.Cmd {
+	loaded, cursor := s.logs.loaded, s.logs.pollCursor
 	return func() tea.Msg {
-		entries, err := s.client.LogsAfter(afterID)
+		var entries []proxy.LogEntry
+		var err error
+		if loaded {
+			entries, err = s.client.LogsAfter(cursor)
+		} else {
+			entries, err = s.client.Logs()
+		}
 		return logsPollResultMsg{from: s, entries: entries, err: err}
 	}
 }
@@ -296,7 +305,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		var cmds []tea.Cmd
 		if !s.logsPollInFlight {
 			s.logsPollInFlight = true
-			cmds = append(cmds, s.pollLogsCmd(s.logs.pollCursor))
+			cmds = append(cmds, s.pollLogsCmd())
 		}
 		if s.tab == tabHosts || w.IntervalElapsed(hiddenHostsPollInterval) {
 			cmds = append(cmds, s.pollHosts())
