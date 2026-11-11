@@ -354,7 +354,7 @@ func runImageUpdate(ctx context.Context) error {
 	defer client.Close()
 
 	img := imageName(u)
-	if err := client.PullImage(ctx, img, false); err != nil {
+	if err := client.PullImage(ctx, img); err != nil {
 		return fmt.Errorf("pull image: %w", err)
 	}
 	digestRef, err := client.ImageRepoDigest(ctx, img)
@@ -365,7 +365,7 @@ func runImageUpdate(ctx context.Context) error {
 	if err := cosign.VerifyImage(ctx, digestRef); err != nil {
 		return fmt.Errorf("image verification: %w", err)
 	}
-	if err := client.PullImage(ctx, ctr.ProxyImage, false); err != nil {
+	if err := client.PullImage(ctx, ctr.ProxyImage); err != nil {
 		return fmt.Errorf("pull image: %w", err)
 	}
 	proxyDigestRef, err := client.ImageRepoDigest(ctx, ctr.ProxyImage)

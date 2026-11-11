@@ -165,7 +165,7 @@ func (c *Client) Close() error { return c.docker.Close() }
 
 // EnsureImage pulls the image if it is not available locally. Returns true
 // if the image was pulled, false if it was already present.
-func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) (bool, error) {
+func (c *Client) EnsureImage(ctx context.Context, ref string) (bool, error) {
 	images, err := c.docker.ImageList(ctx, dockerclient.ImageListOptions{
 		Filters: make(dockerclient.Filters).Add("reference", ref),
 	})
@@ -176,11 +176,11 @@ func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) (bool,
 		return false, nil
 	}
 
-	return true, c.PullImage(ctx, ref, quiet)
+	return true, c.PullImage(ctx, ref)
 }
 
 // PullImage pulls the latest version of the image.
-func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
+func (c *Client) PullImage(ctx context.Context, ref string) error {
 	tui.Status("Pulling", "image %s", ref)
 	reader, err := c.docker.ImagePull(ctx, ref, dockerclient.ImagePullOptions{})
 	if err != nil {
@@ -188,12 +188,7 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	}
 	defer reader.Close()
 
-	if quiet {
-		err = reader.Wait(ctx)
-	} else {
-		err = displayPullProgress(reader.JSONMessages(ctx))
-	}
-	if err != nil {
+	if err := displayPullProgress(reader.JSONMessages(ctx)); err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	return nil
@@ -384,50 +379,6 @@ func (c *Client) FindProxyContainerID(ctx context.Context, sessionID string) (st
 		return "", fmt.Errorf("no proxy container found for session %s", sessionID)
 	}
 	return list.Items[0].ID, nil
-}
-
-// SessionIDFromContainer inspects a container and returns its session ID label.
-func (c *Client) SessionIDFromContainer(ctx context.Context, containerID string) (string, error) {
-	info, err := c.docker.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
-	if err != nil {
-		return "", err
-	}
-	sid, ok := containerLabels(info.Container)[LabelSessionID]
-	if !ok {
-		return "", fmt.Errorf("container has no session ID label")
-	}
-	return sid, nil
-}
-
-// FindProxyIP returns the IP address of the running vibepit proxy container
-// by inspecting its network settings. Returns an error if no proxy is running.
-func (c *Client) FindProxyIP(ctx context.Context) (string, error) {
-	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
-		Filters: make(dockerclient.Filters).Add("label",
-			LabelVibepit+"=true",
-			LabelRole+"="+RoleProxy,
-		),
-	})
-	if err != nil {
-		return "", err
-	}
-	if len(list.Items) == 0 {
-		return "", fmt.Errorf("no running vibepit proxy container found")
-	}
-
-	info, err := c.docker.ContainerInspect(ctx, list.Items[0].ID, dockerclient.ContainerInspectOptions{})
-	if err != nil {
-		return "", err
-	}
-	if info.Container.NetworkSettings == nil {
-		return "", fmt.Errorf("proxy container has no IP address")
-	}
-	for _, ep := range info.Container.NetworkSettings.Networks {
-		if ep != nil && ep.IPAddress.IsValid() {
-			return ep.IPAddress.String(), nil
-		}
-	}
-	return "", fmt.Errorf("proxy container has no IP address")
 }
 
 // AttachAndStartSession connects to a container's main process stdio, then starts it.
@@ -1035,11 +986,6 @@ func (c *Client) EnsureVolume(ctx context.Context, name string, uid int, user st
 	return nil
 }
 
-func (c *Client) RemoveVolume(ctx context.Context, name string) error {
-	_, err := c.docker.VolumeRemove(ctx, name, dockerclient.VolumeRemoveOptions{})
-	return err
-}
-
 // ContainerLogs returns the last n lines of a container's log output.
 func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int) (string, error) {
 	reader, err := c.docker.ContainerLogs(ctx, containerID, dockerclient.ContainerLogsOptions{
@@ -1104,21 +1050,6 @@ func summarizeContainer(info container.InspectResponse) ContainerSummary {
 		s.MemoryLimitKnown = true
 	}
 	return s
-}
-
-// StreamLogs follows the container log output and copies it to the given writer.
-func (c *Client) StreamLogs(ctx context.Context, containerID string, w io.Writer) error {
-	reader, err := c.docker.ContainerLogs(ctx, containerID, dockerclient.ContainerLogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Follow:     true,
-	})
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-	_, err = io.Copy(w, reader)
-	return err
 }
 
 // ImageRepoDigest returns the repo digest for a locally available image
