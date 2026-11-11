@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"errors"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/stretchr/testify/assert"
 )
@@ -122,4 +124,31 @@ func TestAllowValue(t *testing.T) {
 	assert.Equal(t, "a.com:443", allowValue(proxy.HostKey{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}))
 	assert.Equal(t, "a.com", allowValue(proxy.HostKey{Source: proxy.SourceDNS, Domain: "a.com"}))
 	assert.Equal(t, "[2001:db8::1]:443", allowValue(proxy.HostKey{Source: proxy.SourceProxy, Domain: "2001:db8::1", Port: "443"}))
+}
+
+// The host comes from the sandbox, and errors can quote it.
+func TestMonitorFlashesSanitizeText(t *testing.T) {
+	key := proxy.HostKey{Source: proxy.SourceProxy, Domain: "evil\x1b[2J.com", Port: "443"}
+	failed := errors.New("bad\x1b]0;title\x07 thing")
+	tests := []struct {
+		name string
+		msg  func(s *monitorScreen) tea.Msg
+		want string
+	}{
+		{"allowed", func(s *monitorScreen) tea.Msg { return allowResultMsg{from: s, key: key, status: statusTemp} }, "allowed evil[2J.com:443"},
+		{"allowed and saved", func(s *monitorScreen) tea.Msg { return allowResultMsg{from: s, key: key, status: statusSaved} }, "allowed and saved evil[2J.com:443"},
+		{"allow failed", func(s *monitorScreen) tea.Msg { return allowResultMsg{from: s, key: key, err: failed} }, "allow evil[2J.com:443 failed: bad]0;title thing"},
+		{"save failed", func(s *monitorScreen) tea.Msg {
+			return allowResultMsg{from: s, key: key, status: statusTemp, err: failed}
+		}, "allowed evil[2J.com:443, but saving failed: bad]0;title thing"},
+		{"denied", func(s *monitorScreen) tea.Msg { return denyResultMsg{from: s, key: key} }, "denied evil[2J.com:443"},
+		{"deny failed", func(s *monitorScreen) tea.Msg { return denyResultMsg{from: s, key: key, err: failed} }, "deny evil[2J.com:443 failed: bad]0;title thing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, w := newPollingTestScreen(t, nil, nil)
+			s.Update(tt.msg(s), w)
+			assert.Equal(t, tt.want, w.Flash())
+		})
+	}
 }

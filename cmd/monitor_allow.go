@@ -105,9 +105,17 @@ func (s allowState) forHost(h proxy.HostStats) allowTarget {
 	return t
 }
 
+// forEntry treats a hold line as blocked: a hold that ended without an
+// allow ended in a block.
 func (s allowState) forEntry(e proxy.LogEntry) allowTarget {
-	return allowTarget{key: e.HostKey(), current: s.entryStatus(e), blocked: e.Action == proxy.ActionBlock,
-		code: e.Code, reason: e.Reason}
+	blocked := e.Action == proxy.ActionBlock || e.Action == proxy.ActionHold
+	return allowTarget{key: e.HostKey(), current: s.entryStatus(e), blocked: blocked, code: e.Code, reason: e.Reason}
+}
+
+// forHeld is the target of a host the proxy is holding requests for. Only
+// allowlist blocks are held, so an allow always releases them.
+func (s allowState) forHeld(k proxy.HostKey) allowTarget {
+	return allowTarget{key: k, blocked: true, code: proxy.BlockNotAllowlisted}
 }
 
 // canAllow reports whether the a and A keys add an allowlist entry.
@@ -162,7 +170,7 @@ func (s *monitorScreen) requestAllow(w *tui.Window, t allowTarget, save bool) te
 			// An allowlist block the allowlist can't fix, e.g. an IPv6 literal.
 			reason = "the allowlist can't hold " + allowValue(t.key)
 		}
-		w.SetFlash("cannot allow: " + reason)
+		w.SetFlash(flashText("cannot allow: %s", reason))
 	default:
 		w.SetFlash("already allowed")
 	}
@@ -176,7 +184,7 @@ const allowErrorFlash = 6 * time.Second
 
 func (s *monitorScreen) handleAllowResult(msg allowResultMsg, w *tui.Window) {
 	if msg.err != nil && msg.status == statusNone {
-		w.SetFlashFor(fmt.Sprintf("allow %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		w.SetFlashFor(flashText("allow %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
 		return
 	}
 	if msg.status == statusTemp && s.allows[msg.key] == statusSaved {
@@ -187,10 +195,44 @@ func (s *monitorScreen) handleAllowResult(msg allowResultMsg, w *tui.Window) {
 	s.allowGen++
 	switch {
 	case msg.err != nil:
-		w.SetFlashFor(fmt.Sprintf("allowed %s, but saving failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		w.SetFlashFor(flashText("allowed %s, but saving failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
 	case msg.status == statusTemp:
-		w.SetFlash(fmt.Sprintf("allowed %s", allowValue(msg.key)))
+		w.SetFlash(flashText("allowed %s", allowValue(msg.key)))
 	case msg.status == statusSaved:
-		w.SetFlash(fmt.Sprintf("allowed and saved %s", allowValue(msg.key)))
+		w.SetFlash(flashText("allowed and saved %s", allowValue(msg.key)))
 	}
+}
+
+// flashText formats a flash. The hosts come from the sandbox, and errors
+// and reasons can quote them, so control characters are dropped.
+func flashText(format string, args ...any) string {
+	return tui.SanitizeText(fmt.Sprintf(format, args...))
+}
+
+// denyResultMsg is returned by the async deny command.
+type denyResultMsg struct {
+	from *monitorScreen
+	key  proxy.HostKey
+	err  error
+}
+
+// denySelected denies the selected host while the proxy holds requests for
+// it. Anywhere else n does nothing: a deny only ends holds.
+func (s *monitorScreen) denySelected(w *tui.Window) tea.Cmd {
+	k, held := s.heldSelection(w.Now())
+	if !held || s.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return denyResultMsg{from: s, key: k, err: s.client.DenyTarget(k.Target())}
+	}
+}
+
+// handleDenyResult only reports. The hold's end arrives on the feed.
+func (s *monitorScreen) handleDenyResult(msg denyResultMsg, w *tui.Window) {
+	if msg.err != nil {
+		w.SetFlashFor(flashText("deny %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		return
+	}
+	w.SetFlash(flashText("denied %s", allowValue(msg.key)))
 }

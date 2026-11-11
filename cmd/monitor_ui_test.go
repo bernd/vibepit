@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,7 +89,7 @@ func TestRenderLogLine(t *testing.T) {
 		Action: proxy.ActionAllow,
 		Source: proxy.SourceProxy,
 	}
-	line := renderLogLine(entry, statusNone, false)
+	line := renderLogLine(entry, statusNone, false, nil, time.Time{})
 	require.Contains(t, line, "example.com:443")
 	require.Contains(t, line, "+")
 }
@@ -99,7 +101,7 @@ func TestRenderLogLine_Block(t *testing.T) {
 		Source: proxy.SourceDNS,
 		Reason: "not allowed",
 	}
-	line := renderLogLine(entry, statusNone, false)
+	line := renderLogLine(entry, statusNone, false, nil, time.Time{})
 	require.Contains(t, line, "evil.com")
 	require.Contains(t, line, "x")
 	require.Contains(t, line, "not allowed")
@@ -131,7 +133,7 @@ func TestRenderLogLine_AllowStatuses(t *testing.T) {
 				Action: proxy.ActionBlock,
 				Source: proxy.SourceProxy,
 			}
-			line := renderLogLine(entry, tt.status, false)
+			line := renderLogLine(entry, tt.status, false, nil, time.Time{})
 			require.Contains(t, line, tt.expectedSymbol)
 			require.NotContains(t, line, "] x")
 		})
@@ -145,8 +147,8 @@ func TestRenderLogLine_Highlighted(t *testing.T) {
 		Action: proxy.ActionAllow,
 		Source: proxy.SourceProxy,
 	}
-	normal := renderLogLine(entry, statusNone, false)
-	highlighted := renderLogLine(entry, statusNone, true)
+	normal := renderLogLine(entry, statusNone, false, nil, time.Time{})
+	highlighted := renderLogLine(entry, statusNone, true, nil, time.Time{})
 	require.NotEqual(t, normal, highlighted, "highlighted line should differ from normal")
 }
 
@@ -177,7 +179,7 @@ func TestMonitorScreen_AllowAction(t *testing.T) {
 		assert.Contains(t, w.Flash(), "failed: connection failed")
 		assert.Empty(t, s.allows)
 
-		s.Update(logsPollResultMsg{from: s}, w)
+		s.Update(feedMsg{from: s}, w)
 		assert.Contains(t, w.Flash(), "connection failed", "a successful poll must not hide the allow error")
 	})
 
@@ -207,7 +209,7 @@ func TestMonitorScreen_AllowAction(t *testing.T) {
 
 		s.Update(allowResultMsg{from: s, key: key, status: statusTemp}, w)
 		for _, i := range []int{1, 3} {
-			line := renderLogLine(s.logs.items[i], s.allows.entryStatus(s.logs.items[i]), false)
+			line := renderLogLine(s.logs.items[i], s.allows.entryStatus(s.logs.items[i]), false, nil, time.Time{})
 			assert.Contains(t, line, "a")
 			assert.NotContains(t, line, "] x")
 		}
@@ -418,12 +420,7 @@ func TestMonitorScreen_NewCount(t *testing.T) {
 		w.Update(tea.WindowSizeMsg{Width: 100, Height: 6})
 		s.logs.cursor.Pos = 2 // not at end (4)
 
-		s.Update(logsPollResultMsg{
-			from: s,
-			entries: []proxy.LogEntry{
-				{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
-			},
-		}, w)
+		s.Update(logEvents(s, proxy.LogEntry{ID: 100, Domain: "new.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy}), w)
 
 		assert.Equal(t, 1, s.logs.newCount)
 		assert.Equal(t, 2, s.logs.cursor.Pos)
@@ -464,29 +461,79 @@ func jsonResponse(status int, body string) *http.Response {
 	}
 }
 
-// fakeProxyClient serves /logs and /hosts. hostsStatus 404 simulates a proxy
-// that predates the hosts endpoint.
-func fakeProxyClient(t *testing.T, requests *[]string, hostsStatus int) *ControlClient {
+// requestLog records the requests a fake proxy served. The feed sends its
+// requests from its own goroutine.
+type requestLog struct {
+	mu   sync.Mutex
+	uris []string
+}
+
+func (r *requestLog) add(uri string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.uris = append(r.uris, uri)
+}
+
+func (r *requestLog) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.uris)
+}
+
+func (r *requestLog) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.uris = nil
+}
+
+// fakeProxyClient serves /logs and /hosts and predates the event stream, so
+// the feed polls /logs. hostsStatus 404 simulates a proxy that also predates
+// the hosts endpoint.
+func fakeProxyClient(t *testing.T, requests *requestLog, hostsStatus int) *ControlClient {
 	t.Helper()
-	return &ControlClient{
-		http: &http.Client{
-			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				*requests = append(*requests, req.URL.RequestURI())
-				switch req.URL.Path {
-				case "/logs":
-					return jsonResponse(http.StatusOK, `[{"id":11,"domain":"api.openai.com","port":"443","action":"block","source":"proxy"}]`), nil
-				case "/hosts":
-					if hostsStatus != http.StatusOK {
-						return jsonResponse(hostsStatus, "404 page not found\n"), nil
-					}
-					return jsonResponse(http.StatusOK, `[{"source":"proxy","domain":"api.openai.com","port":"443","blocked":1,"last_action":"block","last_seen":"2026-10-16T20:00:00Z","last_block_code":"not_allowlisted"}]`), nil
+	hc := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests.add(req.URL.RequestURI())
+			switch req.URL.Path {
+			case "/events":
+				return fakeEventStream(t, req.Context(), proxy.LogEntry{ID: 11, Domain: "api.openai.com", Port: "443",
+					Action: proxy.ActionBlock, Source: proxy.SourceProxy}), nil
+			case "/hosts":
+				if hostsStatus != http.StatusOK {
+					return jsonResponse(hostsStatus, "404 page not found\n"), nil
 				}
-				t.Fatalf("unexpected request %s", req.URL)
-				return nil, nil
-			}),
-		},
-		baseURL: "https://proxy.local",
+				return jsonResponse(http.StatusOK, `[{"source":"proxy","domain":"api.openai.com","port":"443","blocked":1,"last_action":"block","last_seen":"2026-10-16T20:00:00Z","last_block_code":"not_allowlisted"}]`), nil
+			}
+			return jsonResponse(http.StatusNotFound, "404 page not found\n"), nil
+		}),
 	}
+	return &ControlClient{http: hc, stream: hc, baseURL: "https://proxy.local"}
+}
+
+// fakeEventStream answers /events with entries as history and their
+// cursor, then stays open until the request ends, like a live stream.
+func fakeEventStream(t *testing.T, ctx context.Context, entries ...proxy.LogEntry) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	var cursor uint64
+	for _, e := range entries {
+		require.NoError(t, proxy.WriteEvent(&buf, proxy.Event{Type: proxy.EventLog, Log: e}))
+		cursor = e.ID
+	}
+	require.NoError(t, proxy.WriteEvent(&buf, proxy.Event{Type: proxy.EventCursor, Cursor: cursor}))
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"text/event-stream"}},
+		Body:       io.NopCloser(io.MultiReader(&buf, ctxReader{ctx})),
+	}
+}
+
+// ctxReader blocks until ctx ends.
+type ctxReader struct{ ctx context.Context }
+
+func (r ctxReader) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, io.EOF
 }
 
 func newPollingTestScreen(t *testing.T, client *ControlClient, onBack func() tui.Screen) (*monitorScreen, *tui.Window) {
@@ -498,83 +545,441 @@ func newPollingTestScreen(t *testing.T, client *ControlClient, onBack func() tui
 	header := &tui.HeaderInfo{ProjectDir: "/home/user/project", SessionID: "test123456"}
 	w := tui.NewWindow(header, s)
 	w.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	t.Cleanup(func() {
+		if s.stopFeed != nil {
+			s.stopFeed()
+		}
+	})
 	return s, w
+}
+
+// logEvents is what the feed delivers for new log entries.
+func logEvents(s *monitorScreen, entries ...proxy.LogEntry) feedMsg {
+	events := make([]proxy.Event, len(entries))
+	for i, e := range entries {
+		events[i] = proxy.Event{Type: proxy.EventLog, Log: e}
+	}
+	return feedMsg{from: s, batch: feedBatch{Events: events}}
+}
+
+// asyncDriver runs a screen's commands concurrently, as Bubble Tea does,
+// and hands their messages to the screen on the test goroutine. Unlike
+// runCmd it copes with commands that block, like waiting on the feed.
+type asyncDriver struct {
+	t    *testing.T
+	s    *monitorScreen
+	w    *tui.Window
+	msgs chan tea.Msg
+	stop chan struct{}
+}
+
+func newAsyncDriver(t *testing.T, s *monitorScreen, w *tui.Window) *asyncDriver {
+	t.Helper()
+	d := &asyncDriver{t: t, s: s, w: w, msgs: make(chan tea.Msg), stop: make(chan struct{})}
+	t.Cleanup(func() { close(d.stop) })
+	return d
+}
+
+func (d *asyncDriver) run(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	go func() {
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, c := range batch {
+				d.run(c)
+			}
+			return
+		}
+		select {
+		case d.msgs <- msg:
+		case <-d.stop:
+		}
+	}()
+}
+
+func (d *asyncDriver) send(msg tea.Msg) {
+	_, cmd := d.s.Update(msg, d.w)
+	d.run(cmd)
+}
+
+// until delivers messages until done reports true.
+func (d *asyncDriver) until(done func() bool) {
+	d.t.Helper()
+	timeout := time.After(5 * time.Second)
+	for !done() {
+		select {
+		case msg := <-d.msgs:
+			d.send(msg)
+		case <-timeout:
+			require.FailNow(d.t, "timed out waiting for the monitor")
+		}
+	}
 }
 
 func TestMonitorScreen_IgnoresResultsFromOtherScreens(t *testing.T) {
 	old, _ := newPollingTestScreen(t, nil, nil)
 	s, w := newPollingTestScreen(t, nil, nil)
-	s.hostsPollInFlight, s.logsPollInFlight = true, true
+	s.hostsPollInFlight = true
 	key := proxy.HostKey{Source: proxy.SourceProxy, Domain: "old.com", Port: "443"}
 
 	s.Update(hostsPollResultMsg{from: old, hosts: []proxy.HostStats{
 		mkHost("old.com", "443", proxy.SourceProxy, time.Now(), 0, 1, proxy.ActionBlock),
 	}}, w)
 	s.Update(hostsPollResultMsg{from: old, err: ErrUnsupportedEndpoint}, w)
-	s.Update(logsPollResultMsg{from: old, entries: []proxy.LogEntry{{ID: 1, Domain: "old.com"}}}, w)
+	_, cmd := s.Update(logEvents(old, proxy.LogEntry{ID: 1, Domain: "old.com"}), w)
+	assert.Nil(t, cmd, "a stale feed result must not wait on the feed again")
+	s.Update(feedMsg{from: old, batch: feedBatch{Err: errors.New("connection refused")}}, w)
 	s.Update(allowResultMsg{from: old, key: key, status: statusTemp}, w)
+	s.Update(denyResultMsg{from: old, key: key}, w)
 
 	assert.Empty(t, s.hosts.hosts)
 	assert.False(t, s.hosts.unsupported)
 	assert.Empty(t, s.logs.items)
 	assert.Empty(t, s.allows)
+	assert.NoError(t, w.Err())
+	assert.Empty(t, w.Flash())
 	assert.True(t, s.hostsPollInFlight, "a stale result must not clear the in-flight flag")
-	assert.True(t, s.logsPollInFlight)
 }
 
 func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
-	var requests []string
+	var requests requestLog
 	s, w := newPollingTestScreen(t, fakeProxyClient(t, &requests, http.StatusOK), nil)
 
 	_, cmd := s.Update(tui.TickMsg{}, w)
-	require.NotNil(t, cmd, "tick should return async poll commands")
-	assert.Empty(t, requests, "Update should not fetch synchronously")
-	assert.True(t, s.logsPollInFlight)
+	require.NotNil(t, cmd, "tick should return async commands")
+	assert.Empty(t, requests.all(), "Update should not fetch synchronously")
+	assert.NotNil(t, s.feed, "the first tick starts the feed")
 	assert.True(t, s.hostsPollInFlight)
 
+	feed := s.feed
 	_, secondCmd := s.Update(tui.TickMsg{}, w)
 	assert.Nil(t, secondCmd, "should not start polls while they are in flight")
+	assert.Equal(t, feed, s.feed, "the feed starts once")
 
-	for _, msg := range runCmd(cmd) {
-		_, followCmd := s.Update(msg, w)
-		assert.Nil(t, followCmd)
-	}
-	assert.ElementsMatch(t, []string{"/logs", "/hosts"}, requests, "first poll asks for the recent tail")
-	assert.False(t, s.logsPollInFlight)
+	d := newAsyncDriver(t, s, w)
+	d.run(cmd)
+	d.until(func() bool { return len(s.logs.items) == 1 && len(s.hosts.hosts) == 1 })
 	assert.False(t, s.hostsPollInFlight)
-	require.Len(t, s.logs.items, 1)
-	assert.Equal(t, uint64(11), s.logs.pollCursor)
-	assert.True(t, s.logs.loaded)
-	require.Len(t, s.hosts.hosts, 1)
+	assert.Contains(t, requests.all(), "/events?tail=25", "the feed asks for the recent tail")
 	assert.Contains(t, w.View().Content, "HOSTS (1)")
 	assert.Contains(t, w.View().Content, "LOGS (1)")
 }
 
-func TestMonitorScreen_PollUsesStrictCursorAfterFirstLoad(t *testing.T) {
-	var queries []string
-	client := &ControlClient{
-		http: &http.Client{
-			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				queries = append(queries, req.URL.RawQuery)
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Status:     "200 OK",
-					Body:       io.NopCloser(strings.NewReader("[]")),
-					Header:     make(http.Header),
-				}, nil
-			}),
-		},
-		baseURL: "https://proxy.local",
-	}
-	s := newMonitorScreen(&SessionInfo{SessionID: "test123456"}, client, nil)
-	w := tui.NewWindow(&tui.HeaderInfo{SessionID: "test123456"}, s)
-	w.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+func TestMonitorScreen_FeedMsg(t *testing.T) {
+	t.Run("re-arms while the feed is open", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, nil)
+		_, cmd := s.Update(feedMsg{from: s}, w)
+		assert.NotNil(t, cmd)
+		_, cmd = s.Update(logEvents(s, proxy.LogEntry{ID: 1, Domain: "a.com"}), w)
+		assert.NotNil(t, cmd)
+	})
 
-	// First load on an empty log, then a later poll: the cursor stays 0 but
-	// the second request must be strict, not another tail.
-	s.Update(s.pollLogsCmd()(), w)
-	s.pollLogsCmd()()
-	assert.Equal(t, []string{"", "after=0"}, queries)
+	t.Run("stops once the feed closed", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, nil)
+		_, cmd := s.Update(feedMsg{from: s, closed: true}, w)
+		assert.Nil(t, cmd)
+	})
+
+	t.Run("a proxy without the stream is not a lost connection", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, func() tui.Screen { return nil })
+		s.tab = tabLogs
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: ErrUnsupportedEndpoint}}, w)
+		assert.True(t, s.logs.unsupported)
+		assert.Equal(t, -1, s.disconnectTick, "the session is still there")
+		assert.NoError(t, w.Err())
+		assert.Contains(t, w.View().Content, "proxy does not support the live log, restart the session")
+	})
+
+	t.Run("hold-open adds no log line", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, nil)
+		hold := proxy.LogEntry{ID: 1, Domain: "held.com", Port: "443", Action: proxy.ActionHold,
+			Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted, Deadline: w.Now().Add(time.Minute)}
+		s.Update(feedMsg{from: s, batch: feedBatch{Events: []proxy.Event{{Type: proxy.EventHoldOpen, Log: hold}}}}, w)
+		assert.Empty(t, s.logs.items)
+		_, open := s.held.Open(hold.HostKey(), w.Now())
+		assert.True(t, open)
+	})
+}
+
+func TestMonitor_ProxyRestartResetsTheFeedState(t *testing.T) {
+	s, w := newPollingTestScreen(t, nil, nil)
+	clock := &stepClock{now: approveEpoch}
+	w.SetClock(clock)
+	s.tab = tabLogs
+	hold := proxy.LogEntry{ID: 2, Time: approveEpoch, Domain: "held.com", Port: "443", Action: proxy.ActionHold,
+		Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted, Deadline: approveEpoch.Add(time.Minute)}
+	s.Update(logEvents(s, proxy.LogEntry{ID: 1, Time: approveEpoch, Domain: "old.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy}, hold), w)
+	s.Update(tea.KeyPressMsg{Code: tea.KeyUp}, w)
+	require.True(t, s.logs.selecting)
+	require.Len(t, s.hosts.holdIDs, 1, "the held host has a row")
+
+	_, cmd := s.Update(feedMsg{from: s, batch: feedBatch{Reset: true}}, w)
+	assert.NotNil(t, cmd, "the feed is read on")
+	s.Update(logEvents(s,
+		proxy.LogEntry{ID: 1, Time: approveEpoch, Domain: "new.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy},
+		proxy.LogEntry{ID: 2, Time: approveEpoch, Domain: "other.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy},
+	), w)
+
+	var domains []string
+	for _, e := range s.logs.items {
+		domains = append(domains, e.Domain)
+	}
+	assert.Equal(t, []string{"new.com", "other.com"}, domains)
+	assert.False(t, s.logs.selecting, "the selected line is gone")
+	assert.Zero(t, s.held.Count(clock.now))
+	assert.Equal(t, -1, s.hosts.indexOf(hold.HostKey()), "no stale held row")
+	assert.Empty(t, s.hosts.holdIDs)
+	view := ansi.Strip(w.View().Content)
+	assert.NotContains(t, view, "held.com")
+	assert.Contains(t, view, "LOGS (2)")
+}
+
+func TestMonitor_StreamsLogEntries(t *testing.T) {
+	ep := newEventsProxy(t)
+	ep.addEntries(2)
+	s, w := newPollingTestScreen(t, ep.client, nil)
+	s.tab = tabLogs
+	d := newAsyncDriver(t, s, w)
+
+	d.send(tui.TickMsg{})
+	d.until(func() bool { return len(s.logs.items) == 2 })
+
+	ep.log.Add(proxy.LogEntry{Domain: "late.com", Port: "443", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
+	d.until(func() bool { return len(s.logs.items) == 3 })
+	assert.Contains(t, ansi.Strip(w.View().Content), "late.com:443")
+}
+
+func TestMonitor_FeedErrorShowsDisconnect(t *testing.T) {
+	t.Run("with sessions to go back to", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, func() tui.Screen { return &testStubScreen{} })
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: errors.New("connection refused")}}, w)
+		require.Error(t, w.Err())
+		assert.Equal(t, "session test123456 disconnected", w.Err().Error())
+		assert.Equal(t, 0, s.disconnectTick)
+
+		s.Update(feedMsg{from: s}, w)
+		assert.NoError(t, w.Err())
+		assert.Equal(t, -1, s.disconnectTick)
+	})
+
+	t.Run("without", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, nil)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: errors.New("connection refused")}}, w)
+		assert.EqualError(t, w.Err(), "connection refused")
+	})
+}
+
+func TestMonitor_HeldLogLine(t *testing.T) {
+	s, w := newPollingTestScreen(t, nil, nil)
+	clock := &stepClock{now: approveEpoch}
+	w.SetClock(clock)
+	s.tab = tabLogs
+	hold := proxy.LogEntry{ID: 1, Time: approveEpoch, Domain: "held.com", Port: "443", Action: proxy.ActionHold,
+		Source: proxy.SourceProxy, Reason: "domain not in allowlist", Code: proxy.BlockNotAllowlisted,
+		Deadline: approveEpoch.Add(7 * time.Second)}
+	s.Update(logEvents(s, hold), w)
+
+	view := ansi.Strip(w.View().Content)
+	assert.Contains(t, view, "? proxy held.com:443 held · waiting for a decision (7s)")
+	assert.NotContains(t, view, "domain not in allowlist")
+
+	clock.now = clock.now.Add(2 * time.Second)
+	assert.Contains(t, ansi.Strip(w.View().Content), "held · waiting for a decision (5s)")
+
+	s.Update(feedMsg{from: s, batch: feedBatch{Events: []proxy.Event{{Type: proxy.EventHoldEnd,
+		HoldEnd: proxy.HoldEnd{ID: 1, HostKey: hold.HostKey(), Outcome: proxy.HoldAllowed}}}}}, w)
+	view = ansi.Strip(w.View().Content)
+	assert.Contains(t, view, "? proxy held.com:443 held · allowed")
+	assert.NotContains(t, view, "waiting")
+
+	t.Run("outcomes", func(t *testing.T) {
+		tests := []struct {
+			outcome proxy.HoldOutcome
+			want    string
+		}{
+			{proxy.HoldDenied, "held · denied"},
+			{proxy.HoldTimeout, "held · timed out"},
+			{proxy.HoldAbandoned, "held · request gone"},
+			{proxy.HoldUnwatched, "held · nobody watching"},
+		}
+		for _, tt := range tests {
+			t.Run(string(tt.outcome), func(t *testing.T) {
+				e := hold
+				e.Outcome = tt.outcome
+				var held heldTargets
+				held.Apply(proxy.Event{Type: proxy.EventLog, Log: e})
+				line := ansi.Strip(renderLogLine(e, statusNone, false, &held, approveEpoch))
+				assert.Contains(t, line, tt.want)
+			})
+		}
+	})
+
+	t.Run("reads timed out once the deadline passed", func(t *testing.T) {
+		var held heldTargets
+		held.Apply(proxy.Event{Type: proxy.EventLog, Log: hold})
+		line := ansi.Strip(renderLogLine(hold, statusNone, false, &held, hold.Deadline))
+		assert.Contains(t, line, "held · timed out")
+	})
+}
+
+// openHoldEntry is a hold entry that stays open for the rest of the test.
+func openHoldEntry(id uint64) proxy.LogEntry {
+	return proxy.LogEntry{ID: id, Time: time.Now(), Domain: "held.com", Port: "443", Action: proxy.ActionHold,
+		Source: proxy.SourceProxy, Reason: "domain not in allowlist", Code: proxy.BlockNotAllowlisted,
+		Deadline: time.Now().Add(time.Hour)}
+}
+
+func TestMonitor_DenyHeldEntry(t *testing.T) {
+	heldKey := proxy.HostKey{Source: proxy.SourceProxy, Domain: "held.com", Port: "443"}
+	n := tea.KeyPressMsg{Code: 'n', Text: "n"}
+
+	t.Run("log line", func(t *testing.T) {
+		ep := newEventsProxy(t)
+		s, w := newPollingTestScreen(t, ep.client, nil)
+		s.tab = tabLogs
+		d := newAsyncDriver(t, s, w)
+		d.send(tui.TickMsg{})
+		ep.addHold()
+		d.until(func() bool { return len(s.logs.items) == 1 })
+
+		d.send(keyPress("k"))
+		assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "deny"}},
+			s.FooterKeys(w)[:3])
+
+		d.send(n)
+		d.until(func() bool { return w.Flash() != "" })
+		assert.Equal(t, "denied held.com:443", w.Flash())
+		assert.True(t, ep.api.Denied().Denied(heldKey.Target()))
+	})
+
+	t.Run("host row", func(t *testing.T) {
+		tp := newTestProxy(t)
+		s, w := newPollingTestScreen(t, tp.client, nil)
+		s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{
+			mkHost("held.com", "443", proxy.SourceProxy, time.Now(), 0, 1, proxy.ActionBlock),
+		}}, w)
+		s.Update(logEvents(s, openHoldEntry(1)), w)
+		s.Update(keyPress("j"), w)
+
+		_, cmd := s.Update(n, w)
+		require.NotNil(t, cmd)
+		for _, msg := range runCmd(cmd) {
+			s.Update(msg, w)
+		}
+		assert.Equal(t, "denied held.com:443", w.Flash())
+		assert.True(t, tp.api.Denied().Denied(heldKey.Target()))
+	})
+
+	t.Run("error flashes longer", func(t *testing.T) {
+		tp := newTestProxy(t)
+		tp.client.baseURL = "http://127.0.0.1:1"
+		s, w := newPollingTestScreen(t, tp.client, nil)
+		clock := &stepClock{now: time.Now()}
+		w.SetClock(clock)
+		s.tab = tabLogs
+		s.Update(logEvents(s, openHoldEntry(1)), w)
+		s.Update(keyPress("k"), w)
+
+		_, cmd := s.Update(n, w)
+		require.NotNil(t, cmd)
+		for _, msg := range runCmd(cmd) {
+			s.Update(msg, w)
+		}
+		assert.Contains(t, w.Flash(), "deny held.com:443 failed: ")
+		clock.now = clock.now.Add(allowErrorFlash - time.Second)
+		assert.Contains(t, w.Flash(), "deny held.com:443 failed: ")
+	})
+}
+
+func TestMonitor_NIgnoredOnNonHeld(t *testing.T) {
+	ended := openHoldEntry(1)
+	ended.Outcome = proxy.HoldAllowed
+	expired := openHoldEntry(1)
+	expired.Deadline = time.Now().Add(-time.Second)
+	block := proxy.LogEntry{ID: 1, Domain: "held.com", Port: "443", Action: proxy.ActionBlock,
+		Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted}
+	tests := []struct {
+		name  string
+		entry proxy.LogEntry
+	}{
+		{"block line", block},
+		{"ended hold", ended},
+		{"hold past its deadline", expired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests requestLog
+			s, w := newPollingTestScreen(t, fakeProxyClient(t, &requests, http.StatusOK), nil)
+			s.tab = tabLogs
+			s.Update(logEvents(s, tt.entry), w)
+			s.Update(keyPress("k"), w)
+			assert.NotContains(t, footerKeyDescs(s.FooterKeys(w)), "deny")
+
+			_, cmd := s.Update(tea.KeyPressMsg{Code: 'n', Text: "n"}, w)
+			assert.Nil(t, cmd)
+			assert.Empty(t, w.Flash())
+			assert.NotContains(t, requests.all(), "/deny")
+		})
+	}
+
+	t.Run("host row without a hold", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, nil, nil)
+		s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{
+			mkHost("held.com", "443", proxy.SourceProxy, time.Now(), 0, 1, proxy.ActionBlock),
+		}}, w)
+		s.Update(keyPress("j"), w)
+		_, cmd := s.Update(tea.KeyPressMsg{Code: 'n', Text: "n"}, w)
+		assert.Nil(t, cmd)
+	})
+}
+
+func TestMonitorScreen_LeavingStopsTheFeed(t *testing.T) {
+	waitClosed := func(t *testing.T, feed <-chan feedBatch) {
+		t.Helper()
+		timeout := time.After(5 * time.Second)
+		for {
+			select {
+			case _, ok := <-feed:
+				if !ok {
+					return
+				}
+			case <-timeout:
+				require.FailNow(t, "feed still open")
+			}
+		}
+	}
+	tests := []struct {
+		name string
+		key  tea.KeyPressMsg
+	}{
+		{"q", tea.KeyPressMsg{Code: 'q', Text: "q"}},
+		{"ctrl+c", tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}},
+		{"esc", tea.KeyPressMsg{Code: tea.KeyEscape}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ep := newEventsProxy(t)
+			s, w := newPollingTestScreen(t, ep.client, func() tui.Screen { return &testStubScreen{} })
+			s.Update(tui.TickMsg{}, w)
+			require.NotNil(t, s.feed)
+			s.Update(tt.key, w)
+			waitClosed(t, s.feed)
+		})
+	}
+
+	t.Run("disconnect", func(t *testing.T) {
+		ep := newEventsProxy(t)
+		s, w := newPollingTestScreen(t, ep.client, func() tui.Screen { return &testStubScreen{} })
+		s.Update(tui.TickMsg{}, w)
+		require.NotNil(t, s.feed)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: errors.New("connection refused")}}, w)
+		for range disconnectGraceTicks {
+			s.Update(tui.TickMsg{}, w)
+		}
+		waitClosed(t, s.feed)
+	})
 }
 
 func TestMonitorScreen_Tabs(t *testing.T) {
@@ -638,13 +1043,12 @@ func TestMonitorScreen_HostsPolling(t *testing.T) {
 	})
 
 	t.Run("unsupported proxy falls back to logs", func(t *testing.T) {
-		var requests []string
+		var requests requestLog
 		s, w := newPollingTestScreen(t, fakeProxyClient(t, &requests, http.StatusNotFound), func() tui.Screen { return &testStubScreen{} })
 
-		_, cmd := s.Update(tui.TickMsg{}, w)
-		for _, msg := range runCmd(cmd) {
-			s.Update(msg, w)
-		}
+		d := newAsyncDriver(t, s, w)
+		d.send(tui.TickMsg{})
+		d.until(func() bool { return s.hosts.unsupported && len(s.logs.items) == 1 })
 		assert.Equal(t, tabLogs, s.tab)
 		assert.Equal(t, -1, s.disconnectTick)
 		assert.NoError(t, w.Err())
@@ -652,13 +1056,12 @@ func TestMonitorScreen_HostsPolling(t *testing.T) {
 		s.Update(tea.KeyPressMsg{Code: tea.KeyTab}, w)
 		assert.Contains(t, w.View().Content, "proxy does not support the hosts view, restart the session")
 
-		requests = nil
+		requests.reset()
 		for range 8 {
 			_, cmd := s.Update(tui.TickMsg{}, w)
 			runCmd(cmd)
 		}
-		assert.NotContains(t, requests, "/hosts")
-		assert.Contains(t, requests, "/logs?after=11")
+		assert.NotContains(t, requests.all(), "/hosts")
 	})
 
 	t.Run("hosts poll error that is not a connection failure stays on hosts tab", func(t *testing.T) {
@@ -848,7 +1251,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(logsPollResultMsg{from: s, err: fmt.Errorf("connection refused")}, w)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: fmt.Errorf("connection refused")}}, w)
 		assert.Equal(t, 0, s.disconnectTick, "disconnectTick should be 0 on first error")
 	})
 
@@ -857,7 +1260,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 		stub := &testStubScreen{}
 		s.onBack = func() tui.Screen { return stub }
 
-		s.Update(logsPollResultMsg{from: s, err: fmt.Errorf("connection refused")}, w)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: fmt.Errorf("connection refused")}}, w)
 
 		// Simulate 11 ticks — should stay on monitor.
 		for range 11 {
@@ -873,7 +1276,7 @@ func TestMonitorScreen_DisconnectTransition(t *testing.T) {
 	t.Run("no transition without onBack", func(t *testing.T) {
 		s, w := makeTestSetup(5)
 		// onBack is nil.
-		s.Update(logsPollResultMsg{from: s, err: fmt.Errorf("connection refused")}, w)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: fmt.Errorf("connection refused")}}, w)
 
 		for range 20 {
 			screen, _ := s.Update(tui.TickMsg{}, w)
@@ -900,7 +1303,7 @@ func TestMonitorScreen_DisconnectFooterMessage(t *testing.T) {
 	s, w := makeTestSetup(5)
 	s.onBack = func() tui.Screen { return &testStubScreen{} }
 
-	s.Update(logsPollResultMsg{from: s, err: fmt.Errorf("connection refused")}, w)
+	s.Update(feedMsg{from: s, batch: feedBatch{Err: fmt.Errorf("connection refused")}}, w)
 	require.Error(t, w.Err())
 	assert.Contains(t, w.Err().Error(), "test123456")
 	assert.Contains(t, w.Err().Error(), "disconnected")
@@ -927,7 +1330,7 @@ func TestMonitorScreen_OnlyLogsPollTracksConnection(t *testing.T) {
 		stub := &testStubScreen{}
 		s, w := newPollingTestScreen(t, nil, func() tui.Screen { return stub })
 
-		s.Update(logsPollResultMsg{from: s, err: errors.New("GET /logs: 500")}, w)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: errors.New("GET /logs: 500")}}, w)
 		s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{}}, w)
 		assert.Equal(t, 0, s.disconnectTick)
 		require.Error(t, w.Err())
@@ -941,8 +1344,8 @@ func TestMonitorScreen_OnlyLogsPollTracksConnection(t *testing.T) {
 
 	t.Run("logs poll success reconnects", func(t *testing.T) {
 		s, w := newPollingTestScreen(t, nil, func() tui.Screen { return &testStubScreen{} })
-		s.Update(logsPollResultMsg{from: s, err: errors.New("GET /logs: 500")}, w)
-		s.Update(logsPollResultMsg{from: s}, w)
+		s.Update(feedMsg{from: s, batch: feedBatch{Err: errors.New("GET /logs: 500")}}, w)
+		s.Update(feedMsg{from: s}, w)
 		assert.Equal(t, -1, s.disconnectTick)
 		assert.NoError(t, w.Err())
 	})
@@ -958,7 +1361,7 @@ func TestMonitorScreen_AllowResultOrder(t *testing.T) {
 }
 
 func TestMonitorScreen_StaleHostsPollAfterAllow(t *testing.T) {
-	s, w := newPollingTestScreen(t, fakeProxyClient(t, new([]string), http.StatusOK), nil)
+	s, w := newPollingTestScreen(t, fakeProxyClient(t, new(requestLog), http.StatusOK), nil)
 	blocked := mkHost("a.com", "443", proxy.SourceProxy, time.Now(), 0, 1, proxy.ActionBlock)
 	s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{blocked}}, w)
 
@@ -976,37 +1379,31 @@ func TestMonitorScreen_StaleHostsPollAfterAllow(t *testing.T) {
 }
 
 func TestMonitorScreen_HostsPollCadence(t *testing.T) {
-	countPolls := func(s *monitorScreen, w *tui.Window, ticks int) (logs, hosts int) {
+	countPolls := func(s *monitorScreen, w *tui.Window, ticks int) (hosts int) {
 		for range ticks {
 			w.Update(tui.TickMsg{})
-			if s.logsPollInFlight {
-				logs++
-			}
 			if s.hostsPollInFlight {
 				hosts++
 			}
-			s.logsPollInFlight, s.hostsPollInFlight = false, false
+			s.hostsPollInFlight = false
 		}
-		return logs, hosts
+		return hosts
 	}
 	ticksPerSecond := int(time.Second / tui.TickInterval)
 
 	t.Run("every second while shown", func(t *testing.T) {
-		s, w := newPollingTestScreen(t, fakeProxyClient(t, new([]string), http.StatusOK), nil)
-		logs, hosts := countPolls(s, w, 10*ticksPerSecond)
-		assert.Equal(t, logs, hosts)
+		s, w := newPollingTestScreen(t, fakeProxyClient(t, new(requestLog), http.StatusOK), nil)
+		assert.Equal(t, 11, countPolls(s, w, 10*ticksPerSecond), "first tick plus once per second")
 	})
 
 	t.Run("less often while hidden", func(t *testing.T) {
-		s, w := newPollingTestScreen(t, fakeProxyClient(t, new([]string), http.StatusOK), nil)
+		s, w := newPollingTestScreen(t, fakeProxyClient(t, new(requestLog), http.StatusOK), nil)
 		s.tab = tabLogs
-		logs, hosts := countPolls(s, w, 10*ticksPerSecond)
-		assert.Equal(t, 11, logs, "first tick plus once per second")
-		assert.Equal(t, 2, hosts)
+		assert.Equal(t, 2, countPolls(s, w, 10*ticksPerSecond))
 	})
 
 	t.Run("switching to the tab polls at once", func(t *testing.T) {
-		s, w := newPollingTestScreen(t, fakeProxyClient(t, new([]string), http.StatusOK), nil)
+		s, w := newPollingTestScreen(t, fakeProxyClient(t, new(requestLog), http.StatusOK), nil)
 		s.tab = tabLogs
 		_, cmd := s.Update(tea.KeyPressMsg{Code: tea.KeyTab}, w)
 		require.NotNil(t, cmd)
@@ -1039,7 +1436,7 @@ func TestMonitorScreen_LogAllowFollowsHostsTab(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, w := newPollingTestScreen(t, nil, nil)
 			s.Update(hostsPollResultMsg{from: s, hosts: tt.hosts}, w)
-			s.Update(logsPollResultMsg{from: s, entries: []proxy.LogEntry{blockLine}}, w)
+			s.Update(logEvents(s, blockLine), w)
 			s.Update(tea.KeyPressMsg{Code: tea.KeyTab}, w)
 			s.Update(tea.KeyPressMsg{Code: 'j', Text: "j"}, w)
 
@@ -1062,9 +1459,8 @@ func TestMonitorScreen_SelectionTimeout(t *testing.T) {
 		s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{
 			mkHost("a.com", "443", proxy.SourceProxy, time.Now(), 0, 1, proxy.ActionBlock),
 		}}, w)
-		s.Update(logsPollResultMsg{from: s, entries: []proxy.LogEntry{
-			{ID: 1, Domain: "a.com", Port: "443", Action: proxy.ActionBlock, Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted},
-		}}, w)
+		s.Update(logEvents(s, proxy.LogEntry{ID: 1, Domain: "a.com", Port: "443", Action: proxy.ActionBlock,
+			Source: proxy.SourceProxy, Code: proxy.BlockNotAllowlisted}), w)
 		return s, w
 	}
 	ticks := func(s *monitorScreen, w *tui.Window, n int) {
@@ -1097,7 +1493,7 @@ func TestMonitorScreen_SelectionTimeout(t *testing.T) {
 			}
 			return entries
 		}
-		s.Update(logsPollResultMsg{from: s, entries: mkEntries(2, 200)}, w)
+		s.Update(logEvents(s, mkEntries(2, 200)...), w)
 		s.Update(tea.KeyPressMsg{Code: tea.KeyTab}, w)
 		s.Update(tea.KeyPressMsg{Code: tea.KeyPgUp}, w)
 		s.Update(tea.KeyPressMsg{Code: tea.KeyPgUp}, w)
@@ -1107,7 +1503,7 @@ func TestMonitorScreen_SelectionTimeout(t *testing.T) {
 		require.Less(t, offset, len(s.logs.items)-s.logs.cursor.VpHeight, "must be scrolled away from the tail")
 
 		ticks(s, w, 2*selectionTimeoutTicks)
-		s.Update(logsPollResultMsg{from: s, entries: mkEntries(202, 5)}, w)
+		s.Update(logEvents(s, mkEntries(202, 5)...), w)
 
 		after, ok := s.logs.selected()
 		assert.True(t, ok)
@@ -1169,8 +1565,8 @@ func TestLogViewSelection(t *testing.T) {
 		assert.False(t, v.selecting)
 		assert.Equal(t, 8, v.cursor.Offset)
 		assert.Zero(t, v.newCount)
-		assert.NotContains(t, ansi.Strip(v.render(allowState{})), "➔")
-		assert.Contains(t, v.render(allowState{}), "d13.com")
+		assert.NotContains(t, ansi.Strip(v.render(allowState{}, nil, time.Time{})), "➔")
+		assert.Contains(t, v.render(allowState{}, nil, time.Time{}), "d13.com")
 	})
 
 	t.Run("first key selects the newest entry and it stays put", func(t *testing.T) {

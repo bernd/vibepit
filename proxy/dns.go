@@ -80,7 +80,7 @@ func (s *DNSServer) handler() mdns.Handler {
 				Domain: domain,
 				Action: ActionBlock,
 				Source: SourceDNS,
-				Reason: "domain not in allowlist",
+				Reason: reasonNotAllowlisted,
 				Code:   BlockNotAllowlisted,
 			})
 			m := new(mdns.Msg)

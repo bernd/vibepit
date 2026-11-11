@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,7 +143,7 @@ func TestHTTPProxy(t *testing.T) {
 			},
 		}
 
-		result := p.checkRequest("example.com", "443")
+		result := p.checkRequest(context.Background(), "example.com", "443")
 		assert.Equal(t, ActionBlock, result.action)
 		entries := log.Entries()
 		require.NotEmpty(t, entries)
@@ -314,12 +315,181 @@ func TestCheckRequestBlockCode(t *testing.T) {
 				tt.setup(p)
 			}
 
-			result := p.checkRequest(tt.host, tt.port)
+			result := p.checkRequest(context.Background(), tt.host, tt.port)
 			assert.Equal(t, tt.want, result.code)
 
 			entries := log.Entries()
 			require.NotEmpty(t, entries)
 			assert.Equal(t, tt.want, entries[len(entries)-1].Code)
 		})
+	}
+}
+
+// heldProxy starts an HTTP proxy wired to a holds fixture.
+func heldProxy(t *testing.T, timeout time.Duration, watch bool, cidr *CIDRBlocker) (*holdsFixture, *http.Client) {
+	t.Helper()
+	f := newHoldsFixture(t, timeout, watch)
+	p := NewHTTPProxy(f.allowlist, cidr, f.log, DefaultUpstreamDNS)
+	p.SetHolds(f.holds)
+	srv := httptest.NewServer(p.Handler())
+	t.Cleanup(srv.Close)
+	proxyURL, _ := url.Parse(srv.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	return f, client
+}
+
+type heldResult struct {
+	status int
+	body   string
+	err    error
+}
+
+func getAsync(client *http.Client, u string) <-chan heldResult {
+	ch := make(chan heldResult, 1)
+	go func() {
+		resp, err := client.Get(u)
+		if err != nil {
+			ch <- heldResult{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		ch <- heldResult{status: resp.StatusCode, body: string(b)}
+	}()
+	return ch
+}
+
+func waitForHold(t *testing.T, f *holdsFixture) {
+	t.Helper()
+	require.Eventually(t, func() bool { return len(f.holdEntries()) > 0 }, 2*time.Second, 5*time.Millisecond)
+}
+
+func logActions(f *holdsFixture) []Action {
+	var actions []Action
+	for _, e := range f.log.Entries() {
+		actions = append(actions, e.Action)
+	}
+	return actions
+}
+
+func TestHTTPProxy_HeldThenAllowed(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+	backendURL, _ := url.Parse(backend.URL)
+
+	f, client := heldProxy(t, 5*time.Second, true, NewCIDRBlocker(nil, []string{"127.0.0.0/8"}))
+	res := getAsync(client, backend.URL+"/")
+	waitForHold(t, f)
+
+	require.NoError(t, f.allowlist.Add([]string{backendURL.Host}))
+	f.holds.EndAllowed()
+
+	r := <-res
+	require.NoError(t, r.err)
+	assert.Equal(t, http.StatusOK, r.status)
+	assert.Equal(t, "ok", r.body)
+	assert.Equal(t, []Action{ActionHold, ActionAllow}, logActions(f))
+}
+
+func TestHTTPProxy_HeldThenCIDRBlocked(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+	backendURL, _ := url.Parse(backend.URL)
+
+	f, client := heldProxy(t, 5*time.Second, true, NewCIDRBlocker(nil, nil))
+	res := getAsync(client, backend.URL+"/")
+	waitForHold(t, f)
+
+	require.NoError(t, f.allowlist.Add([]string{backendURL.Host}))
+	f.holds.EndAllowed()
+
+	r := <-res
+	require.NoError(t, r.err)
+	assert.Equal(t, http.StatusForbidden, r.status)
+	assert.Contains(t, r.body, "resolves to a blocked IP")
+	entries := f.log.Entries()
+	require.Len(t, entries, 2)
+	assert.Equal(t, ActionHold, entries[0].Action)
+	assert.Equal(t, ActionBlock, entries[1].Action)
+	assert.Equal(t, BlockCIDR, entries[1].Code)
+}
+
+func TestHTTPProxy_HeldCONNECTDenied(t *testing.T) {
+	f, client := heldProxy(t, 5*time.Second, true, NewCIDRBlocker(nil, nil))
+	res := getAsync(client, "https://denied.example:443/")
+	waitForHold(t, f)
+
+	target := Target{Source: SourceProxy, Host: "denied.example", Port: "443"}
+	f.denied.Add(target)
+	f.holds.End(target, HoldDenied)
+
+	r := <-res
+	require.Error(t, r.err)
+	entries := f.log.Entries()
+	require.Len(t, entries, 2)
+	assert.Equal(t, ActionHold, entries[0].Action)
+	assert.Equal(t, ActionBlock, entries[1].Action)
+	assert.Equal(t, BlockNotAllowlisted, entries[1].Code)
+	assert.Equal(t, entries[0].ID, entries[1].HoldID)
+}
+
+func TestHTTPProxy_HoldTimesOut(t *testing.T) {
+	f, client := heldProxy(t, 200*time.Millisecond, true, NewCIDRBlocker(nil, nil))
+	start := time.Now()
+	r := <-getAsync(client, "http://slow.example/")
+	require.NoError(t, r.err)
+	assert.GreaterOrEqual(t, time.Since(start), 200*time.Millisecond)
+	assert.Equal(t, http.StatusForbidden, r.status)
+	assert.Contains(t, r.body, "not in the allowlist")
+	assert.Equal(t, []Action{ActionHold, ActionBlock}, logActions(f))
+	entries := f.log.Entries()
+	assert.Equal(t, entries[0].ID, entries[1].HoldID, "the block names the hold it ended")
+}
+
+func TestHTTPProxy_NoWatcherBlocksImmediately(t *testing.T) {
+	f, client := heldProxy(t, 5*time.Second, false, NewCIDRBlocker(nil, nil))
+	start := time.Now()
+	r := <-getAsync(client, "http://nobody.example/")
+	require.NoError(t, r.err)
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+	assert.Equal(t, http.StatusForbidden, r.status)
+	assert.Equal(t, []Action{ActionBlock}, logActions(f))
+	assert.Zero(t, f.log.Entries()[0].HoldID)
+}
+
+func TestHTTPProxy_AbandonedHoldNotLogged(t *testing.T) {
+	f, client := heldProxy(t, 5*time.Second, true, NewCIDRBlocker(nil, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://gone.example/", nil)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+		}
+		done <- err
+	}()
+	waitForHold(t, f)
+	cancel()
+	require.Error(t, <-done)
+
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-f.events:
+			if e.Type == EventHoldEnd {
+				assert.Equal(t, HoldAbandoned, e.HoldEnd.Outcome)
+				assert.Equal(t, []Action{ActionHold}, logActions(f))
+				return
+			}
+		case <-timeout:
+			require.FailNow(t, "no abandoned hold-end event")
+		}
 	}
 }

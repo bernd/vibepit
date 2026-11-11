@@ -476,6 +476,7 @@ func TestMergedConfigRoundTripsToProxyConfig(t *testing.T) {
 		ProxyPort:      54321,
 		ControlAPIPort: 54322,
 		SSHForwardAddr: "172.20.0.3:2222",
+		HoldTimeout:    "7s",
 	}
 
 	data, err := json.Marshal(merged)
@@ -496,6 +497,7 @@ func TestMergedConfigRoundTripsToProxyConfig(t *testing.T) {
 	assert.Equal(t, merged.ProxyPort, pc.ProxyPort, "proxy-port")
 	assert.Equal(t, merged.ControlAPIPort, pc.ControlAPIPort, "control-api-port")
 	assert.Equal(t, merged.SSHForwardAddr, pc.SSHForwardAddr, "ssh-forward-addr")
+	assert.Equal(t, merged.HoldTimeout, pc.HoldTimeout, "hold-timeout")
 }
 
 func TestMemoryLimit(t *testing.T) {
@@ -676,4 +678,41 @@ func TestWriteProjectConfig(t *testing.T) {
 	require.NoError(t, loadFile(path, cfg))
 	assert.Equal(t, []string{"pkg-node"}, cfg.Presets)
 	assert.Contains(t, string(updated), "# allow-http:")
+}
+
+func TestMergeHoldTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		global  string
+		project string
+		want    string
+		wantErr bool
+	}{
+		{"default", "", "", "10s", false},
+		{"global", "hold-timeout: 5s\n", "", "5s", false},
+		{"project overrides global", "hold-timeout: 5s\n", "hold-timeout: 20s\n", "20s", false},
+		{"integer zero", "", "hold-timeout: 0\n", "0", false},
+		{"invalid", "", "hold-timeout: abc\n", "", true},
+		{"negative", "", "hold-timeout: -1s\n", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			globalPath := filepath.Join(dir, "global.yaml")
+			projectPath := filepath.Join(dir, "project.yaml")
+			require.NoError(t, os.WriteFile(globalPath, []byte(tt.global), 0o644))
+			require.NoError(t, os.WriteFile(projectPath, []byte(tt.project), 0o644))
+
+			cfg, err := Load(globalPath, projectPath)
+			require.NoError(t, err)
+			merged, err := cfg.Merge(nil, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "hold-timeout")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, merged.HoldTimeout)
+		})
+	}
 }

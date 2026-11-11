@@ -38,11 +38,31 @@ type ProxyConfig struct {
 	ControlAPIPort int      `json:"control-api-port"`
 	DNSPort        int      `json:"dns-port"`
 	SSHForwardAddr string   `json:"ssh-forward-addr,omitempty"`
+	HoldTimeout    string   `json:"hold-timeout,omitempty"`
 }
 
 // Server runs the HTTP proxy, DNS server, and control API.
 type Server struct {
 	config ProxyConfig
+	// holdTimeout is how long a blocked request waits for approval. Zero
+	// means no holding, which is what configs without the key (tests,
+	// older CLIs) get.
+	holdTimeout time.Duration
+}
+
+// ParseHoldTimeout parses a hold-timeout setting. Empty means no holding.
+func ParseHoldTimeout(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("hold-timeout: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("hold-timeout: must not be negative, got %q", s)
+	}
+	return d, nil
 }
 
 func NewServer(configPath string) (*Server, error) {
@@ -60,7 +80,12 @@ func NewServer(configPath string) (*Server, error) {
 		cfg.UpstreamDNS = DefaultUpstreamDNS
 	}
 
-	return &Server{config: cfg}, nil
+	hold, err := ParseHoldTimeout(cfg.HoldTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Server{config: cfg, holdTimeout: hold}, nil
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -78,6 +103,12 @@ func (s *Server) Run(ctx context.Context) error {
 	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.UpstreamDNS)
 	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.UpstreamDNS)
 	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
+
+	hub, holds := WireEvents(log, s.holdTimeout, controlAPI.Denied(), func(t Target) bool {
+		return allowlist.Allows(t.Host, t.Port)
+	})
+	controlAPI.SetEvents(hub, holds)
+	httpProxy.SetHolds(holds)
 
 	// Configure host.vibepit support.
 	if proxyIP := net.ParseIP(s.config.ProxyIP); proxyIP != nil {

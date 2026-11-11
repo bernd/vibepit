@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -285,10 +287,192 @@ func TestLogEntryAllowable(t *testing.T) {
 		{"blocked IP", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockCIDR}, false},
 		{"resolve failed", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionBlock, Code: BlockResolutionFailed}, false},
 		{"allowed", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionAllow}, false},
+		{"hold", LogEntry{Domain: "a.com", Port: "443", Source: SourceProxy, Action: ActionHold, Code: BlockNotAllowlisted}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, tt.entry.Allowable())
 		})
 	}
+}
+
+func TestLogBuffer_HoldEntriesDontCountInHosts(t *testing.T) {
+	buf := NewLogBuffer(10)
+	hold := LogEntry{Time: time.Now(), Domain: "docs.example.com", Port: "443", Action: ActionHold, Source: SourceProxy, Code: BlockNotAllowlisted}
+
+	buf.Add(hold)
+	assert.Empty(t, buf.Hosts())
+
+	block := hold
+	block.Action = ActionBlock
+	buf.Add(block)
+
+	hosts := buf.Hosts()
+	require.Len(t, hosts, 1)
+	assert.Equal(t, 1, hosts[0].Blocked)
+	assert.Equal(t, 0, hosts[0].Allowed)
+	assert.Equal(t, ActionBlock, hosts[0].LastAction)
+}
+
+func TestLogBuffer_AddReturnsID(t *testing.T) {
+	buf := NewLogBuffer(10)
+	assert.Equal(t, uint64(1), buf.Add(LogEntry{Domain: "a.com"}))
+	assert.Equal(t, uint64(2), buf.Add(LogEntry{Domain: "b.com"}))
+}
+
+func TestLogBuffer_OnAdd(t *testing.T) {
+	buf := NewLogBuffer(10)
+	var got []LogEntry
+	buf.OnAdd(func(e LogEntry) { got = append(got, e) })
+
+	buf.Add(LogEntry{Domain: "a.com"})
+	buf.Add(LogEntry{Domain: "b.com"})
+
+	require.Len(t, got, 2)
+	assert.Equal(t, uint64(1), got[0].ID)
+	assert.Equal(t, "a.com", got[0].Domain)
+	assert.Equal(t, uint64(2), got[1].ID)
+}
+
+func TestLogBuffer_OnAddInIDOrder(t *testing.T) {
+	t.Run("slow hook keeps ID order", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		entered := make(chan struct{})
+		var ids []uint64
+		buf.OnAdd(func(e LogEntry) {
+			ids = append(ids, e.ID)
+			if e.ID == 1 {
+				close(entered)
+				time.Sleep(50 * time.Millisecond)
+			}
+		})
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); buf.Add(LogEntry{Domain: "a.com"}) }()
+		go func() { defer wg.Done(); <-entered; buf.Add(LogEntry{Domain: "b.com"}) }()
+		wg.Wait()
+
+		assert.Equal(t, []uint64{1, 2}, ids)
+	})
+
+	t.Run("concurrent adds", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		var ids []uint64
+		buf.OnAdd(func(e LogEntry) { ids = append(ids, e.ID) })
+
+		var wg sync.WaitGroup
+		for range 50 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for range 20 {
+					buf.Add(LogEntry{Domain: "a.com"})
+				}
+			}()
+		}
+		wg.Wait()
+
+		require.Len(t, ids, 1000)
+		for i := 1; i < len(ids); i++ {
+			require.Greater(t, ids[i], ids[i-1])
+		}
+	})
+}
+
+func TestLogEntry_HoldJSON(t *testing.T) {
+	t.Run("zero values omitted", func(t *testing.T) {
+		b, err := json.Marshal(LogEntry{Domain: "a.com", Action: ActionHold})
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), "deadline")
+		assert.NotContains(t, string(b), "outcome")
+	})
+
+	t.Run("set values round-trip", func(t *testing.T) {
+		deadline := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		b, err := json.Marshal(LogEntry{Domain: "a.com", Action: ActionHold, Deadline: deadline, Outcome: HoldAllowed})
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"deadline"`)
+		assert.Contains(t, string(b), `"outcome":"allowed"`)
+
+		var got LogEntry
+		require.NoError(t, json.Unmarshal(b, &got))
+		assert.True(t, deadline.Equal(got.Deadline))
+		assert.Equal(t, HoldAllowed, got.Outcome)
+	})
+}
+
+func TestLogBuffer_HistoryBoundary(t *testing.T) {
+	t.Run("empty buffer", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		e, last := buf.TailAt(5)
+		assert.Empty(t, e)
+		assert.Equal(t, uint64(0), last)
+		e, last = buf.EntriesAfterAt(0)
+		assert.Empty(t, e)
+		assert.Equal(t, uint64(0), last)
+	})
+
+	buf := NewLogBuffer(200)
+	for range 100 {
+		buf.Add(LogEntry{Domain: "a.com"})
+	}
+
+	t.Run("TailAt", func(t *testing.T) {
+		e, last := buf.TailAt(0)
+		assert.Empty(t, e)
+		assert.Equal(t, uint64(100), last)
+
+		e, last = buf.TailAt(2)
+		require.Len(t, e, 2)
+		assert.Equal(t, uint64(99), e[0].ID)
+		assert.Equal(t, uint64(100), e[1].ID)
+		assert.Equal(t, uint64(100), last)
+	})
+
+	t.Run("EntriesAfterAt", func(t *testing.T) {
+		e, last := buf.EntriesAfterAt(98)
+		require.Len(t, e, 2)
+		assert.Equal(t, uint64(99), e[0].ID)
+		assert.Equal(t, uint64(100), e[1].ID)
+		assert.Equal(t, uint64(100), last)
+	})
+}
+
+func TestLogBuffer_SetHoldOutcome(t *testing.T) {
+	t.Run("sets outcome on hold entry", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		hookCalls := 0
+		buf.OnAdd(func(LogEntry) { hookCalls++ })
+		id := buf.Add(LogEntry{Domain: "a.com", Action: ActionHold})
+
+		assert.True(t, buf.SetHoldOutcome(id, HoldAllowed))
+		assert.Equal(t, HoldAllowed, buf.EntriesAfter(0)[0].Outcome)
+		assert.Equal(t, HoldAllowed, buf.Tail(1)[0].Outcome)
+		assert.Equal(t, 1, hookCalls)
+	})
+
+	t.Run("false for block entry", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		id := buf.Add(LogEntry{Domain: "a.com", Action: ActionBlock})
+		assert.False(t, buf.SetHoldOutcome(id, HoldDenied))
+		assert.Equal(t, HoldNone, buf.Tail(1)[0].Outcome)
+	})
+
+	t.Run("false for unknown ID", func(t *testing.T) {
+		buf := NewLogBuffer(10)
+		buf.Add(LogEntry{Domain: "a.com", Action: ActionHold})
+		assert.False(t, buf.SetHoldOutcome(0, HoldDenied))
+		assert.False(t, buf.SetHoldOutcome(2, HoldDenied))
+	})
+
+	t.Run("false for overwritten entry", func(t *testing.T) {
+		buf := NewLogBuffer(3)
+		first := buf.Add(LogEntry{Domain: "a.com", Action: ActionHold})
+		for range 3 {
+			buf.Add(LogEntry{Domain: "b.com", Action: ActionHold})
+		}
+		assert.False(t, buf.SetHoldOutcome(first, HoldTimeout))
+		assert.True(t, buf.SetHoldOutcome(first+3, HoldTimeout))
+	})
 }

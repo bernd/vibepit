@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,18 +43,22 @@ const (
 	tabLogs
 )
 
-// monitorScreen implements tui.Screen for the monitor. It owns polling and
-// allow state, and delegates rendering to the hosts and log tabs.
+// monitorScreen implements tui.Screen for the monitor. It owns the feed,
+// polling and allow state, and delegates rendering to the hosts and log tabs.
 type monitorScreen struct {
-	session           *SessionInfo
-	client            *ControlClient
-	onBack            func() tui.Screen
-	tab               monitorTab
-	allows            allowState
-	hosts             *hostsView
-	logs              *logView
+	session *SessionInfo
+	client  *ControlClient
+	onBack  func() tui.Screen
+	tab     monitorTab
+	allows  allowState
+	hosts   *hostsView
+	logs    *logView
+	// held is this screen's own: hold IDs start over when a proxy restarts,
+	// so another session's holds must never leak into it.
+	held              heldTargets
+	feed              <-chan feedBatch
+	stopFeed          context.CancelFunc
 	hostsPollInFlight bool
-	logsPollInFlight  bool
 	firstTickSeen     bool
 	disconnectTick    int    // -1 = connected, 0+ = ticks since disconnect
 	allowGen          uint64 // counts successful allows to spot stale host polls
@@ -76,11 +81,11 @@ func newMonitorScreen(session *SessionInfo, client *ControlClient, onBack func()
 // screen (disconnect, back to the session list, open another session), and
 // its result must not reach the next monitor.
 
-// logsPollResultMsg is returned by async log polling.
-type logsPollResultMsg struct {
-	from    *monitorScreen
-	entries []proxy.LogEntry
-	err     error
+// feedMsg delivers one feed batch. closed reports the feed has ended.
+type feedMsg struct {
+	from   *monitorScreen
+	batch  feedBatch
+	closed bool
 }
 
 // hostsPollResultMsg is returned by async host stats polling.
@@ -92,6 +97,7 @@ type hostsPollResultMsg struct {
 }
 
 func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
+	s.closeFeed()
 	if s.client != nil {
 		s.client.Close()
 	}
@@ -99,20 +105,52 @@ func (s *monitorScreen) transitionBack(w *tui.Window) tui.Screen {
 	return s.onBack()
 }
 
-// pollLogsCmd fetches a recent tail on first load and every newer entry
-// afterwards, so a burst between polls cannot be cut off.
-func (s *monitorScreen) pollLogsCmd() tea.Cmd {
-	loaded, cursor := s.logs.loaded, s.logs.pollCursor
-	return func() tea.Msg {
-		var entries []proxy.LogEntry
-		var err error
-		if loaded {
-			entries, err = s.client.LogsAfter(cursor)
-		} else {
-			entries, err = s.client.Logs()
-		}
-		return logsPollResultMsg{from: s, entries: entries, err: err}
+// openFeed starts the feed with the recent tail, so the tail and the live
+// entries after it arrive without a gap, and returns the wait for its
+// first batch.
+func (s *monitorScreen) openFeed() tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.stopFeed = cancel
+	s.feed = startFeed(ctx, s.client, proxy.TailSize, pollInterval)
+	return s.waitFeed()
+}
+
+// closeFeed ends the feed. An open stream makes the proxy hold requests,
+// so it must not outlive the monitor.
+func (s *monitorScreen) closeFeed() {
+	if s.stopFeed != nil {
+		s.stopFeed()
 	}
+}
+
+func (s *monitorScreen) waitFeed() tea.Cmd {
+	feed := s.feed
+	return func() tea.Msg {
+		b, ok := <-feed
+		return feedMsg{from: s, batch: b, closed: !ok}
+	}
+}
+
+// applyFeed folds events into the hold table and appends their log lines.
+// A hold-open event has no line of its own; it only marks its host as held.
+func (s *monitorScreen) applyFeed(events []proxy.Event, now time.Time) {
+	var entries []proxy.LogEntry
+	for _, e := range events {
+		s.held.Apply(e)
+		if e.Type == proxy.EventLog {
+			entries = append(entries, e.Log)
+		}
+	}
+	s.logs.appendEntries(entries)
+	s.hosts.refresh(&s.held, now)
+}
+
+// resetFeedState drops what the screen keeps by log or hold ID once the
+// feed reached a new proxy, whose IDs start over and would collide.
+func (s *monitorScreen) resetFeedState(now time.Time) {
+	s.held = heldTargets{}
+	s.logs.clear()
+	s.hosts.merge(&s.held, now)
 }
 
 // pollHosts starts a hosts poll unless one is in flight or cannot succeed.
@@ -132,7 +170,7 @@ func listHeight(w *tui.Window) int {
 	return max(w.VpHeight()-monitorTabLines, 1)
 }
 
-// connectionLost is only driven by the logs poll. The hosts poll is heavier
+// connectionLost is only driven by the feed. The hosts poll is heavier
 // and may time out on a large table while the session is fine, so its
 // failures stay on the HOSTS tab.
 func (s *monitorScreen) connectionLost(w *tui.Window, err error) {
@@ -176,12 +214,29 @@ func (s *monitorScreen) clearSelection() bool {
 // entryTarget lets a log line's allow keys act on its host as HOSTS shows
 // it, so both tabs agree when the host was allowed outside this monitor. A
 // host missing from the table (evicted, or an older proxy) falls back to
-// the line itself.
-func (s *monitorScreen) entryTarget(e proxy.LogEntry) allowTarget {
+// the line itself. The line of an open hold acts on the hold.
+func (s *monitorScreen) entryTarget(e proxy.LogEntry, now time.Time) allowTarget {
+	if s.held.OpenEntry(e, now) {
+		return s.allows.forHeld(e.HostKey())
+	}
 	if i := s.hosts.indexOf(e.HostKey()); i >= 0 {
 		return s.allows.forHost(s.hosts.hosts[i])
 	}
 	return s.allows.forEntry(e)
+}
+
+// heldSelection returns the host of the selected log line or host row when
+// the proxy is holding requests for it.
+func (s *monitorScreen) heldSelection(now time.Time) (proxy.HostKey, bool) {
+	if s.tab == tabLogs {
+		e, ok := s.logs.selected()
+		return e.HostKey(), ok && s.held.OpenEntry(e, now)
+	}
+	h, ok := s.hosts.selected()
+	if !ok {
+		return proxy.HostKey{}, false
+	}
+	return h.HostKey, s.held.Held(h.HostKey, now)
 }
 
 func (s *monitorScreen) allowSelected(w *tui.Window, save bool) tea.Cmd {
@@ -191,7 +246,7 @@ func (s *monitorScreen) allowSelected(w *tui.Window, save bool) tea.Cmd {
 			w.SetFlash("select an entry first")
 			return nil
 		}
-		return s.requestAllow(w, s.entryTarget(e), save)
+		return s.requestAllow(w, s.entryTarget(e, w.Now()), save)
 	}
 	if s.hosts.unsupported {
 		return nil
@@ -200,6 +255,9 @@ func (s *monitorScreen) allowSelected(w *tui.Window, save bool) tea.Cmd {
 	if !ok {
 		w.SetFlash("select a host first")
 		return nil
+	}
+	if s.held.Held(h.HostKey, w.Now()) {
+		return s.requestAllow(w, s.allows.forHeld(h.HostKey), save)
 	}
 	return s.requestAllow(w, s.allows.forHost(h), save)
 }
@@ -219,6 +277,8 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			}
 		case "a", "A":
 			return s, s.allowSelected(w, msg.String() == "A")
+		case "n":
+			return s, s.denySelected(w)
 		case "esc":
 			if s.clearSelection() {
 				break
@@ -227,6 +287,7 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 				return s.transitionBack(w), nil
 			}
 		case "q", "ctrl+c":
+			s.closeFeed()
 			return s, tea.Quit
 		default:
 			if s.tab == tabLogs {
@@ -246,17 +307,32 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		}
 		s.handleAllowResult(msg, w)
 
-	case logsPollResultMsg:
+	case denyResultMsg:
 		if msg.from != s {
 			break
 		}
-		s.logsPollInFlight = false
-		if msg.err != nil {
-			s.connectionLost(w, msg.err)
+		s.handleDenyResult(msg, w)
+
+	case feedMsg:
+		if msg.from != s || msg.closed {
 			break
 		}
-		s.connected(w)
-		s.logs.appendEntries(msg.entries)
+		switch {
+		case errors.Is(msg.batch.Err, ErrUnsupportedEndpoint):
+			// A proxy started by an older vibepit has no event stream. It's
+			// reachable, so the hosts tab still works.
+			s.logs.unsupported = true
+			s.connected(w)
+		case msg.batch.Err != nil:
+			s.connectionLost(w, msg.batch.Err)
+		case msg.batch.Reset:
+			s.resetFeedState(w.Now())
+		case len(msg.batch.Events) == 0:
+			s.connected(w)
+		default:
+			s.applyFeed(msg.batch.Events, w.Now())
+		}
+		return s, s.waitFeed()
 
 	case hostsPollResultMsg:
 		if msg.from != s {
@@ -278,12 +354,13 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			// A snapshot taken before an allow finished would show the
 			// host as blocked again until the next poll.
 			if msg.gen == s.allowGen {
-				s.hosts.setHosts(msg.hosts)
+				s.hosts.setHosts(msg.hosts, &s.held, w.Now())
 			}
 		}
 
 	case tui.TickMsg:
 		s.idleTicks++
+		s.hosts.refresh(&s.held, w.Now()) // deadlines pass without an event
 		if s.idleTicks >= selectionTimeoutTicks {
 			s.hosts.selectionExpired()
 		}
@@ -299,15 +376,14 @@ func (s *monitorScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 		due := w.IntervalElapsed(pollInterval) || !s.firstTickSeen
 		s.firstTickSeen = true
-		if !due || s.client == nil {
+		if s.client == nil {
 			break
 		}
 		var cmds []tea.Cmd
-		if !s.logsPollInFlight {
-			s.logsPollInFlight = true
-			cmds = append(cmds, s.pollLogsCmd())
+		if s.feed == nil {
+			cmds = append(cmds, s.openFeed())
 		}
-		if s.tab == tabHosts || w.IntervalElapsed(hiddenHostsPollInterval) {
+		if due && (s.tab == tabHosts || w.IntervalElapsed(hiddenHostsPollInterval)) {
 			cmds = append(cmds, s.pollHosts())
 		}
 		return s, tea.Batch(cmds...)
@@ -356,9 +432,9 @@ func (s *monitorScreen) renderTabs() string {
 func (s *monitorScreen) View(w *tui.Window) string {
 	var content string
 	if s.tab == tabLogs {
-		content = s.logs.render(s.allows)
+		content = s.logs.render(s.allows, &s.held, w.Now())
 	} else {
-		content = s.hosts.render(s.allows, w.Width(), listHeight(w), w.Now())
+		content = s.hosts.render(s.allows, &s.held, w.Width(), listHeight(w), w.Now())
 	}
 	return s.renderTabs() + "\n" + content
 }
@@ -383,9 +459,14 @@ func (s *monitorScreen) FooterStatus(w *tui.Window) string {
 }
 
 func (s *monitorScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
-	keys, other, cursor := s.hosts.footerKeys(s.allows), "logs", &s.hosts.cursor
+	keys, other, cursor := s.hosts.footerKeys(s.allows, &s.held, w.Now()), "logs", &s.hosts.cursor
 	if s.tab == tabLogs {
-		keys, other, cursor = s.logs.footerKeys(s.entryTarget), "hosts", &s.logs.cursor
+		now := w.Now()
+		keys = s.logs.footerKeys(func(e proxy.LogEntry) allowTarget { return s.entryTarget(e, now) })
+		if _, held := s.heldSelection(now); held {
+			keys = append(keys, tui.FooterKey{Key: "n", Desc: "deny"})
+		}
+		other, cursor = "hosts", &s.logs.cursor
 	}
 	keys = append(keys, tui.FooterKey{Key: "tab", Desc: other})
 

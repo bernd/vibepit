@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +19,7 @@ func testControlClient(t *testing.T, h http.Handler) *ControlClient {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &ControlClient{http: srv.Client(), baseURL: srv.URL}
+	return &ControlClient{http: srv.Client(), stream: srv.Client(), baseURL: srv.URL}
 }
 
 // testProxy is a real control API with empty allowlists, served over
@@ -41,84 +43,6 @@ func newTestProxy(t *testing.T) *testProxy {
 	tp.api = proxy.NewControlAPI(tp.log, nil, tp.http, tp.dns)
 	tp.client = testControlClient(t, tp.api)
 	return tp
-}
-
-func TestControlClient_Logs(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
-	log.Add(proxy.LogEntry{Domain: "b.com", Action: proxy.ActionBlock, Source: proxy.SourceDNS})
-
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL)
-	client := testControlClient(t, api)
-
-	t.Run("returns all entries", func(t *testing.T) {
-		entries, err := client.Logs()
-		require.NoError(t, err)
-		require.Len(t, entries, 2)
-		assert.Equal(t, "a.com", entries[0].Domain)
-		assert.Equal(t, proxy.ActionAllow, entries[0].Action)
-		assert.Equal(t, "b.com", entries[1].Domain)
-		assert.Equal(t, proxy.ActionBlock, entries[1].Action)
-	})
-
-	t.Run("returns empty slice when no logs", func(t *testing.T) {
-		httpAL2, err := proxy.NewHTTPAllowlist(nil)
-		require.NoError(t, err)
-		dnsAL2, err := proxy.NewDNSAllowlist(nil)
-		require.NoError(t, err)
-		emptyAPI := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAL2, dnsAL2)
-		c := testControlClient(t, emptyAPI)
-
-		entries, err := c.Logs()
-		require.NoError(t, err)
-		assert.Empty(t, entries)
-	})
-}
-
-func TestControlClient_LogsAfter(t *testing.T) {
-	log := proxy.NewLogBuffer(100)
-	for range 30 {
-		log.Add(proxy.LogEntry{Domain: "a.com", Action: proxy.ActionAllow, Source: proxy.SourceProxy})
-	}
-
-	httpAL, err := proxy.NewHTTPAllowlist(nil)
-	require.NoError(t, err)
-	dnsAL, err := proxy.NewDNSAllowlist(nil)
-	require.NoError(t, err)
-	api := proxy.NewControlAPI(log, nil, httpAL, dnsAL)
-	client := testControlClient(t, api)
-
-	t.Run("Logs returns last 25 entries for initial request", func(t *testing.T) {
-		entries, err := client.Logs()
-		require.NoError(t, err)
-		require.Len(t, entries, 25)
-		assert.Equal(t, uint64(6), entries[0].ID)
-		assert.Equal(t, uint64(30), entries[24].ID)
-	})
-
-	t.Run("zero cursor returns every entry", func(t *testing.T) {
-		entries, err := client.LogsAfter(0)
-		require.NoError(t, err)
-		require.Len(t, entries, 30)
-	})
-
-	t.Run("returns only new entries after cursor", func(t *testing.T) {
-		entries, err := client.LogsAfter(28)
-		require.NoError(t, err)
-		require.Len(t, entries, 2)
-		assert.Equal(t, uint64(29), entries[0].ID)
-		assert.Equal(t, uint64(30), entries[1].ID)
-	})
-
-	t.Run("returns empty when cursor is current", func(t *testing.T) {
-		entries, err := client.LogsAfter(30)
-		require.NoError(t, err)
-		assert.Empty(t, entries)
-	})
 }
 
 func TestControlClient_Config(t *testing.T) {
@@ -258,6 +182,55 @@ func TestControlClient_CheckAndDeny(t *testing.T) {
 	res, err = client.Check(dnsEntry)
 	require.NoError(t, err)
 	assert.Equal(t, CheckResult{Denied: true}, res)
+
+	other := proxy.Target{Source: proxy.SourceProxy, Host: "b.com", Port: "443"}
+	require.NoError(t, client.DenyTarget(other))
+	res, err = client.Check(proxy.LogEntry{Source: proxy.SourceProxy, Domain: "b.com", Port: "443"})
+	require.NoError(t, err)
+	assert.Equal(t, CheckResult{Denied: true}, res)
+}
+
+func TestControlClient_Events(t *testing.T) {
+	ep := newEventsProxy(t)
+	ep.addEntries(2)
+
+	s, err := ep.client.EventsTail(t.Context(), 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { s.Close() })
+
+	e, err := s.Next()
+	require.NoError(t, err)
+	require.Equal(t, proxy.EventLog, e.Type)
+	assert.Equal(t, uint64(2), e.Log.ID)
+
+	e, err = s.Next()
+	require.NoError(t, err)
+	require.Equal(t, proxy.EventCursor, e.Type)
+	assert.Equal(t, uint64(2), e.Cursor)
+
+	ep.addEntries(1)
+	e, err = s.Next()
+	require.NoError(t, err)
+	require.Equal(t, proxy.EventLog, e.Type)
+	assert.Equal(t, uint64(3), e.Log.ID)
+}
+
+func TestControlClient_EventsUnsupported(t *testing.T) {
+	client := newTestProxy(t).client
+	tests := []struct {
+		name string
+		open func(context.Context) (*EventStream, error)
+	}{
+		{name: "tail", open: func(ctx context.Context) (*EventStream, error) { return client.EventsTail(ctx, 1) }},
+		{name: "after", open: func(ctx context.Context) (*EventStream, error) { return client.EventsAfter(ctx, 1) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.open(t.Context())
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrUnsupportedEndpoint), "got %v", err)
+		})
+	}
 }
 
 func TestControlClient_Hosts(t *testing.T) {
