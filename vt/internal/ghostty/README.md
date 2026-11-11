@@ -20,18 +20,24 @@ fails with `unsupported opcode (SIMD)`.
 
 | Patch | Why | Upstream |
 |---|---|---|
-| `0001-formatter-content-none.patch` | Extras-only formatting (`content_none`) | not yet proposed |
+| `0001-formatter-content-none.patch` | Extras-only formatting (`GHOSTTY_FORMATTER_OPT_CONTENT_NONE`) | not yet proposed |
 | `0002-formatter-origin-mode-without-modes.patch` | Cursor relative to the scroll region under DECOM without the modes extra | not yet proposed |
 | `0003-wasm-max-memory.patch` | `-Dwasm-max-memory` build option for the module's memory limit | not yet proposed |
 
-Delete a patch once an upstream commit includes it. Upstream's version of
+Delete a patch once an upstream commit includes it. Patch 0001 numbers its
+option 1000, outside upstream's sequential range, so a future upstream
+option can't take the value. Upstream's version of
 the origin-mode fix (23c7a3e5a) only applies when the output also restores
 the modes, which vibepit's restores don't ask for, so 0002 keeps the rest.
 
 ## Upgrading
 
 Normally the `ghostty-wasm` workflow does this weekly and opens a PR on
-the `ghostty-wasm-update` branch. It needs "Allow GitHub Actions to create
+the `ghostty-wasm-update` branch. It builds the newest libghostty-vt
+release, the commit of the highest `vt-X.Y.Z` tag, and skips the run when
+that is already pinned. Upstream's `main` is the next minor's development
+branch, so it is never built unless asked for. A manual run takes a commit
+or a `vt-X.Y.Z` tag. It needs "Allow GitHub Actions to create
 and approve pull requests" under Settings → Actions → General → Workflow
 permissions; without it the first run fails at `gh pr create`.
 
@@ -106,9 +112,15 @@ dependency with `curl -LO` (git dependencies with `git clone` at the
 pinned commit), and build again until nothing is missing. It needs
 github.com, deps.files.ghostty.org and codeberg.org.
 
+Zig 0.17.0's fetcher can also crash through the proxy with `General
+protection exception` while it fetches packages in parallel. Unpack every
+dependency first: all `.url`/`.hash` pairs in `build.zig.zon` and
+`pkg/*/build.zig.zon` point to deps.files.ghostty.org.
+
 Zig 0.17 unpacks packages into `zig-pkg/<hash>` in the ghostty checkout,
 and `zig fetch <file>` caches a tarball that unpacks to a different hash,
 so the build then fails with `hash mismatch`. Run `zig fetch <file>` only
 to print the hash, and unpack the archive into `zig-pkg/<hash>` yourself,
-without its single top-level directory (`git archive HEAD` for a git
-dependency).
+without its top-level directory if it has exactly one (`git archive HEAD`
+for a git dependency). Some archives, such as the fonts and dcimgui, have
+several top-level entries; unpack those as they are.

@@ -257,9 +257,9 @@ Five CI workflows under `.github/workflows/`:
 - `pages.yml` -- deploys MkDocs documentation to GitHub Pages when docs content
   or config changes on `main`.
 - `ghostty-wasm.yml` -- weekly and on demand: rebuilds the libghostty-vt
-  `.wasm` at a newer ghostty commit, regenerates its Go translation, runs
-  the feature tests, and opens or updates a PR on `ghostty-wasm-update`.
-  Never pushes to `main`.
+  `.wasm` at the newest release tag (`vt-X.Y.Z`), regenerates its Go
+  translation, runs the feature tests, and opens or updates a PR on
+  `ghostty-wasm-update`. Never pushes to `main`.
 - `release-metadata.yml` -- runs when a release is published: downloads the
   release's `checksums.txt`, generates release metadata under
   `docs/content/releases/` with `.github/scripts/generate-release-metadata.py`,

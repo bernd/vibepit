@@ -2,6 +2,7 @@ package ghostty
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,8 +33,9 @@ func TestMemoryLimitIsBuiltIn(t *testing.T) {
 // Hitting the memory limit must not trap or panic.
 func TestMemoryLimit(t *testing.T) {
 	in := newTerm(t, 200, 60)
-	require.NoError(t, in.TerminalSetPtr(OptScrollbackMaxBytes, 0), "no byte limit")
-	require.NoError(t, in.TerminalSetPtr(OptScrollbackMaxLines, 0), "no line limit")
+	// SIZE_MAX on wasm32. NULL restores the default byte limit.
+	require.NoError(t, in.TerminalSetSize(OptScrollbackMaxBytes, math.MaxUint32), "no byte limit")
+	require.NoError(t, in.TerminalSetSize(OptScrollbackMaxLines, math.MaxUint32), "no line limit")
 
 	// About 15 MiB of input fills the limit, up to the last page or so: a
 	// grow larger than the room left fails as a whole.

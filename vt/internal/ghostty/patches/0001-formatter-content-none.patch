@@ -1,41 +1,80 @@
-Expose ScreenFormatter.Content.none in the C API as content_none, so the
-formatter can emit extras without cell content.
+Add a GHOSTTY_FORMATTER_OPT_CONTENT_NONE formatter option that sets
+TerminalFormatter.content to .none, so the formatter can emit extras
+without cell content.
 
 Upstream: not yet proposed.
 
 diff --git a/include/ghostty/vt/formatter.h b/include/ghostty/vt/formatter.h
-index fd593b139..f5709b5ee 100644
+index ba4a0480e..d00b98555 100644
 --- a/include/ghostty/vt/formatter.h
 +++ b/include/ghostty/vt/formatter.h
-@@ -116,6 +116,9 @@ typedef struct {
-   /** Optional selection to restrict output to a range.
-    *  If NULL, the entire screen is formatted. */
-   const GhosttySelection *selection;
+@@ -131,6 +131,7 @@ typedef uint32_t GhosttyFormatterExtras;
+  * | `GHOSTTY_FORMATTER_OPT_TRIM`      | `bool`                   | `true`                             |
+  * | `GHOSTTY_FORMATTER_OPT_SELECTION` | `GhosttySelection`       | None (the whole screen)            |
+  * | `GHOSTTY_FORMATTER_OPT_EXTRAS`    | `GhosttyFormatterExtras` | `GHOSTTY_FORMATTER_EXTRAS_DEFAULT` |
++ * | `GHOSTTY_FORMATTER_OPT_CONTENT_NONE` | `bool`                | `false`                            |
+  *
+  * Each option lists the type its value points to. To set an option, pass a
+  * pointer to a value of that type. To read one, pass a pointer to a
+@@ -211,6 +212,20 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    */
+   GHOSTTY_FORMATTER_OPT_EXTRAS = 5,
+ 
++  /**
++   * Emit no content, only the requested extras.
++   *
++   * Setting true replaces any selection, and setting a selection afterwards
++   * replaces this option. Setting false or NULL after true formats the
++   * whole screen again. It leaves a selection alone.
++   *
++   * The value is outside upstream's sequential range so that a future
++   * upstream option can't take it.
++   *
++   * Value type: bool. Default: false.
++   */
++  GHOSTTY_FORMATTER_OPT_CONTENT_NONE = 1000,
 +
-+  /** Emit no content, only the requested extras. Overrides selection. */
-+  bool content_none;
- } GhosttyFormatterTerminalOptions;
-
- /**
+   GHOSTTY_FORMATTER_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyFormatterOption;
+ 
 diff --git a/src/terminal/c/formatter.zig b/src/terminal/c/formatter.zig
-index 4ab41cd47..89ba58e38 100644
+index fe7615c80..482a7af4b 100644
 --- a/src/terminal/c/formatter.zig
 +++ b/src/terminal/c/formatter.zig
-@@ -72,6 +72,9 @@ pub const TerminalOptions = extern struct {
-     /// If null, the entire screen is formatted.
-     selection: ?*const CSelection = null,
-
-+    /// Emit no content, only the requested extras. Overrides selection.
-+    content_none: bool = false,
-+
-     /// C: GhosttyFormatterTerminalExtra
-     pub const Extra = extern struct {
-         size: usize = @sizeOf(Extra),
-@@ -152,6 +155,7 @@ fn terminal_new_(
-         .selection = sel.toZig() orelse
-             return error.InvalidValue,
-     };
-+    if (opts.content_none) formatter.content = .none;
-
-     ptr.* = .{
-         .kind = .{ .terminal = formatter },
+@@ -112,6 +112,7 @@ pub const Option = enum(c_int) {
+     trim = 3,
+     selection = 4,
+     extras = 5,
++    content_none = 1000,
+     _,
+ 
+     /// The type that a `set` value or a `get` output points to.
+@@ -119,7 +120,7 @@ pub const Option = enum(c_int) {
+         return switch (self) {
+             .invalid => void,
+             .emit => Format,
+-            .unwrap, .trim => bool,
++            .unwrap, .trim, .content_none => bool,
+             .selection => CSelection,
+             .extras => Extras,
+             _ => void,
+@@ -220,6 +221,11 @@ fn setTyped(
+             extrasToZig(v.*) orelse return .invalid_value
+         else
+             defaults.extra,
++        .content_none => if (value != null and value.?.*) {
++            f.content = .none;
++        } else if (f.content == .none) {
++            f.content = .{ .selection = null };
++        },
+         _ => comptime unreachable,
+     }
+ 
+@@ -262,6 +268,7 @@ fn getTyped(
+             .selection => |sel| sel orelse return .no_value,
+         }),
+         .extras => out.* = extrasFromZig(f.extra),
++        .content_none => out.* = f.content == .none,
+         _ => comptime unreachable,
+     }
+ 

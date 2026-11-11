@@ -2,7 +2,8 @@
 # Opens or updates the ghostty-wasm-update pull request. Never pushes to
 # main. Skips the refresh when someone pushed commits to the branch.
 #
-# Env: GHOSTTY_NEW (commit), STATUS (pass|fail), CATEGORY (failure
+# Env: GHOSTTY_NEW (commit), GHOSTTY_TAG (release tag, empty for a
+# commit given by hand), STATUS (pass|fail), CATEGORY (failure
 # category), GH_TOKEN. Runs on a checkout of main with the new module files
 # in the working tree; the "before" values come from HEAD. Reads
 # bench-old.txt, bench-new.txt and test-output.txt from the working
@@ -11,7 +12,7 @@ set -euo pipefail
 
 branch="ghostty-wasm-update"
 label="ghostty-wasm-failing"
-title="Update libghostty-vt to ${GHOSTTY_NEW:0:12}"
+title="Update libghostty-vt to ${GHOSTTY_TAG:-${GHOSTTY_NEW:0:12}}"
 dir="vt/internal/ghostty/internal/wasmvt"
 wasm="$dir/ghostty-vt.wasm"
 gen="$dir/ghostty_vt.go"
@@ -60,6 +61,9 @@ git push --force origin "$branch"
 
 body="$(mktemp)"
 {
+  if [ -n "${GHOSTTY_TAG:-}" ]; then
+    echo "Release: [${GHOSTTY_TAG}](https://github.com/ghostty-org/ghostty/tree/${GHOSTTY_TAG}) (${GHOSTTY_NEW})"
+  fi
   echo "Upstream: https://github.com/ghostty-org/ghostty/compare/${ghostty_old}...${GHOSTTY_NEW}"
   echo
   echo "| | before | after |"
