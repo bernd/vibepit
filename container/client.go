@@ -60,6 +60,9 @@ const (
 	// pingTimeout bounds each daemon probe, so an unreachable daemon does
 	// not hang every command until the OS gives up on the connection.
 	pingTimeout = 10 * time.Second
+	// removeTimeout bounds cleanup that must outlive a cancelled context. It
+	// is short because Ctrl-C cannot interrupt it.
+	removeTimeout = 5 * time.Second
 )
 
 var (
@@ -570,8 +573,16 @@ func randomSubnet() (netip.Prefix, netip.Addr, error) {
 }
 
 func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
 	_, err := c.docker.NetworkRemove(ctx, networkID, dockerclient.NetworkRemoveOptions{})
 	return err
+}
+
+// cleanupContext returns a context for removing resources that still works
+// after ctx is cancelled (e.g. by Ctrl-C), bounded by removeTimeout.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), removeTimeout)
 }
 
 // ProxyContainerConfig holds the parameters for starting the in-network proxy.
@@ -673,6 +684,17 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 	if err != nil {
 		return "", "", fmt.Errorf("create proxy container: %w", err)
 	}
+	// The caller only cleans up a container it got an ID for, so remove it
+	// here if it cannot be started.
+	fail := func(err error) (string, string, error) {
+		rmCtx, cancel := cleanupContext(ctx)
+		defer cancel()
+		_, rmErr := c.docker.ContainerRemove(rmCtx, resp.ID, dockerclient.ContainerRemoveOptions{Force: true})
+		if rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove proxy container: %w", rmErr))
+		}
+		return "", "", err
+	}
 	// Attach to the isolated vibepit network with the fixed proxy IP so
 	// sandbox containers can use it as DNS/HTTP proxy endpoint.
 	if _, err := c.docker.NetworkConnect(ctx, cfg.NetworkID, dockerclient.NetworkConnectOptions{
@@ -683,10 +705,10 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			},
 		},
 	}); err != nil {
-		return "", "", fmt.Errorf("connect proxy to session network: %w", err)
+		return fail(fmt.Errorf("connect proxy to session network: %w", err))
 	}
 	if _, err := c.docker.ContainerStart(ctx, resp.ID, dockerclient.ContainerStartOptions{}); err != nil {
-		return "", "", fmt.Errorf("start proxy container: %w", err)
+		return fail(fmt.Errorf("start proxy container: %w", err))
 	}
 
 	return resp.ID, portStr, nil
@@ -983,9 +1005,15 @@ func publishedPort(info container.InspectResponse, containerPort string) (int, e
 // Uses a short stop timeout since callers invoke this after the workload
 // has already exited.
 func (c *Client) StopAndRemove(ctx context.Context, containerID string) error {
+	// Separate budgets, so a slow stop cannot starve the remove.
+	stopCtx, cancelStop := cleanupContext(ctx)
+	defer cancelStop()
 	timeout := 2
-	c.docker.ContainerStop(ctx, containerID, dockerclient.ContainerStopOptions{Timeout: &timeout})
-	_, err := c.docker.ContainerRemove(ctx, containerID, dockerclient.ContainerRemoveOptions{Force: true})
+	c.docker.ContainerStop(stopCtx, containerID, dockerclient.ContainerStopOptions{Timeout: &timeout})
+
+	rmCtx, cancelRm := cleanupContext(ctx)
+	defer cancelRm()
+	_, err := c.docker.ContainerRemove(rmCtx, containerID, dockerclient.ContainerRemoveOptions{Force: true})
 	return err
 }
 
