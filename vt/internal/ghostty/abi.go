@@ -21,6 +21,7 @@ const (
 	IOError       Result = -5
 	LimitExceeded Result = -6
 	Rejected      Result = -7
+	Unsupported   Result = -8
 )
 
 var resultNames = map[Result]string{
@@ -32,6 +33,7 @@ var resultNames = map[Result]string{
 	IOError:       "IO_ERROR",
 	LimitExceeded: "LIMIT_EXCEEDED",
 	Rejected:      "REJECTED",
+	Unsupported:   "UNSUPPORTED",
 }
 
 func (r Result) String() string {
@@ -47,11 +49,11 @@ func (r Result) Error() string { return "ghostty: " + r.String() }
 type TerminalOption int32
 
 const (
-	OptWritePty             TerminalOption = 1
-	OptScrollbackMaxBytes   TerminalOption = 27
-	OptScrollbackMaxLines   TerminalOption = 28
-	OptContinuationMaxBytes TerminalOption = 31
-	OptMode                 TerminalOption = 34
+	OptWritePty             TerminalOption = 2
+	OptScrollbackMaxBytes   TerminalOption = 28
+	OptScrollbackMaxLines   TerminalOption = 29
+	OptContinuationMaxBytes TerminalOption = 32
+	OptMode                 TerminalOption = 35
 )
 
 // TerminalData is GhosttyTerminalData.
@@ -93,6 +95,39 @@ const (
 	FormatHTML  FormatterFormat = 2
 )
 
+// FormatterOption is GhosttyFormatterOption.
+type FormatterOption int32
+
+const (
+	FmtOptEmit        FormatterOption = 1
+	FmtOptUnwrap      FormatterOption = 2
+	FmtOptTrim        FormatterOption = 3
+	FmtOptSelection   FormatterOption = 4
+	FmtOptExtras      FormatterOption = 5
+	FmtOptContentNone FormatterOption = 1000 // patches/0001-formatter-content-none.patch
+)
+
+// GHOSTTY_FORMATTER_EXTRA_* bits of GhosttyFormatterExtras. They are
+// defines, so ghostty_type_json doesn't describe them. TestFormatterExtraBits
+// catches a moved bit, and TestFormatterExtrasComplete a new one.
+const (
+	extraPalette         uint32 = 1 << 0
+	extraModes           uint32 = 1 << 1
+	extraScrollingRegion uint32 = 1 << 2
+	extraTabstops        uint32 = 1 << 3
+	extraPwd             uint32 = 1 << 4
+	extraKeyboard        uint32 = 1 << 5
+	extraCursor          uint32 = 1 << 6
+	extraStyle           uint32 = 1 << 7
+	extraHyperlink       uint32 = 1 << 8
+	extraProtection      uint32 = 1 << 9
+	extraKittyKeyboard   uint32 = 1 << 10
+	extraCharsets        uint32 = 1 << 11
+)
+
+// BoundaryGround is GHOSTTY_TERMINAL_BOUNDARY_GROUND.
+const BoundaryGround uint32 = 1 << 0
+
 // PointTag is GhosttyPointTag.
 type PointTag int32
 
@@ -111,7 +146,7 @@ const (
 	RenderDataCursorBlinking    RenderStateData = 12
 )
 
-// CursorVisualStyle is GhosttyRenderStateCursorVisualStyle.
+// CursorVisualStyle is GhosttyCursorStyle.
 type CursorVisualStyle int32
 
 const (
@@ -138,45 +173,24 @@ const (
 	offCoordinateX   = 0
 	offCoordinateY   = 4
 
-	sizeofGridRef  = 12
-	offGridRefSize = 0
-	offGridRefNode = 4 // opaque; GridRef only writes size
-	offGridRefX    = 8
-	offGridRefY    = 10
+	sizeofGridRef  = 8
+	offGridRefNode = 0 // opaque
+	offGridRefX    = 4
+	offGridRefY    = 6
 
-	sizeofSelection       = 32
-	offSelectionSize      = 0
-	offSelectionStart     = 4
-	offSelectionEnd       = 16
-	offSelectionRectangle = 28
+	sizeofSelection       = 20
+	offSelectionStart     = 0
+	offSelectionEnd       = 8
+	offSelectionRectangle = 16
 
-	sizeofFormatterOptions = 44
-	offFmtSize             = 0
-	offFmtEmit             = 4
-	offFmtUnwrap           = 8
-	offFmtTrim             = 9
-	offFmtExtra            = 12
-	offFmtSelection        = 36
-	offFmtContentNone      = 40 // patches/0001-formatter-content-none.patch
-
-	sizeofTerminalExtra   = 24
-	offTExtraSize         = 0
-	offTExtraPalette      = 4
-	offTExtraModes        = 5
-	offTExtraScrollRegion = 6
-	offTExtraTabstops     = 7
-	offTExtraPwd          = 8
-	offTExtraKeyboard     = 9
-	offTExtraScreen       = 12
-
-	sizeofScreenExtra      = 12
-	offSExtraSize          = 0
-	offSExtraCursor        = 4
-	offSExtraStyle         = 5
-	offSExtraHyperlink     = 6
-	offSExtraProtection    = 7
-	offSExtraKittyKeyboard = 8
-	offSExtraCharsets      = 9
+	sizeofWriteStop        = 28
+	offWriteStopSize       = 0
+	offWriteStopConsumed   = 4
+	offWriteStopReached    = 8
+	offWriteStopKind       = 12 // the rest are only checked, not read
+	offWriteStopIntroducer = 16
+	offWriteStopEnd        = 20
+	offWriteStopByte       = 24
 )
 
 // ModeEntry is one entry of the mode table in src/terminal/modes.zig.

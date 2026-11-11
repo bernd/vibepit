@@ -20,8 +20,9 @@ const (
 	scrOutLen    = 4   //
 	scrPoint     = 16  // GhosttyPoint, 8-byte aligned
 	scrSelection = 40  // GhosttySelection
-	scrFormatter = 72  // GhosttyFormatterTerminalOptions
-	scrMode      = 116 // GhosttyTerminalModeConfig
+	scrWriteStop = 72  // GhosttyTerminalWriteStop
+	scrMode      = 100 // GhosttyTerminalModeConfig
+	scrValue     = 104 // 4 bytes: value of ghostty_formatter_set
 	scratchSize  = 128
 )
 
@@ -64,6 +65,10 @@ func (in *Instance) init() error {
 		return err
 	}
 	if in.scratch, err = in.Alloc(scratchSize); err != nil {
+		return err
+	}
+	// vt_write_until keeps size and resets every other field on each call.
+	if err = in.writeU32(in.scratch+scrWriteStop+offWriteStopSize, sizeofWriteStop); err != nil {
 		return err
 	}
 	in.slot, err = in.callPtr("ghostty_wasm_alloc_opaque", func() int32 { return in.mod.Xghostty_wasm_alloc_opaque() })
@@ -414,23 +419,23 @@ func (in *Instance) stage(p []byte) (int, error) {
 // reaches ground. It returns how many bytes it consumed and whether the
 // parser is at ground. A parser already at ground consumes nothing.
 func (in *Instance) VTWriteUntilGround(p []byte) (int, bool, error) {
-	const name = "ghostty_terminal_vt_write_until_ground"
+	const name = "ghostty_terminal_vt_write_until"
+	stop := in.scratch + scrWriteStop
 	consumed := 0
 	for {
 		n, err := in.stage(p)
 		if err != nil {
 			return consumed, false, err
 		}
-		out := in.scratch + scrOut
 		r, err := in.callResult(name, func() int32 {
-			return in.mod.Xghostty_terminal_vt_write_until_ground(int32(in.term), int32(in.input), int32(n), int32(out))
+			return in.mod.Xghostty_terminal_vt_write_until(int32(in.term), int32(in.input), int32(n), int32(BoundaryGround), int32(stop))
 		})
 		if err != nil {
 			return consumed, false, err
 		}
 		switch r {
 		case Success:
-			c, err := in.readU32(out)
+			c, err := in.readU32(stop + offWriteStopConsumed)
 			return consumed + int(c), true, err
 		case NoValue:
 			consumed += n

@@ -14,18 +14,45 @@ type Selection struct {
 	Rectangle  bool
 }
 
-// ScreenExtra is GhosttyFormatterScreenExtra.
+// ScreenExtra holds the screen bits of GhosttyFormatterExtras.
 type ScreenExtra struct {
 	Cursor, Style, Hyperlink, Protection, KittyKeyboard, Charsets bool
 }
 
-// TerminalExtra is GhosttyFormatterTerminalExtra.
+// TerminalExtra is GhosttyFormatterExtras as booleans.
 type TerminalExtra struct {
 	Palette, Modes, ScrollingRegion, Tabstops, Pwd, Keyboard bool
 	Screen                                                   ScreenExtra
 }
 
-// FormatterOptions is GhosttyFormatterTerminalOptions.
+// Bits returns the GhosttyFormatterExtras bitmask.
+func (x TerminalExtra) Bits() uint32 {
+	var b uint32
+	for _, f := range []struct {
+		on  bool
+		bit uint32
+	}{
+		{x.Palette, extraPalette},
+		{x.Modes, extraModes},
+		{x.ScrollingRegion, extraScrollingRegion},
+		{x.Tabstops, extraTabstops},
+		{x.Pwd, extraPwd},
+		{x.Keyboard, extraKeyboard},
+		{x.Screen.Cursor, extraCursor},
+		{x.Screen.Style, extraStyle},
+		{x.Screen.Hyperlink, extraHyperlink},
+		{x.Screen.Protection, extraProtection},
+		{x.Screen.KittyKeyboard, extraKittyKeyboard},
+		{x.Screen.Charsets, extraCharsets},
+	} {
+		if f.on {
+			b |= f.bit
+		}
+	}
+	return b
+}
+
+// FormatterOptions are the GhosttyFormatterOption values FormatAlloc sets.
 type FormatterOptions struct {
 	Emit         FormatterFormat
 	Unwrap, Trim bool
@@ -43,11 +70,6 @@ func (in *Instance) GridRef(pt Point, out uint32) error {
 	if err := in.writeMem(in.scratch+scrPoint, p); err != nil {
 		return err
 	}
-	ref := make([]byte, sizeofGridRef)
-	le.PutUint32(ref[offGridRefSize:], sizeofGridRef)
-	if err := in.writeMem(out, ref); err != nil {
-		return err
-	}
 	return in.invoke("ghostty_terminal_grid_ref", func() int32 {
 		return in.mod.Xghostty_terminal_grid_ref(int32(in.term), int32(in.scratch+scrPoint), int32(out))
 	})
@@ -56,30 +78,8 @@ func (in *Instance) GridRef(pt Point, out uint32) error {
 // FormatAlloc creates a formatter with opts, formats the terminal's current
 // state once, and frees the formatter.
 func (in *Instance) FormatAlloc(opts FormatterOptions) ([]byte, error) {
-	var sel uint32
-	if opts.Selection != nil && !opts.ContentNone {
-		sel = in.scratch + scrSelection
-		b := make([]byte, sizeofSelection)
-		le.PutUint32(b[offSelectionSize:], sizeofSelection)
-		if opts.Selection.Rectangle {
-			b[offSelectionRectangle] = 1
-		}
-		if err := in.writeMem(sel, b); err != nil {
-			return nil, err
-		}
-		if err := in.GridRef(opts.Selection.Start, sel+offSelectionStart); err != nil {
-			return nil, err
-		}
-		if err := in.GridRef(opts.Selection.End, sel+offSelectionEnd); err != nil {
-			return nil, err
-		}
-	}
-	optPtr := in.scratch + scrFormatter
-	if err := in.writeMem(optPtr, encodeFormatterOptions(opts, sel)); err != nil {
-		return nil, err
-	}
 	if err := in.invoke("ghostty_formatter_terminal_new", func() int32 {
-		return in.mod.Xghostty_formatter_terminal_new(0, int32(in.slot), int32(in.term), int32(optPtr))
+		return in.mod.Xghostty_formatter_terminal_new(0, int32(in.slot), int32(in.term))
 	}); err != nil {
 		return nil, err
 	}
@@ -87,16 +87,18 @@ func (in *Instance) FormatAlloc(opts FormatterOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := in.scratch + scrOutPtr
-	if err := in.writeMem(out, zero8[:]); err != nil {
-		return nil, err
-	}
-	err = in.invoke("ghostty_formatter_format_alloc", func() int32 {
-		return in.mod.Xghostty_formatter_format_alloc(int32(f), 0, int32(out), int32(in.scratch+scrOutLen))
-	})
 	var data []byte
+	err = in.setFormatterOptions(f, opts)
 	if err == nil {
-		data, err = in.takeAlloc(out)
+		out := in.scratch + scrOutPtr
+		if err = in.writeMem(out, zero8[:]); err == nil {
+			err = in.invoke("ghostty_formatter_format_alloc", func() int32 {
+				return in.mod.Xghostty_formatter_format_alloc(int32(f), 0, int32(out), int32(in.scratch+scrOutLen))
+			})
+		}
+		if err == nil {
+			data, err = in.takeAlloc(out)
+		}
 	}
 	if ferr := in.guard("ghostty_formatter_free", func() { in.mod.Xghostty_formatter_free(int32(f)) }); err == nil {
 		err = ferr
@@ -104,34 +106,58 @@ func (in *Instance) FormatAlloc(opts FormatterOptions) ([]byte, error) {
 	return data, err
 }
 
-func encodeFormatterOptions(o FormatterOptions, sel uint32) []byte {
-	b := make([]byte, sizeofFormatterOptions)
-	le.PutUint32(b[offFmtSize:], sizeofFormatterOptions)
-	le.PutUint32(b[offFmtEmit:], uint32(o.Emit))
-	b[offFmtUnwrap] = b2u(o.Unwrap)
-	b[offFmtTrim] = b2u(o.Trim)
+// formatterSetPtr is ghostty_formatter_set with the value at p.
+func (in *Instance) formatterSetPtr(f uint32, opt FormatterOption, p uint32) error {
+	return in.invoke("ghostty_formatter_set", func() int32 {
+		return in.mod.Xghostty_formatter_set(int32(f), int32(opt), int32(p))
+	})
+}
 
-	x := b[offFmtExtra:]
-	le.PutUint32(x[offTExtraSize:], sizeofTerminalExtra)
-	x[offTExtraPalette] = b2u(o.Extra.Palette)
-	x[offTExtraModes] = b2u(o.Extra.Modes)
-	x[offTExtraScrollRegion] = b2u(o.Extra.ScrollingRegion)
-	x[offTExtraTabstops] = b2u(o.Extra.Tabstops)
-	x[offTExtraPwd] = b2u(o.Extra.Pwd)
-	x[offTExtraKeyboard] = b2u(o.Extra.Keyboard)
+// formatterSet is ghostty_formatter_set with a 4-byte value: an enum, a
+// bitmask, or a bool, which reads only the low byte.
+func (in *Instance) formatterSet(f uint32, opt FormatterOption, v uint32) error {
+	val := in.scratch + scrValue
+	if err := in.writeU32(val, v); err != nil {
+		return err
+	}
+	return in.formatterSetPtr(f, opt, val)
+}
 
-	s := x[offTExtraScreen:]
-	le.PutUint32(s[offSExtraSize:], sizeofScreenExtra)
-	s[offSExtraCursor] = b2u(o.Extra.Screen.Cursor)
-	s[offSExtraStyle] = b2u(o.Extra.Screen.Style)
-	s[offSExtraHyperlink] = b2u(o.Extra.Screen.Hyperlink)
-	s[offSExtraProtection] = b2u(o.Extra.Screen.Protection)
-	s[offSExtraKittyKeyboard] = b2u(o.Extra.Screen.KittyKeyboard)
-	s[offSExtraCharsets] = b2u(o.Extra.Screen.Charsets)
-
-	le.PutUint32(b[offFmtSelection:], sel)
-	b[offFmtContentNone] = b2u(o.ContentNone)
-	return b
+func (in *Instance) setFormatterOptions(f uint32, opts FormatterOptions) error {
+	for _, o := range []struct {
+		opt FormatterOption
+		v   uint32
+	}{
+		{FmtOptEmit, uint32(opts.Emit)},
+		{FmtOptUnwrap, uint32(b2u(opts.Unwrap))},
+		{FmtOptTrim, uint32(b2u(opts.Trim))},
+		{FmtOptExtras, opts.Extra.Bits()},
+	} {
+		if err := in.formatterSet(f, o.opt, o.v); err != nil {
+			return err
+		}
+	}
+	if opts.ContentNone {
+		return in.formatterSet(f, FmtOptContentNone, 1)
+	}
+	if opts.Selection == nil {
+		return nil
+	}
+	sel := in.scratch + scrSelection
+	b := make([]byte, sizeofSelection)
+	if opts.Selection.Rectangle {
+		b[offSelectionRectangle] = 1
+	}
+	if err := in.writeMem(sel, b); err != nil {
+		return err
+	}
+	if err := in.GridRef(opts.Selection.Start, sel+offSelectionStart); err != nil {
+		return err
+	}
+	if err := in.GridRef(opts.Selection.End, sel+offSelectionEnd); err != nil {
+		return err
+	}
+	return in.formatterSetPtr(f, FmtOptSelection, sel)
 }
 
 func b2u(v bool) byte {
