@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/overlay"
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,8 +73,8 @@ func (b *lockedBuffer) String() string {
 }
 
 func TestNewSessionTerminal(t *testing.T) {
-	client, server := net.Pipe()
-	resp := types.NewHijackedResponse(client, "")
+	conn, server := net.Pipe()
+	resp := client.NewHijackedResponse(conn, "")
 	stdinR, stdinW := io.Pipe()
 	t.Cleanup(func() { _ = stdinW.Close() })
 	stdout := &lockedBuffer{}

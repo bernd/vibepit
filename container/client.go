@@ -3,12 +3,12 @@ package container
 import (
 	"context"
 	"crypto/rand"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -18,14 +18,10 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/tui"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	dockerclient "github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/network"
+	dockerclient "github.com/moby/moby/client"
 	"golang.org/x/term"
 )
 
@@ -59,6 +55,12 @@ const (
 	SessionStatePath = "/tmp/vibed-sessions.json"
 )
 
+var (
+	// sshContainerPort is SSHContainerPort as a network.Port.
+	sshContainerPort, _ = network.PortFrom(2222, network.TCP)
+	loopback            = netip.AddrFrom4([4]byte{127, 0, 0, 1})
+)
+
 // Client wraps the Docker/Podman API, trying Docker first then falling back
 // to the Podman-compatible socket.
 type Client struct {
@@ -85,18 +87,9 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 	}
 
 	// First try the regular Docker environment chain.
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
-	if err == nil {
-		if _, pingErr := cli.Ping(context.Background()); pingErr == nil {
-			displayDockerHost(client.debug, cli)
-			client.docker = cli
-			return client, nil
-		} else if client.debug {
-			tui.Debug("Could not ping Docker: %v", pingErr)
-		}
-		cli.Close()
-	} else if client.debug {
-		tui.Debug("Could not connect to Docker: %s", err)
+	if cli := pingedClient(client.debug, "Docker", dockerclient.FromEnv); cli != nil {
+		client.docker = cli
+		return client, nil
 	}
 
 	// Then fall back to manual socket detection.
@@ -121,15 +114,16 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 }
 
 func displayDockerHost(debug bool, cli *dockerclient.Client) {
+	if !debug {
+		return
+	}
 	host := cli.DaemonHost()
 	if path, ok := strings.CutPrefix(host, "unix://"); ok {
 		if resolved, err := filepath.EvalSymlinks(path); err == nil && resolved != path {
 			host = fmt.Sprintf("unix://%s -> %s", path, resolved)
 		}
 	}
-	if debug {
-		tui.Debug("Using container daemon at %s", host)
-	}
+	tui.Debug("Using container daemon at %s", host)
 }
 
 func findSocket(debug bool, paths ...string) (*dockerclient.Client, error) {
@@ -137,28 +131,34 @@ func findSocket(debug bool, paths ...string) (*dockerclient.Client, error) {
 		if debug {
 			tui.Debug("Trying socket: %s", path)
 		}
-		cli, err := dockerclient.NewClientWithOpts(
-			dockerclient.WithHost(path),
-			dockerclient.WithAPIVersionNegotiation(),
-		)
-		if err != nil {
-			if debug {
-				tui.Debug("Could not connect to socket: %v", err)
-			}
-			continue
+		if cli := pingedClient(debug, "socket", dockerclient.WithHost(path)); cli != nil {
+			return cli, nil
 		}
-		if _, err := cli.Ping(context.Background()); err != nil {
-			_ = cli.Close()
-			if debug {
-				tui.Debug("Could not ping via socket: %v", err)
-			}
-			continue
-		}
-		displayDockerHost(debug, cli)
-		return cli, nil
 	}
 
 	return nil, errors.New("couldn't find a Docker socket")
+}
+
+// pingedClient returns a client for opts whose daemon answered a ping, or nil.
+// The ping negotiates the API version, so an unsupported daemon is rejected
+// here rather than on the first real call.
+func pingedClient(debug bool, what string, opts ...dockerclient.Opt) *dockerclient.Client {
+	cli, err := dockerclient.New(opts...)
+	if err != nil {
+		if debug {
+			tui.Debug("Could not connect to %s: %v", what, err)
+		}
+		return nil
+	}
+	if _, err := cli.Ping(context.Background(), dockerclient.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		_ = cli.Close()
+		if debug {
+			tui.Debug("Could not ping %s: %v", what, err)
+		}
+		return nil
+	}
+	displayDockerHost(debug, cli)
+	return cli
 }
 
 func (c *Client) Close() error { return c.docker.Close() }
@@ -166,13 +166,13 @@ func (c *Client) Close() error { return c.docker.Close() }
 // EnsureImage pulls the image if it is not available locally. Returns true
 // if the image was pulled, false if it was already present.
 func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) (bool, error) {
-	images, err := c.docker.ImageList(ctx, image.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("reference", ref)),
+	images, err := c.docker.ImageList(ctx, dockerclient.ImageListOptions{
+		Filters: make(dockerclient.Filters).Add("reference", ref),
 	})
 	if err != nil {
 		return false, fmt.Errorf("list images: %w", err)
 	}
-	if len(images) > 0 {
+	if len(images.Items) > 0 {
 		return false, nil
 	}
 
@@ -182,16 +182,16 @@ func (c *Client) EnsureImage(ctx context.Context, ref string, quiet bool) (bool,
 // PullImage pulls the latest version of the image.
 func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	tui.Status("Pulling", "image %s", ref)
-	reader, err := c.docker.ImagePull(ctx, ref, image.PullOptions{})
+	reader, err := c.docker.ImagePull(ctx, ref, dockerclient.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	defer reader.Close()
 
 	if quiet {
-		_, err = io.Copy(io.Discard, reader)
+		err = reader.Wait(ctx)
 	} else {
-		err = displayPullProgress(reader)
+		err = displayPullProgress(reader.JSONMessages(ctx))
 	}
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
@@ -199,11 +199,10 @@ func (c *Client) PullImage(ctx context.Context, ref string, quiet bool) error {
 	return nil
 }
 
-// displayPullProgress reads Docker pull JSON messages and shows a single
+// displayPullProgress consumes Docker pull JSON messages and shows a single
 // updating status line with aggregated download progress.
-func displayPullProgress(r io.Reader) error {
+func displayPullProgress(msgs iter.Seq2[jsonstream.Message, error]) error {
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
-	dec := json.NewDecoder(r)
 
 	type layerProgress struct {
 		current int64
@@ -211,17 +210,20 @@ func displayPullProgress(r io.Reader) error {
 	}
 	layers := map[string]*layerProgress{}
 	wroteProgress := false
+	// fail clears the progress line so the caller's error starts on a clean line.
+	fail := func(err error) error {
+		if wroteProgress {
+			fmt.Fprint(os.Stdout, "\r\033[K")
+		}
+		return err
+	}
 
-	for {
-		var msg jsonmessage.JSONMessage
-		if err := dec.Decode(&msg); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
+	for msg, err := range msgs {
+		if err != nil {
+			return fail(err)
 		}
 		if msg.Error != nil {
-			return msg.Error
+			return fail(msg.Error)
 		}
 
 		if msg.ID == "" || msg.Progress == nil {
@@ -296,16 +298,16 @@ type RunningSession struct {
 // FindRunningSession returns a running sandbox container for the given project
 // directory, or nil if none is found.
 func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*RunningSession, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
-			filters.Arg("label", LabelRole+"="+RoleSandbox),
+	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
+		Filters: make(dockerclient.Filters).Add("label",
+			fmt.Sprintf("%s=%s", LabelProjectDir, projectDir),
+			LabelRole+"="+RoleSandbox,
 		),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if len(containers) > 0 {
+	if containers := list.Items; len(containers) > 0 {
 		return &RunningSession{
 			ContainerID: containers[0].ID,
 			SessionID:   containers[0].Labels[LabelSessionID],
@@ -319,17 +321,17 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*Ru
 // proxy) matching the given project directory. This is useful for cleanup when
 // the sandbox may have crashed but the proxy is still running.
 func (c *Client) FindAnySessionContainer(ctx context.Context, projectDir string) (string, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
 		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", fmt.Sprintf("%s=%s", LabelProjectDir, projectDir)),
-			filters.Arg("label", LabelSessionID),
+		Filters: make(dockerclient.Filters).Add("label",
+			fmt.Sprintf("%s=%s", LabelProjectDir, projectDir),
+			LabelSessionID,
 		),
 	})
 	if err != nil {
 		return "", err
 	}
-	if len(containers) > 0 {
+	if containers := list.Items; len(containers) > 0 {
 		return containers[0].Labels[LabelSessionID], nil
 	}
 	return "", nil
@@ -344,17 +346,15 @@ type SessionContainer struct {
 
 // SessionContainers returns all containers for a session with their roles.
 func (c *Client) SessionContainers(ctx context.Context, sessionID string) ([]SessionContainer, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
-		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
-		),
+	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
+		All:     true,
+		Filters: make(dockerclient.Filters).Add("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
 	})
 	if err != nil {
 		return nil, err
 	}
 	var result []SessionContainer
-	for _, ctr := range containers {
+	for _, ctr := range list.Items {
 		name := ""
 		if len(ctr.Names) > 0 {
 			name = strings.TrimPrefix(ctr.Names[0], "/")
@@ -370,29 +370,29 @@ func (c *Client) SessionContainers(ctx context.Context, sessionID string) ([]Ses
 
 // FindProxyContainerID returns the container ID of the proxy for a session.
 func (c *Client) FindProxyContainerID(ctx context.Context, sessionID string) (string, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
+	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
 		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", fmt.Sprintf("%s=%s", LabelSessionID, sessionID)),
-			filters.Arg("label", fmt.Sprintf("%s=%s", LabelRole, RoleProxy)),
+		Filters: make(dockerclient.Filters).Add("label",
+			fmt.Sprintf("%s=%s", LabelSessionID, sessionID),
+			fmt.Sprintf("%s=%s", LabelRole, RoleProxy),
 		),
 	})
 	if err != nil {
 		return "", err
 	}
-	if len(containers) == 0 {
+	if len(list.Items) == 0 {
 		return "", fmt.Errorf("no proxy container found for session %s", sessionID)
 	}
-	return containers[0].ID, nil
+	return list.Items[0].ID, nil
 }
 
 // SessionIDFromContainer inspects a container and returns its session ID label.
 func (c *Client) SessionIDFromContainer(ctx context.Context, containerID string) (string, error) {
-	info, err := c.docker.ContainerInspect(ctx, containerID)
+	info, err := c.docker.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return "", err
 	}
-	sid, ok := info.Config.Labels[LabelSessionID]
+	sid, ok := containerLabels(info.Container)[LabelSessionID]
 	if !ok {
 		return "", fmt.Errorf("container has no session ID label")
 	}
@@ -402,26 +402,29 @@ func (c *Client) SessionIDFromContainer(ctx context.Context, containerID string)
 // FindProxyIP returns the IP address of the running vibepit proxy container
 // by inspecting its network settings. Returns an error if no proxy is running.
 func (c *Client) FindProxyIP(ctx context.Context) (string, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("label", LabelVibepit+"=true"),
-			filters.Arg("label", LabelRole+"="+RoleProxy),
+	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
+		Filters: make(dockerclient.Filters).Add("label",
+			LabelVibepit+"=true",
+			LabelRole+"="+RoleProxy,
 		),
 	})
 	if err != nil {
 		return "", err
 	}
-	if len(containers) == 0 {
+	if len(list.Items) == 0 {
 		return "", fmt.Errorf("no running vibepit proxy container found")
 	}
 
-	info, err := c.docker.ContainerInspect(ctx, containers[0].ID)
+	info, err := c.docker.ContainerInspect(ctx, list.Items[0].ID, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return "", err
 	}
-	for _, ep := range info.NetworkSettings.Networks {
-		if ep.IPAddress != "" {
-			return ep.IPAddress, nil
+	if info.Container.NetworkSettings == nil {
+		return "", fmt.Errorf("proxy container has no IP address")
+	}
+	for _, ep := range info.Container.NetworkSettings.Networks {
+		if ep != nil && ep.IPAddress.IsValid() {
+			return ep.IPAddress.String(), nil
 		}
 	}
 	return "", fmt.Errorf("proxy container has no IP address")
@@ -433,7 +436,7 @@ func (c *Client) FindProxyIP(ctx context.Context) (string, error) {
 // the container stops on its own. Returns an *ExitError if the container exits
 // with a non-zero status code.
 func (c *Client) AttachAndStartSession(ctx context.Context, containerID string, hooks TerminalHooks) error {
-	resp, err := c.docker.ContainerAttach(ctx, containerID, container.AttachOptions{
+	resp, err := c.docker.ContainerAttach(ctx, containerID, dockerclient.ContainerAttachOptions{
 		Stream: true,
 		Stdin:  true,
 		Stdout: true,
@@ -448,30 +451,32 @@ func (c *Client) AttachAndStartSession(ctx context.Context, containerID string, 
 	defer cancelWait()
 	// Register wait before start to avoid missing fast exits between start and wait.
 	// Use next-exit so created containers do not return immediately.
-	waitCh, waitErrCh := c.docker.ContainerWait(waitCtx, containerID, container.WaitConditionNextExit)
+	wait := c.docker.ContainerWait(waitCtx, containerID, dockerclient.ContainerWaitOptions{
+		Condition: container.WaitConditionNextExit,
+	})
 
-	if err := c.docker.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+	if _, err := c.docker.ContainerStart(ctx, containerID, dockerclient.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start attached container: %w", err)
 	}
 
 	resizeFn := func(height, width uint) {
-		c.docker.ContainerResize(ctx, containerID, container.ResizeOptions{
+		c.docker.ContainerResize(ctx, containerID, dockerclient.ContainerResizeOptions{
 			Height: height, Width: width,
 		})
 	}
 
-	if err := runTTYSession(ctx, resp, resizeFn, hooks); err != nil {
+	if err := runTTYSession(ctx, resp.HijackedResponse, resizeFn, hooks); err != nil {
 		return err
 	}
 
 	// Retrieve the container's exit code.
 	select {
-	case result := <-waitCh:
+	case result := <-wait.Result:
 		if result.StatusCode != 0 {
 			return &ExitError{Code: int(result.StatusCode)}
 		}
 		return nil
-	case err := <-waitErrCh:
+	case err := <-wait.Error:
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -484,8 +489,8 @@ func (c *Client) AttachAndStartSession(ctx context.Context, containerID string, 
 func (c *Client) ExecSession(ctx context.Context, containerID string, hooks TerminalHooks) error {
 	size := terminalSize()
 
-	execResp, err := c.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
-		Tty:          true,
+	execResp, err := c.docker.ExecCreate(ctx, containerID, dockerclient.ExecCreateOptions{
+		TTY:          true,
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -496,8 +501,8 @@ func (c *Client) ExecSession(ctx context.Context, containerID string, hooks Term
 		return fmt.Errorf("exec create: %w", err)
 	}
 
-	hijack, err := c.docker.ContainerExecAttach(ctx, execResp.ID, container.ExecAttachOptions{
-		Tty:         true,
+	hijack, err := c.docker.ExecAttach(ctx, execResp.ID, dockerclient.ExecAttachOptions{
+		TTY:         true,
 		ConsoleSize: size,
 	})
 	if err != nil {
@@ -506,17 +511,17 @@ func (c *Client) ExecSession(ctx context.Context, containerID string, hooks Term
 	defer hijack.Close()
 
 	resizeFn := func(height, width uint) {
-		c.docker.ContainerExecResize(ctx, execResp.ID, container.ResizeOptions{
+		c.docker.ExecResize(ctx, execResp.ID, dockerclient.ExecResizeOptions{
 			Height: height, Width: width,
 		})
 	}
 
-	if err := runTTYSession(ctx, hijack, resizeFn, hooks); err != nil {
+	if err := runTTYSession(ctx, hijack.HijackedResponse, resizeFn, hooks); err != nil {
 		return err
 	}
 
 	// Retrieve the exec process exit code.
-	inspect, err := c.docker.ContainerExecInspect(ctx, execResp.ID)
+	inspect, err := c.docker.ExecInspect(ctx, execResp.ID, dockerclient.ExecInspectOptions{})
 	if err != nil {
 		return err
 	}
@@ -542,14 +547,14 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 		return NetworkInfo{}, fmt.Errorf("generate subnet: %w", err)
 	}
 
-	resp, err := c.docker.NetworkCreate(ctx, name, network.CreateOptions{
+	resp, err := c.docker.NetworkCreate(ctx, name, dockerclient.NetworkCreateOptions{
 		Internal: true,
 		Labels:   map[string]string{LabelVibepit: "true"},
 		IPAM: &network.IPAM{
 			Config: []network.IPAMConfig{
 				{
 					Subnet:  subnet,
-					Gateway: gateway.String(),
+					Gateway: gateway,
 				},
 			},
 		},
@@ -558,8 +563,8 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 		return NetworkInfo{}, fmt.Errorf("create network: %w", err)
 	}
 
-	proxyIP := nextIP(gateway)
-	sandboxIP := nextIP(proxyIP)
+	proxyIP := gateway.Next()
+	sandboxIP := proxyIP.Next()
 	return NetworkInfo{
 		ID:        resp.ID,
 		ProxyIP:   proxyIP.String(),
@@ -568,34 +573,22 @@ func (c *Client) CreateNetwork(ctx context.Context, name string) (NetworkInfo, e
 }
 
 // randomSubnet generates a random /24 subnet in the 10.x.x.0/8 range,
-// returning the CIDR string and gateway IP (x.x.x.1). There is a small
+// returning the prefix and gateway IP (x.x.x.1). There is a small
 // chance (~1/65k) of colliding with an existing Docker network, in which
 // case network creation will fail with a "pool overlaps" error.
-func randomSubnet() (string, net.IP, error) {
+func randomSubnet() (netip.Prefix, netip.Addr, error) {
 	var b [2]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", nil, err
+		return netip.Prefix{}, netip.Addr{}, err
 	}
-	gateway := net.IPv4(10, b[0], b[1], 1)
-	subnet := fmt.Sprintf("10.%d.%d.0/24", b[0], b[1])
+	subnet := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, b[0], b[1], 0}), 24)
+	gateway := netip.AddrFrom4([4]byte{10, b[0], b[1], 1})
 	return subnet, gateway, nil
 }
 
-// nextIP returns the IP address immediately following ip.
-func nextIP(ip net.IP) net.IP {
-	ip = ip.To4()
-	if ip == nil {
-		return nil
-	}
-	n := binary.BigEndian.Uint32(ip)
-	n++
-	next := make(net.IP, 4)
-	binary.BigEndian.PutUint32(next, n)
-	return next
-}
-
 func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
-	return c.docker.NetworkRemove(ctx, networkID)
+	_, err := c.docker.NetworkRemove(ctx, networkID, dockerclient.NetworkRemoveOptions{})
+	return err
 }
 
 // ProxyContainerConfig holds the parameters for starting the in-network proxy.
@@ -618,10 +611,18 @@ type ProxyContainerConfig struct {
 
 // StartProxyContainer creates and starts a minimal container that runs the
 // vibepit proxy binary, then connects it to the bridge network so it can
-// reach the internet. The control API port is published to 127.0.0.1 with
-// an OS-assigned host port. Returns the container ID and the assigned host
-// port.
+// reach the internet. The control API port is published to 127.0.0.1 on the
+// same host port. Returns the container ID and that port.
 func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConfig) (string, string, error) {
+	if cfg.ControlAPIPort < 1 || cfg.ControlAPIPort > 65535 {
+		return "", "", fmt.Errorf("invalid control API port %d", cfg.ControlAPIPort)
+	}
+	containerPort, _ := network.PortFrom(uint16(cfg.ControlAPIPort), network.TCP)
+	proxyIP, err := parseIPv4(cfg.ProxyIP)
+	if err != nil {
+		return "", "", fmt.Errorf("parse proxy IP: %w", err)
+	}
+
 	var env []string
 	if cfg.TLSKeyPEM != "" {
 		env = append(env,
@@ -643,20 +644,17 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		labels[LabelSessionID] = cfg.SessionID
 	}
 
-	containerPort, _ := nat.NewPort("tcp", portStr)
-
-	exposedPorts := nat.PortSet{
+	exposedPorts := network.PortSet{
 		containerPort: struct{}{},
 	}
-	portBindings := nat.PortMap{
-		containerPort: []nat.PortBinding{
-			{HostIP: "127.0.0.1", HostPort: portStr},
+	portBindings := network.PortMap{
+		containerPort: []network.PortBinding{
+			{HostIP: loopback, HostPort: portStr},
 		},
 	}
 	if cfg.SSHPort > 0 {
-		sshPort := nat.Port(SSHContainerPort)
-		exposedPorts[sshPort] = struct{}{}
-		portBindings[sshPort] = []nat.PortBinding{{HostIP: "127.0.0.1"}}
+		exposedPorts[sshContainerPort] = struct{}{}
+		portBindings[sshContainerPort] = []network.PortBinding{{HostIP: loopback}}
 	}
 
 	hostConfig := &container.HostConfig{
@@ -677,8 +675,8 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
 	}
 
-	resp, err := c.docker.ContainerCreate(ctx,
-		&container.Config{
+	resp, err := c.docker.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Config: &container.Config{
 			Image:        ProxyImage,
 			Cmd:          []string{ProxyBinaryPath, "proxy", "--config", ProxyConfigPath},
 			Labels:       labels,
@@ -686,28 +684,42 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 			WorkingDir:   "/",
 			ExposedPorts: exposedPorts,
 		},
-		hostConfig,
-		nil,
-		nil,
-		cfg.Name,
-	)
+		HostConfig: hostConfig,
+		Name:       cfg.Name,
+	})
 	if err != nil {
 		return "", "", fmt.Errorf("create proxy container: %w", err)
 	}
 	// Attach to the isolated vibepit network with the fixed proxy IP so
 	// sandbox containers can use it as DNS/HTTP proxy endpoint.
-	if err := c.docker.NetworkConnect(ctx, cfg.NetworkID, resp.ID, &network.EndpointSettings{
-		IPAMConfig: &network.EndpointIPAMConfig{
-			IPv4Address: cfg.ProxyIP,
+	if _, err := c.docker.NetworkConnect(ctx, cfg.NetworkID, dockerclient.NetworkConnectOptions{
+		Container: resp.ID,
+		EndpointConfig: &network.EndpointSettings{
+			IPAMConfig: &network.EndpointIPAMConfig{
+				IPv4Address: proxyIP,
+			},
 		},
 	}); err != nil {
 		return "", "", fmt.Errorf("connect proxy to session network: %w", err)
 	}
-	if err := c.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := c.docker.ContainerStart(ctx, resp.ID, dockerclient.ContainerStartOptions{}); err != nil {
 		return "", "", fmt.Errorf("start proxy container: %w", err)
 	}
 
 	return resp.ID, portStr, nil
+}
+
+// parseIPv4 parses s as an IPv4 address. The session network is IPv4-only
+// and the addresses end up in IPv4Address fields.
+func parseIPv4(s string) (netip.Addr, error) {
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if !addr.Is4() {
+		return netip.Addr{}, fmt.Errorf("%s is not an IPv4 address", s)
+	}
+	return addr, nil
 }
 
 // ProxySession describes a running proxy for session discovery.
@@ -720,13 +732,13 @@ type ProxySession struct {
 }
 
 // ListProxySessions returns all running vibepit proxy containers with their
-// session metadata. The control port is read from the container label, falling
-// back to the first published port binding for older containers.
+// session metadata. ControlPort is the host port published for the control
+// port label, or the label value itself if no binding is found.
 func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) {
-	containers, err := c.docker.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("label", LabelVibepit+"=true"),
-			filters.Arg("label", LabelRole+"="+RoleProxy),
+	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
+		Filters: make(dockerclient.Filters).Add("label",
+			LabelVibepit+"=true",
+			LabelRole+"="+RoleProxy,
 		),
 	})
 	if err != nil {
@@ -734,7 +746,7 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 	}
 
 	var sessions []ProxySession
-	for _, ctr := range containers {
+	for _, ctr := range list.Items {
 		controlPort := ctr.Labels[LabelControlPort]
 		if port, err := c.FindPublishedPort(ctx, ctr.ID, controlPort+"/tcp"); err == nil {
 			controlPort = strconv.Itoa(port)
@@ -780,6 +792,18 @@ type SandboxContainerConfig struct {
 // CreateSandboxContainer creates the sandboxed development container
 // with proxy environment variables and a read-only root filesystem.
 func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContainerConfig) (string, error) {
+	// Parse addresses before any side effects so bad input fails cleanly.
+	dnsIP, err := parseIPv4(cfg.ProxyIP)
+	if err != nil {
+		return "", fmt.Errorf("parse proxy IP: %w", err)
+	}
+	var sandboxIP netip.Addr
+	if cfg.SandboxIP != "" {
+		if sandboxIP, err = parseIPv4(cfg.SandboxIP); err != nil {
+			return "", fmt.Errorf("parse sandbox IP: %w", err)
+		}
+	}
+
 	proxyURL := fmt.Sprintf("http://%s", net.JoinHostPort(cfg.ProxyIP, strconv.Itoa(cfg.ProxyPort)))
 	env := []string{
 		fmt.Sprintf("TERM=%s", cfg.Term),
@@ -855,7 +879,7 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 
 	hostConfig := &container.HostConfig{
 		Binds:          binds,
-		DNS:            []string{cfg.ProxyIP},
+		DNS:            []netip.Addr{dnsIP},
 		Init:           new(true),
 		ReadonlyRootfs: true,
 		CapDrop:        []string{"ALL"},
@@ -884,9 +908,9 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 	}
 
 	endpointSettings := &network.EndpointSettings{}
-	if cfg.SandboxIP != "" {
+	if sandboxIP.IsValid() {
 		endpointSettings.IPAMConfig = &network.EndpointIPAMConfig{
-			IPv4Address: cfg.SandboxIP,
+			IPv4Address: sandboxIP,
 		}
 	}
 	networkingConfig = &network.NetworkingConfig{
@@ -895,7 +919,12 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		},
 	}
 
-	resp, err := c.docker.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, nil, cfg.Name)
+	resp, err := c.docker.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{
+		Config:           containerConfig,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
+		Name:             cfg.Name,
+	})
 	if err != nil {
 		return "", fmt.Errorf("create sandbox container: %w", err)
 	}
@@ -908,46 +937,63 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 
 // StartContainer starts a previously created container without attaching.
 func (c *Client) StartContainer(ctx context.Context, containerID string) error {
-	return c.docker.ContainerStart(ctx, containerID, container.StartOptions{})
+	_, err := c.docker.ContainerStart(ctx, containerID, dockerclient.ContainerStartOptions{})
+	return err
 }
 
 // FindPublishedPort inspects a container and returns the host port bound to
 // the given container port (e.g. "2222/tcp"). Returns an error if the port
 // is not published.
 func (c *Client) FindPublishedPort(ctx context.Context, containerID string, containerPort string) (int, error) {
-	info, err := c.docker.ContainerInspect(ctx, containerID)
+	info, err := c.docker.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("inspect container: %w", err)
 	}
-	return publishedPort(info, containerPort)
+	return publishedPort(info.Container, containerPort)
 }
 
 // FindControlPort returns the host-published control API port for a proxy
 // container. It reads the container port from the control port label and
 // looks up the published binding.
 func (c *Client) FindControlPort(ctx context.Context, containerID string) (int, error) {
-	info, err := c.docker.ContainerInspect(ctx, containerID)
+	info, err := c.docker.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return 0, fmt.Errorf("inspect container: %w", err)
 	}
-	portStr := info.Config.Labels[LabelControlPort]
+	portStr := containerLabels(info.Container)[LabelControlPort]
 	if portStr == "" {
 		return 0, fmt.Errorf("control port not found")
 	}
-	return publishedPort(info, portStr+"/tcp")
+	return publishedPort(info.Container, portStr+"/tcp")
+}
+
+// containerLabels returns an inspected container's labels. Some runtimes
+// omit Config from inspect data.
+func containerLabels(info container.InspectResponse) map[string]string {
+	if info.Config == nil {
+		return nil
+	}
+	return info.Config.Labels
 }
 
 // publishedPort extracts the host port for a container port from an inspect result.
 func publishedPort(info container.InspectResponse, containerPort string) (int, error) {
-	bindings, ok := info.NetworkSettings.Ports[nat.Port(containerPort)]
+	port, err := network.ParsePort(containerPort)
+	if err != nil {
+		return 0, fmt.Errorf("parse container port: %w", err)
+	}
+	if info.NetworkSettings == nil {
+		return 0, fmt.Errorf("port %s not published", containerPort)
+	}
+	bindings, ok := info.NetworkSettings.Ports[port]
 	if !ok || len(bindings) == 0 {
 		return 0, fmt.Errorf("port %s not published", containerPort)
 	}
-	var port int
-	if _, err := fmt.Sscanf(bindings[0].HostPort, "%d", &port); err != nil {
+	hostPort, err := strconv.Atoi(bindings[0].HostPort)
+	if err != nil {
 		return 0, fmt.Errorf("parse host port: %w", err)
 	}
-	return port, nil
+	return hostPort, nil
 }
 
 // StopAndRemove stops a container (best-effort) then forcibly removes it.
@@ -955,26 +1001,27 @@ func publishedPort(info container.InspectResponse, containerPort string) (int, e
 // has already exited.
 func (c *Client) StopAndRemove(ctx context.Context, containerID string) error {
 	timeout := 2
-	c.docker.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
-	return c.docker.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+	c.docker.ContainerStop(ctx, containerID, dockerclient.ContainerStopOptions{Timeout: &timeout})
+	_, err := c.docker.ContainerRemove(ctx, containerID, dockerclient.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 // EnsureVolume creates a named volume if it does not already exist, labelling
 // it with the owner UID and username for later identification.
 func (c *Client) EnsureVolume(ctx context.Context, name string, uid int, user string) error {
-	list, err := c.docker.VolumeList(ctx, volume.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("name", name)),
+	list, err := c.docker.VolumeList(ctx, dockerclient.VolumeListOptions{
+		Filters: make(dockerclient.Filters).Add("name", name),
 	})
 	if err != nil {
 		return fmt.Errorf("list volumes: %w", err)
 	}
-	for _, v := range list.Volumes {
+	for _, v := range list.Items {
 		if v.Name == name {
 			return nil
 		}
 	}
 
-	_, err = c.docker.VolumeCreate(ctx, volume.CreateOptions{
+	_, err = c.docker.VolumeCreate(ctx, dockerclient.VolumeCreateOptions{
 		Name: name,
 		Labels: map[string]string{
 			LabelVibepit: "true",
@@ -989,15 +1036,16 @@ func (c *Client) EnsureVolume(ctx context.Context, name string, uid int, user st
 }
 
 func (c *Client) RemoveVolume(ctx context.Context, name string) error {
-	return c.docker.VolumeRemove(ctx, name, false)
+	_, err := c.docker.VolumeRemove(ctx, name, dockerclient.VolumeRemoveOptions{})
+	return err
 }
 
 // ContainerLogs returns the last n lines of a container's log output.
 func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int) (string, error) {
-	reader, err := c.docker.ContainerLogs(ctx, containerID, container.LogsOptions{
+	reader, err := c.docker.ContainerLogs(ctx, containerID, dockerclient.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
-		Tail:       fmt.Sprintf("%d", tail),
+		Tail:       strconv.Itoa(tail),
 	})
 	if err != nil {
 		return "", err
@@ -1033,20 +1081,17 @@ type ContainerSummary struct {
 // ContainerSummary inspects a container once and returns its status, start
 // time and memory limit.
 func (c *Client) ContainerSummary(ctx context.Context, containerID string) ContainerSummary {
-	info, err := c.docker.ContainerInspect(ctx, containerID)
+	info, err := c.docker.ContainerInspect(ctx, containerID, dockerclient.ContainerInspectOptions{})
 	if err != nil {
 		return ContainerSummary{Status: "unknown"}
 	}
-	return summarizeContainer(info)
+	return summarizeContainer(info.Container)
 }
 
 func summarizeContainer(info container.InspectResponse) ContainerSummary {
 	s := ContainerSummary{Status: "unknown"}
-	if info.ContainerJSONBase == nil {
-		return s
-	}
 	if state := info.State; state != nil {
-		s.Status = state.Status
+		s.Status = string(state.Status)
 		if state.ExitCode != 0 {
 			s.Status = fmt.Sprintf("%s (exit %d)", state.Status, state.ExitCode)
 		}
@@ -1063,7 +1108,7 @@ func summarizeContainer(info container.InspectResponse) ContainerSummary {
 
 // StreamLogs follows the container log output and copies it to the given writer.
 func (c *Client) StreamLogs(ctx context.Context, containerID string, w io.Writer) error {
-	reader, err := c.docker.ContainerLogs(ctx, containerID, container.LogsOptions{
+	reader, err := c.docker.ContainerLogs(ctx, containerID, dockerclient.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
