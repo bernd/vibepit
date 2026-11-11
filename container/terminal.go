@@ -35,7 +35,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/overlay"
-	"github.com/docker/docker/api/types"
+	"github.com/moby/moby/client"
 	"golang.org/x/term"
 )
 
@@ -86,7 +86,7 @@ func (h TerminalHooks) NewTerminal(cfg overlay.Config) *overlay.Terminal {
 }
 
 // newSessionTerminal connects a hijacked session to the local terminal.
-func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.Writer, size func() (int, int, error), resizeFn func(height, width uint), hooks TerminalHooks) *overlay.Terminal {
+func newSessionTerminal(resp client.HijackedResponse, stdin io.Reader, stdout io.Writer, size func() (int, int, error), resizeFn func(height, width uint), hooks TerminalHooks) *overlay.Terminal {
 	return hooks.NewTerminal(overlay.Config{
 		Stdin:      stdin,
 		Stdout:     stdout,
@@ -103,7 +103,7 @@ func newSessionTerminal(resp types.HijackedResponse, stdin io.Reader, stdout io.
 // handles SIGWINCH for terminal resizing. The resizeFn is called with
 // (height, width) whenever the terminal changes size. The function blocks
 // until the container-side stream ends, then returns any error.
-func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn func(height, width uint), hooks TerminalHooks) error {
+func runTTYSession(ctx context.Context, resp client.HijackedResponse, resizeFn func(height, width uint), hooks TerminalHooks) error {
 	fd := int(os.Stdin.Fd())
 
 	oldState, err := term.MakeRaw(fd)
@@ -142,12 +142,12 @@ func runTTYSession(ctx context.Context, resp types.HijackedResponse, resizeFn fu
 	return t.Run(ctx)
 }
 
-// terminalSize returns the current terminal dimensions, or nil if
-// they cannot be determined.
-func terminalSize() *[2]uint {
+// terminalSize returns the current terminal dimensions, or the zero size,
+// which the client treats as unset, if they cannot be determined.
+func terminalSize() client.ConsoleSize {
 	w, h, err := term.GetSize(int(os.Stdin.Fd()))
 	if err != nil {
-		return nil
+		return client.ConsoleSize{}
 	}
-	return &[2]uint{uint(h), uint(w)}
+	return client.ConsoleSize{Height: uint(h), Width: uint(w)}
 }
