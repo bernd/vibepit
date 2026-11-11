@@ -752,19 +752,28 @@ func (c *Client) ListProxySessions(ctx context.Context) ([]ProxySession, error) 
 
 	var sessions []ProxySession
 	for _, ctr := range list.Items {
-		controlPort := ctr.Labels[LabelControlPort]
-		if port, err := c.FindPublishedPort(ctx, ctr.ID, controlPort+"/tcp"); err == nil {
-			controlPort = strconv.Itoa(port)
-		}
 		sessions = append(sessions, ProxySession{
 			ContainerID: ctr.ID,
 			SessionID:   ctr.Labels[LabelSessionID],
-			ControlPort: controlPort,
+			ControlPort: controlPortOf(ctr),
 			ProjectDir:  ctr.Labels[LabelProjectDir],
 			StartedAt:   time.Unix(ctr.Created, 0),
 		})
 	}
 	return sessions, nil
+}
+
+// controlPortOf returns the host port published for a proxy's control port
+// label, read from the list result so no extra inspect call is needed. It
+// falls back to the label value if the port is not published.
+func controlPortOf(ctr container.Summary) string {
+	label := ctr.Labels[LabelControlPort]
+	for _, p := range ctr.Ports {
+		if p.Type == "tcp" && p.PublicPort != 0 && strconv.Itoa(int(p.PrivatePort)) == label {
+			return strconv.Itoa(int(p.PublicPort))
+		}
+	}
+	return label
 }
 
 // SandboxContainerConfig holds the parameters for the sandboxed sandbox container.

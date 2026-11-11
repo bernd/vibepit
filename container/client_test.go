@@ -353,6 +353,32 @@ func TestNewClientDoesNotFallBackFromDockerHost(t *testing.T) {
 	assert.ErrorContains(t, err, "DOCKER_HOST="+host)
 }
 
+func TestControlPortOf(t *testing.T) {
+	labels := map[string]string{LabelControlPort: "54321"}
+	tests := []struct {
+		name  string
+		ports []container.PortSummary
+		want  string
+	}{
+		{
+			name: "published",
+			ports: []container.PortSummary{
+				{PrivatePort: 2222, PublicPort: 40000, Type: "tcp"},
+				{PrivatePort: 54321, PublicPort: 49153, Type: "tcp"},
+			},
+			want: "49153",
+		},
+		{name: "not published", ports: []container.PortSummary{{PrivatePort: 54321, Type: "tcp"}}, want: "54321"},
+		{name: "udp ignored", ports: []container.PortSummary{{PrivatePort: 54321, PublicPort: 49153, Type: "udp"}}, want: "54321"},
+		{name: "no ports", want: "54321"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, controlPortOf(container.Summary{Labels: labels, Ports: tt.ports}))
+		})
+	}
+}
+
 // stdFrame encodes p as one stdcopy frame for stream (1 stdout, 2 stderr).
 func stdFrame(stream byte, p string) []byte {
 	header := make([]byte, 8)
