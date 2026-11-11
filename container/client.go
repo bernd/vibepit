@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -1028,11 +1029,53 @@ func (c *Client) ContainerLogs(ctx context.Context, containerID string, tail int
 		return "", err
 	}
 	defer reader.Close()
-	b, err := io.ReadAll(reader)
-	if err != nil {
+	raw, err := io.ReadAll(reader)
+	if err != nil && len(raw) == 0 {
 		return "", err
 	}
-	return string(b), nil
+	logs := demuxLogs(raw)
+	if err != nil {
+		// The logs are diagnostics, so partial output beats none, but say so.
+		if logs != "" && !strings.HasSuffix(logs, "\n") {
+			logs += "\n"
+		}
+		logs += fmt.Sprintf("[logs incomplete: %v]\n", err)
+	}
+	return logs, nil
+}
+
+// demuxLogs strips the 8-byte frame headers the daemon adds to the logs of
+// containers without a TTY, interleaving all streams in arrival order. Logs
+// that do not start with a frame header, such as raw TTY logs, are returned
+// as is. A truncated last frame keeps the payload that arrived, and bytes
+// after an unrecognised header are kept raw, so no output is lost.
+// stdcopy.StdCopy is not used because it silently drops such input.
+func demuxLogs(raw []byte) string {
+	if !isFrameHeader(raw) {
+		return string(raw)
+	}
+	var out strings.Builder
+	for rest := raw; len(rest) > 0; {
+		if !isFrameHeader(rest) {
+			out.Write(rest)
+			break
+		}
+		size := int(binary.BigEndian.Uint32(rest[4:8]))
+		payload := rest[8:]
+		if size > len(payload) {
+			out.Write(payload)
+			break
+		}
+		out.Write(payload[:size])
+		rest = payload[size:]
+	}
+	return out.String()
+}
+
+// isFrameHeader reports whether b starts with a stdcopy frame header: a
+// stream type (stdin, stdout, stderr or daemon error) and three zero bytes.
+func isFrameHeader(b []byte) bool {
+	return len(b) >= 8 && b[0] <= 3 && b[1] == 0 && b[2] == 0 && b[3] == 0
 }
 
 // ContainerStatus returns a short status string for a container (e.g. "running", "exited (1)").

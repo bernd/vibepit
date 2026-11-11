@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"iter"
 	"net/http"
@@ -235,6 +236,17 @@ func TestParseIPv4(t *testing.T) {
 	}
 }
 
+// fakeDaemon serves the Docker API from handler and returns a client for it.
+func fakeDaemon(t *testing.T, handler http.HandlerFunc) *dockerclient.Client {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	cli, err := dockerclient.New(dockerclient.WithHost("tcp://" + strings.TrimPrefix(srv.URL, "http://")))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cli.Close() })
+	return cli
+}
+
 // fakePing serves /_ping with the given API version and status.
 func fakePing(t *testing.T, apiVersion string, status int) string {
 	t.Helper()
@@ -294,6 +306,56 @@ func TestNewClientDoesNotFallBackFromDockerHost(t *testing.T) {
 	t.Setenv("DOCKER_HOST", host)
 	_, err := NewClient()
 	assert.ErrorContains(t, err, "DOCKER_HOST="+host)
+}
+
+// stdFrame encodes p as one stdcopy frame for stream (1 stdout, 2 stderr).
+func stdFrame(stream byte, p string) []byte {
+	header := make([]byte, 8)
+	header[0] = stream
+	binary.BigEndian.PutUint32(header[4:], uint32(len(p)))
+	return append(header, p...)
+}
+
+func TestContainerLogs(t *testing.T) {
+	framed := append(stdFrame(1, "out line\n"), stdFrame(2, "err line\n")...)
+	tests := []struct {
+		name string
+		body []byte
+		want string
+	}{
+		{name: "framed logs are demultiplexed", body: framed, want: "out line\nerr line\n"},
+		{name: "TTY logs are raw", body: []byte("raw\r\n"), want: "raw\r\n"},
+		{name: "truncated last frame keeps arrived payload", body: framed[:len(framed)-3], want: "out line\nerr li"},
+		{name: "daemon error frame is kept", body: append(stdFrame(1, "out\n"), stdFrame(3, "boom")...), want: "out\nboom"},
+		{name: "unrecognised header keeps rest raw", body: append(stdFrame(1, "out\n"), "junk"...), want: "out\njunk"},
+		{name: "empty", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/containers/c1/logs") {
+					http.NotFound(w, r)
+					return
+				}
+				assert.Equal(t, "20", r.URL.Query().Get("tail"))
+				_, _ = w.Write(tt.body)
+			})
+			got, err := (&Client{docker: cli}).ContainerLogs(context.Background(), "c1", 20)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestContainerLogsMarksIncompleteOutput(t *testing.T) {
+	cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		// Promise more than is sent, so the read ends with an unexpected EOF.
+		w.Header().Set("Content-Length", "100")
+		_, _ = w.Write(stdFrame(1, "out line\n"))
+	})
+	got, err := (&Client{docker: cli}).ContainerLogs(context.Background(), "c1", 20)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(got, "out line\n[logs incomplete: "), "got %q", got)
 }
 
 func TestNewClientDoesNotFallBackFromInvalidSettings(t *testing.T) {
