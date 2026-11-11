@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -252,19 +253,53 @@ func TestPingedClient(t *testing.T) {
 		name       string
 		apiVersion string
 		status     int
-		wantClient bool
+		wantErr    string
 	}{
-		{name: "supported daemon", apiVersion: "1.44", status: http.StatusOK, wantClient: true},
-		{name: "too old daemon", apiVersion: "1.30", status: http.StatusOK},
-		{name: "daemon error", status: http.StatusInternalServerError},
+		{name: "supported daemon", apiVersion: "1.44", status: http.StatusOK},
+		{name: "too old daemon", apiVersion: "1.30", status: http.StatusOK, wantErr: "not supported"},
+		{name: "daemon error", status: http.StatusInternalServerError, wantErr: "tcp://"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cli := pingedClient(false, "test", dockerclient.WithHost(fakePing(t, tt.apiVersion, tt.status)))
-			if cli != nil {
-				_ = cli.Close()
+			cli, err := pingedClient(false, dockerclient.WithHost(fakePing(t, tt.apiVersion, tt.status)))
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+				assert.Nil(t, cli)
+				return
 			}
-			assert.Equal(t, tt.wantClient, cli != nil)
+			require.NoError(t, err)
+			_ = cli.Close()
 		})
 	}
+}
+
+func TestFindSocketSkipsUnusableDaemons(t *testing.T) {
+	old := fakePing(t, "1.30", http.StatusOK)
+	broken := fakePing(t, "", http.StatusInternalServerError)
+	good := fakePing(t, "1.44", http.StatusOK)
+
+	cli, err := findSocket(false, old, broken, good)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cli.Close() })
+	assert.Equal(t, good, cli.DaemonHost())
+
+	_, err = findSocket(false, old, broken)
+	assert.ErrorContains(t, err, old+": ", "reports why each socket failed")
+	assert.ErrorContains(t, err, "not supported")
+	assert.ErrorContains(t, err, broken+": ")
+}
+
+func TestNewClientDoesNotFallBackFromDockerHost(t *testing.T) {
+	host := fakePing(t, "", http.StatusInternalServerError)
+	t.Setenv("DOCKER_HOST", host)
+	_, err := NewClient()
+	assert.ErrorContains(t, err, "DOCKER_HOST="+host)
+}
+
+func TestNewClientDoesNotFallBackFromInvalidSettings(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", filepath.Join(t.TempDir(), "missing"))
+	_, err := NewClient()
+	assert.ErrorIs(t, err, errClientConfig)
 }
