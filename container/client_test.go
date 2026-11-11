@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,6 +248,50 @@ func fakeDaemon(t *testing.T, handler http.HandlerFunc) *dockerclient.Client {
 	return cli
 }
 
+func TestStartProxyContainerRemovesContainerOnFailure(t *testing.T) {
+	tests := []struct {
+		name     string
+		failPath string
+		wantErr  string
+	}{
+		{name: "network connect fails", failPath: "/networks/net1/connect", wantErr: "connect proxy to session network"},
+		{name: "start fails", failPath: "/containers/proxy1/start", wantErr: "start proxy container"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var removed []string
+			cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.HasSuffix(r.URL.Path, tt.failPath):
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"message":"boom"}`))
+				case strings.HasSuffix(r.URL.Path, "/containers/create"):
+					w.WriteHeader(http.StatusCreated)
+					_, _ = w.Write([]byte(`{"Id":"proxy1"}`))
+				case r.Method == http.MethodDelete:
+					mu.Lock()
+					removed = append(removed, r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+					mu.Unlock()
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.WriteHeader(http.StatusNoContent)
+				}
+			})
+			_, _, err := (&Client{docker: cli}).StartProxyContainer(context.Background(), ProxyContainerConfig{
+				ControlAPIPort: 54321,
+				ProxyIP:        "10.0.0.2",
+				NetworkID:      "net1",
+			})
+			assert.ErrorContains(t, err, tt.wantErr)
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, []string{"proxy1"}, removed)
+		})
+	}
+}
+
 // fakePing serves /_ping with the given API version and status.
 func fakePing(t *testing.T, apiVersion string, status int) string {
 	t.Helper()
@@ -364,4 +409,23 @@ func TestNewClientDoesNotFallBackFromInvalidSettings(t *testing.T) {
 	t.Setenv("DOCKER_CERT_PATH", filepath.Join(t.TempDir(), "missing"))
 	_, err := NewClient()
 	assert.ErrorIs(t, err, errClientConfig)
+}
+
+func TestStopAndRemoveOutlivesCancelledContext(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if i := strings.Index(r.URL.Path, "/containers/"); i >= 0 {
+			mu.Lock()
+			calls = append(calls, r.Method+" "+r.URL.Path[i:])
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, (&Client{docker: cli}).StopAndRemove(ctx, "c1"))
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"POST /containers/c1/stop", "DELETE /containers/c1"}, calls)
 }
