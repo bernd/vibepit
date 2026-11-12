@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/api/types/network"
@@ -531,6 +533,125 @@ func TestWaitExecExit(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, code)
+		})
+	}
+}
+
+func TestRemoveAfterFailedCreate(t *testing.T) {
+	shorten(t, &createSettleTimeout, 300*time.Millisecond)
+	shorten(t, &createSettlePoll, 10*time.Millisecond)
+	const ours = `{"Id":"c1","Config":{"Labels":{"vibepit.session-id":"s1"}}}`
+	interrupted := fmt.Errorf("create proxy container: %w", context.Canceled)
+	tests := []struct {
+		name          string
+		createErr     error
+		sessionID     string
+		notFoundPolls int    // 404s before the container appears; -1: never
+		inspect       string // JSON body once found
+		inspectStatus int    // non-zero: inspect fails with this status
+		failPolls     int    // inspect failures before answering; -1: always
+		removeFails   bool
+		wantInspect   bool
+		wantRemoved   bool
+		wantErr       string
+	}{
+		{name: "created anyway", createErr: interrupted, sessionID: "s1", inspect: ours, wantInspect: true, wantRemoved: true},
+		{name: "appears after a moment", createErr: interrupted, sessionID: "s1", notFoundPolls: 3, inspect: ours, wantInspect: true, wantRemoved: true},
+		{name: "never created", createErr: interrupted, sessionID: "s1", notFoundPolls: -1, wantInspect: true},
+		{name: "name taken by another session", createErr: interrupted, sessionID: "s1", inspect: `{"Id":"c1","Config":{"Labels":{"vibepit.session-id":"s2"}}}`, wantInspect: true},
+		{name: "no labels", createErr: interrupted, sessionID: "s1", inspect: `{"Id":"c1"}`, wantInspect: true},
+		{name: "no session ID", createErr: interrupted, inspect: ours},
+		{name: "connection dropped", createErr: errors.New("error during connect: EOF"), sessionID: "s1", inspect: ours, wantInspect: true, wantRemoved: true},
+		{name: "daemon refused the create", createErr: cerrdefs.ErrConflict.WithMessage("name in use"), sessionID: "s1", inspect: ours},
+		{name: "daemon failed the create", createErr: cerrdefs.ErrInternal.WithMessage("boom"), sessionID: "s1", inspect: ours},
+		{name: "transient lookup error is retried", createErr: interrupted, sessionID: "s1", inspectStatus: http.StatusInternalServerError, failPolls: 2, inspect: ours, wantInspect: true, wantRemoved: true},
+		{name: "lookup keeps failing", createErr: interrupted, sessionID: "s1", inspectStatus: http.StatusInternalServerError, failPolls: -1, wantInspect: true, wantErr: "could not check whether container vibepit-proxy-s1 was left behind"},
+		{name: "remove fails", createErr: interrupted, sessionID: "s1", inspect: ours, removeFails: true, wantInspect: true, wantRemoved: true, wantErr: "remove container vibepit-proxy-s1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			inspected, removed := false, false
+			polls := 0
+			cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/vibepit-proxy-s1/json"):
+					inspected = true
+					polls++
+					if tt.inspectStatus != 0 && (tt.failPolls < 0 || polls <= tt.failPolls) {
+						w.WriteHeader(tt.inspectStatus)
+						_, _ = w.Write([]byte(`{"message":"boom"}`))
+						return
+					}
+					if tt.notFoundPolls < 0 || polls <= tt.notFoundPolls {
+						w.WriteHeader(http.StatusNotFound)
+						_, _ = w.Write([]byte(`{"message":"no such container"}`))
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tt.inspect))
+				case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/containers/c1"):
+					removed = true
+					if tt.removeFails {
+						w.WriteHeader(http.StatusInternalServerError)
+						_, _ = w.Write([]byte(`{"message":"boom"}`))
+						return
+					}
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					http.NotFound(w, r)
+				}
+			})
+			// A cancelled context is the typical cause, so cleanup must not use it.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := (&Client{docker: cli}).removeAfterFailedCreate(ctx, "vibepit-proxy-s1", tt.sessionID, tt.createErr)
+			assert.ErrorIs(t, err, tt.createErr)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+			} else {
+				assert.NotContains(t, err.Error(), "left behind")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, tt.wantInspect, inspected, "inspected")
+			assert.Equal(t, tt.wantRemoved, removed, "removed")
+		})
+	}
+}
+
+func TestDaemonAnswered(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int // 0: hang until the request is cancelled
+		want   bool
+	}{
+		{name: "conflict", status: http.StatusConflict, want: true},
+		{name: "bad request", status: http.StatusBadRequest, want: true},
+		{name: "image not found", status: http.StatusNotFound, want: true},
+		{name: "internal error", status: http.StatusInternalServerError, want: true},
+		{name: "unavailable, maybe from a proxy", status: http.StatusServiceUnavailable},
+		{name: "bad gateway, unclassified", status: http.StatusBadGateway},
+		{name: "cancelled in flight", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				if tt.status == 0 {
+					<-r.Context().Done()
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(`{"message":"boom"}`))
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			_, err := cli.ContainerCreate(ctx, dockerclient.ContainerCreateOptions{Config: &container.Config{Image: "img"}, Name: "c"})
+			require.Error(t, err)
+			assert.Equal(t, tt.want, daemonAnswered(err), "%v", err)
 		})
 	}
 }
