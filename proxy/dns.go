@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -149,19 +148,4 @@ func (s *DNSServer) ListenAndServe(addr string) error {
 	go func() { errCh <- tcpServer.ListenAndServe() }()
 
 	return <-errCh
-}
-
-// ListenAndServeTest starts a UDP DNS server on a random port for testing.
-// Returns the address and a cleanup function.
-func (s *DNSServer) ListenAndServeTest() (string, func()) {
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		panic(fmt.Sprintf("listen: %v", err))
-	}
-	addr := pc.LocalAddr().String()
-
-	srv := &mdns.Server{PacketConn: pc, Handler: s.handler()}
-	go srv.ActivateAndServe()
-
-	return addr, func() { srv.Shutdown() }
 }

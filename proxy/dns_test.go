@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -9,6 +10,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// ListenAndServeTest starts a UDP DNS server on a random port for testing.
+// Returns the address and a cleanup function.
+func (s *DNSServer) ListenAndServeTest() (string, func()) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		panic(fmt.Sprintf("listen: %v", err))
+	}
+	addr := pc.LocalAddr().String()
+
+	srv := &dns.Server{PacketConn: pc, Handler: s.handler()}
+	go srv.ActivateAndServe()
+
+	return addr, func() { srv.Shutdown() }
+}
 
 func TestDNSServer(t *testing.T) {
 	al, err := NewDNSAllowlist([]string{"allowed.example.com", "dnsonly.example.com"})
