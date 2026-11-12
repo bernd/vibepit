@@ -72,6 +72,10 @@ var (
 	// exit after its stream ended.
 	execExitTimeout = 5 * time.Second
 	execExitPoll    = 50 * time.Millisecond
+	// createSettleTimeout bounds the wait for a container whose create call
+	// was interrupted to appear, since the daemon may still be creating it.
+	createSettleTimeout = 2 * time.Second
+	createSettlePoll    = 100 * time.Millisecond
 )
 
 var (
@@ -655,6 +659,86 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 	return err
 }
 
+// removeAfterFailedCreate removes the container named name if a create
+// call failed after the daemon had already created it, as when the request
+// is interrupted in flight. The caller never got an ID, so nothing else
+// would remove it. A container is only removed if it carries this session's
+// ID, so a name conflict with another container never removes that one.
+// It returns createErr, joined with any removal error or a note that the
+// lookup failed.
+func (c *Client) removeAfterFailedCreate(ctx context.Context, name, sessionID string, createErr error) error {
+	if name == "" || sessionID == "" || daemonAnswered(createErr) {
+		return createErr
+	}
+	// The daemon may still be creating the container, so keep looking for a
+	// moment. The lookup must outlive a cancelled ctx, as that is the usual
+	// cause of the failure.
+	lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), createSettleTimeout)
+	defer cancel()
+	var found container.InspectResponse
+	seenNotFound := false
+	err := poll(lookupCtx, createSettlePoll, func(ctx context.Context) (bool, error) {
+		info, err := c.docker.ContainerInspect(ctx, name, dockerclient.ContainerInspectOptions{})
+		switch {
+		case err == nil:
+			found = info.Container
+			return true, nil
+		case cerrdefs.IsNotFound(err):
+			seenNotFound = true
+			return false, nil
+		}
+		return false, err
+	})
+	switch {
+	case err == nil:
+	case seenNotFound && errors.Is(err, context.DeadlineExceeded):
+		// The last lookups found nothing: it was not created.
+		return createErr
+	default:
+		return errors.Join(createErr, fmt.Errorf("could not check whether container %s was left behind: %w", name, err))
+	}
+	if containerLabels(found)[LabelSessionID] != sessionID {
+		return createErr
+	}
+	if err := c.removeContainer(ctx, found.ID); err != nil {
+		return errors.Join(createErr, fmt.Errorf("remove container %s: %w", name, err))
+	}
+	return createErr
+}
+
+// daemonAnswered reports whether err carries the daemon's HTTP response to a
+// create request. The daemon then finished handling it without creating the
+// container. Any other error, such as a cancellation, a timeout or a dropped
+// connection, leaves open whether the container was created.
+//
+// The client classifies HTTP error responses into the categories below. 503
+// and the statuses it leaves unclassified (e.g. 502 and 504) are not counted:
+// a proxy in front of the daemon may return them after the daemon created
+// the container.
+func daemonAnswered(err error) bool {
+	for _, is := range []func(error) bool{
+		cerrdefs.IsInvalidArgument, cerrdefs.IsNotFound, cerrdefs.IsAlreadyExists,
+		cerrdefs.IsPermissionDenied, cerrdefs.IsResourceExhausted, cerrdefs.IsFailedPrecondition,
+		cerrdefs.IsConflict, cerrdefs.IsNotModified, cerrdefs.IsAborted, cerrdefs.IsOutOfRange,
+		cerrdefs.IsNotImplemented, cerrdefs.IsInternal, cerrdefs.IsDataLoss,
+		cerrdefs.IsUnauthorized,
+	} {
+		if is(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeContainer force-removes a container on a context that survives
+// cancellation of ctx.
+func (c *Client) removeContainer(ctx context.Context, containerID string) error {
+	ctx, cancel := cleanupContext(ctx)
+	defer cancel()
+	_, err := c.docker.ContainerRemove(ctx, containerID, dockerclient.ContainerRemoveOptions{Force: true})
+	return err
+}
+
 // cleanupContext returns a context for removing resources that still works
 // after ctx is cancelled (e.g. by Ctrl-C), bounded by removeTimeout.
 func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -758,15 +842,12 @@ func (c *Client) StartProxyContainer(ctx context.Context, cfg ProxyContainerConf
 		Name:       cfg.Name,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("create proxy container: %w", err)
+		return "", "", c.removeAfterFailedCreate(ctx, cfg.Name, cfg.SessionID, fmt.Errorf("create proxy container: %w", err))
 	}
 	// The caller only cleans up a container it got an ID for, so remove it
 	// here if it cannot be started.
 	fail := func(err error) (string, string, error) {
-		rmCtx, cancel := cleanupContext(ctx)
-		defer cancel()
-		_, rmErr := c.docker.ContainerRemove(rmCtx, resp.ID, dockerclient.ContainerRemoveOptions{Force: true})
-		if rmErr != nil {
+		if rmErr := c.removeContainer(ctx, resp.ID); rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove proxy container: %w", rmErr))
 		}
 		return "", "", err
@@ -1016,7 +1097,7 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		Name:             cfg.Name,
 	})
 	if err != nil {
-		return "", fmt.Errorf("create sandbox container: %w", err)
+		return "", c.removeAfterFailedCreate(ctx, cfg.Name, cfg.SessionID, fmt.Errorf("create sandbox container: %w", err))
 	}
 	for _, w := range resp.Warnings {
 		tui.Warn("container runtime: %s", w)
@@ -1096,10 +1177,7 @@ func (c *Client) StopAndRemove(ctx context.Context, containerID string) error {
 	timeout := 2
 	c.docker.ContainerStop(stopCtx, containerID, dockerclient.ContainerStopOptions{Timeout: &timeout})
 
-	rmCtx, cancelRm := cleanupContext(ctx)
-	defer cancelRm()
-	_, err := c.docker.ContainerRemove(rmCtx, containerID, dockerclient.ContainerRemoveOptions{Force: true})
-	return err
+	return c.removeContainer(ctx, containerID)
 }
 
 // EnsureVolume creates a named volume if it does not already exist, labelling
