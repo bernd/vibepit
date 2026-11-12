@@ -132,6 +132,32 @@ prompt or monitor nothing is held. See the
 [blocked connection prompt](../reference/cli.md#blocked-connection-prompt)
 for what you see while a request waits.
 
+## Prompt by default
+
+To get the
+[blocked connection prompt](../reference/cli.md#blocked-connection-prompt)
+in every `run` and `connect` session without passing `--prompt`, set this in
+the [global config](#global-config):
+
+```yaml
+prompt: true
+```
+
+The value must be `true` or `false`. The flag overrides it: `--prompt=false`
+turns the prompt off for one session.
+
+`prompt` is a global config setting only. Whether to prompt is your own
+preference, so in a project config, which is usually shared with the
+repository, it has no effect.
+
+With the prompt on by default, every session
+[holds blocked requests](#hold-blocked-requests) for up to `hold-timeout`
+instead of failing them right away.
+
+If vibepit can't set up a prompt that only the config asks for, it prints a
+warning and starts the session without it. With `--prompt` the command
+stops with an error instead.
+
 ## Limit sandbox memory
 
 The `memory` setting caps the memory available to the sandbox container,
@@ -187,6 +213,10 @@ allow-cidr:
   - 100.64.0.0/10
 
 memory: 16g
+
+hold-timeout: 15s
+
+prompt: true
 ```
 
 ## Where each setting comes from
@@ -203,6 +233,7 @@ uniformly — each key follows its own rules:
 | `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges — see the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
 | `allow-host-ports` | Project config only. |
 | `hold-timeout` | Project config, else global config, else `10s`. |
+| `prompt` | CLI flag, else global config, else `false`. Not read from the project config. |
 | `memory` | CLI flag, else project config, else global config. |
 
 ## Further reading

@@ -43,7 +43,7 @@ vibepit run [flags] [project-path]
 | `-p`, `--preset` | string (repeatable) | | Additional network presets to activate |
 | `-m`, `--memory` | string | | Memory limit for the sandbox container (e.g. `16g`, `512m`; `0` for none). Overrides the `memory` config setting. |
 | `-r`, `--reconfigure` | bool | `false` | Re-run the network preset selector |
-| `--prompt` | bool | `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
+| `--prompt` | bool | [`prompt`](../how-to/configure-presets.md#prompt-by-default) in the global config, else `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 
@@ -69,6 +69,9 @@ the proxy would block. The prompt appears over the session, in the same
 terminal window, in any terminal emulator. Once you decide or dismiss it,
 the agent's screen comes back as it was, including any output the agent
 wrote in the meantime.
+
+To get the prompt in every session without the flag, see
+[Prompt by default](../how-to/configure-presets.md#prompt-by-default).
 
 While a prompt is attached, the proxy holds the agent's HTTP and HTTPS
 request instead of failing it. The prompt shows `held` and "the agent is
@@ -265,7 +268,7 @@ vibepit connect
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--prompt` | bool | `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
+| `--prompt` | bool | [`prompt`](../how-to/configure-presets.md#prompt-by-default) in the global config, else `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
 
 ### Behavior
 

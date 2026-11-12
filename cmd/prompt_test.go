@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -664,25 +666,43 @@ func TestStartBlockPrompter(t *testing.T) {
 	tests := []struct {
 		name        string
 		args        []string
+		global      string // global config content; empty for no file
 		getSession  func() (*SessionInfo, error)
 		wantErr     string
+		wantWarn    string
 		wantLookups int32
 	}{
 		{name: "off by default", args: []string{"x"}, getSession: counting},
-		{name: "explicitly off", args: []string{"x", "--prompt=false"}, getSession: counting},
-		{name: "session lookup fails", args: []string{"x", "--prompt"}, getSession: counting, wantErr: "not published", wantLookups: 1},
-		{name: "missing credentials", args: []string{"x", "--prompt"}, getSession: missingCreds, wantErr: "load TLS credentials"},
+		{name: "flag off", args: []string{"x", "--prompt=false"}, getSession: counting},
+		{name: "flag on, session lookup fails", args: []string{"x", "--prompt"}, getSession: counting, wantErr: "--prompt: find control port: not published", wantLookups: 1},
+		{name: "flag on, missing credentials", args: []string{"x", "--prompt"}, getSession: missingCreds, wantErr: "load TLS credentials"},
+		{name: "config on, session lookup fails", args: []string{"x"}, global: "prompt: true\n", getSession: counting, wantWarn: "not published", wantLookups: 1},
+		{name: "flag off overrides config", args: []string{"x", "--prompt=false"}, global: "prompt: true\n", getSession: counting},
+		{name: "flag on still fails with config on", args: []string{"x", "--prompt"}, global: "prompt: true\n", getSession: counting, wantErr: "not published", wantLookups: 1},
+		{name: "invalid config", args: []string{"x"}, global: "prompt: maybe\n", getSession: counting, wantWarn: "cannot read its setting"},
+		{name: "flag off skips invalid config", args: []string{"x", "--prompt=false"}, global: "prompt: maybe\n", getSession: counting},
+		{name: "flag on skips invalid config", args: []string{"x", "--prompt"}, global: "prompt: maybe\n", getSession: counting, wantErr: "not published", wantLookups: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lookups.Store(0)
+
+			globalPath := filepath.Join(t.TempDir(), "config.yaml")
+			if tt.global != "" {
+				require.NoError(t, os.WriteFile(globalPath, []byte(tt.global), 0o644))
+			}
+			var warnings []string
+			warnf := func(format string, args ...any) {
+				warnings = append(warnings, fmt.Sprintf(format, args...))
+			}
+
 			var bp *blockPrompter
 			var gotErr error
 			cmd := &cli.Command{
 				Name:  "x",
-				Flags: []cli.Flag{promptCLIFlag},
+				Flags: []cli.Flag{promptCLIFlag()},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					bp, gotErr = startBlockPrompter(ctx, cmd, tt.getSession)
+					bp, gotErr = startBlockPrompterFrom(ctx, cmd, globalPath, warnf, tt.getSession)
 					return nil
 				},
 			}
@@ -696,6 +716,12 @@ func TestStartBlockPrompter(t *testing.T) {
 				assert.NoError(t, gotErr)
 			} else {
 				assert.ErrorContains(t, gotErr, tt.wantErr)
+			}
+			if tt.wantWarn == "" {
+				assert.Empty(t, warnings)
+			} else if assert.Len(t, warnings, 1) {
+				assert.Contains(t, warnings[0], tt.wantWarn)
+				assert.Contains(t, warnings[0], globalPath, "the warning names the config file")
 			}
 		})
 	}

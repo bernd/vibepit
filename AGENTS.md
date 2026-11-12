@@ -85,15 +85,17 @@ Built with `urfave/cli/v3`.
 
 - `run` creates an isolated network, starts proxy + sandbox containers, and
   manages persistent `vibepit-home` volume and per-session networking. With
-  `--prompt` it follows the control API event stream for held connections and
-  shows the approve screen over the session through `overlay`.
+  `--prompt`, or `prompt: true` in the global config, it follows
+  the control API event stream for held connections and shows the approve
+  screen over the session through `overlay`.
 - `up` creates the same infrastructure as `run` but in daemon mode — containers
   run in the background with an SSH server. Returns immediately after startup.
 - `down` stops and removes all containers for a session and cleans up
   credentials.
 - `connect` connects to a running daemon-mode session via SSH with ephemeral
-  Ed25519 keys. Opens an interactive shell. With `--prompt` it shows the
-  approve screen like `run`.
+  Ed25519 keys. Opens an interactive shell. With `--prompt`, or
+  `prompt: true` in the global config, it shows the approve screen like
+  `run`.
 - `exec` executes a command in the sandbox via SSH and returns its exit code.
 - `status` shows session info including container uptime and published ports.
 - `allow-http` / `allow-dns` call the control API and can persist to project
