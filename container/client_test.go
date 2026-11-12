@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"iter"
 	"net/http"
@@ -454,4 +455,82 @@ func TestStopAndRemoveOutlivesCancelledContext(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, []string{"POST /containers/c1/stop", "DELETE /containers/c1"}, calls)
+}
+
+// shorten sets *v to d for the duration of the test.
+func shorten(t *testing.T, v *time.Duration, d time.Duration) {
+	t.Helper()
+	old := *v
+	*v = d
+	t.Cleanup(func() { *v = old })
+}
+
+func TestWaitExecExit(t *testing.T) {
+	shorten(t, &execExitTimeout, 200*time.Millisecond)
+	shorten(t, &execExitPoll, 10*time.Millisecond)
+	tests := []struct {
+		name         string
+		runningPolls int // -1: never stops
+		exitCode     int
+		failPolls    int // 500s before answering; -1: always
+		notFound     bool
+		cancelled    bool
+		want         int
+		wantErr      error
+		wantErrText  string
+	}{
+		{name: "already stopped", exitCode: 3, want: 3},
+		{name: "stops after a few polls", runningPolls: 3, exitCode: 3, want: 3},
+		{name: "zero exit", runningPolls: 1},
+		{name: "never stops", runningPolls: -1, wantErr: errShellStillRunning},
+		{name: "exec gone with its container", notFound: true, wantErr: errExitStatusUnavailable},
+		{name: "transient error is retried", failPolls: 2, exitCode: 3, want: 3},
+		{name: "persistent error", failPolls: -1, wantErrText: "exec inspect"},
+		{name: "parent context cancelled", runningPolls: -1, cancelled: true, wantErr: context.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			polls := 0
+			cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/exec/e1/json") || tt.notFound {
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(`{"message":"No such exec instance"}`))
+					return
+				}
+				mu.Lock()
+				polls++
+				failing := tt.failPolls < 0 || polls <= tt.failPolls
+				running := tt.runningPolls < 0 || polls-max(tt.failPolls, 0) <= tt.runningPolls
+				mu.Unlock()
+				if failing {
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"message":"boom"}`))
+					return
+				}
+				code := 0
+				if !running {
+					code = tt.exitCode
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"ID": "e1", "Running": running, "ExitCode": code})
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelled {
+				time.AfterFunc(30*time.Millisecond, cancel)
+			}
+			code, err := (&Client{docker: cli}).waitExecExit(ctx, "e1")
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			if tt.wantErrText != "" {
+				assert.ErrorContains(t, err, tt.wantErrText)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, code)
+		})
+	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/tui"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/api/types/network"
@@ -63,6 +64,14 @@ const (
 	// removeTimeout bounds cleanup that must outlive a cancelled context. It
 	// is short because Ctrl-C cannot interrupt it.
 	removeTimeout = 5 * time.Second
+)
+
+// Variables so tests can shorten them.
+var (
+	// execExitTimeout bounds the wait for the daemon to record an exec's
+	// exit after its stream ended.
+	execExitTimeout = 5 * time.Second
+	execExitPoll    = 50 * time.Millisecond
 )
 
 var (
@@ -506,15 +515,82 @@ func (c *Client) ExecSession(ctx context.Context, containerID string, hooks Term
 		return err
 	}
 
-	// Retrieve the exec process exit code.
-	inspect, err := c.docker.ExecInspect(ctx, execResp.ID, dockerclient.ExecInspectOptions{})
+	code, err := c.waitExecExit(ctx, execResp.ID)
 	if err != nil {
 		return err
 	}
-	if inspect.ExitCode != 0 {
-		return &ExitError{Code: inspect.ExitCode}
+	if code != 0 {
+		return &ExitError{Code: code}
 	}
 	return nil
+}
+
+var (
+	// errShellStillRunning is returned when the shell had not exited by the
+	// end of the wait after its session stream ended, e.g. because the
+	// connection to the daemon dropped or the daemon is slow to record it.
+	errShellStillRunning = errors.New("the shell had not exited when its session ended; it may still be running in the sandbox")
+	// errExitStatusUnavailable is returned when the exec is gone before its
+	// exit was read, e.g. because the sandbox was removed meanwhile or the
+	// runtime drops finished execs. Reporting success would be a guess.
+	errExitStatusUnavailable = errors.New("the shell's exit status is unavailable")
+)
+
+// waitExecExit returns the exit code of an exec whose stream has ended. The
+// stream can end before the daemon records the exit; until then the exec
+// still reads as running with exit code 0, so poll until it has stopped.
+func (c *Client) waitExecExit(ctx context.Context, execID string) (int, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, execExitTimeout)
+	defer cancel()
+	var code int
+	err := poll(waitCtx, execExitPoll, func(ctx context.Context) (bool, error) {
+		inspect, err := c.docker.ExecInspect(ctx, execID, dockerclient.ExecInspectOptions{})
+		switch {
+		case err == nil && !inspect.Running:
+			code = inspect.ExitCode
+			return true, nil
+		case cerrdefs.IsNotFound(err):
+			return true, errExitStatusUnavailable
+		}
+		return false, err
+	})
+	switch {
+	case err == nil:
+		return code, nil
+	case errors.Is(err, errExitStatusUnavailable):
+		return 0, err
+	case ctx.Err() != nil:
+		return 0, ctx.Err()
+	case errors.Is(err, context.DeadlineExceeded):
+		return 0, errShellStillRunning
+	default:
+		return 0, fmt.Errorf("exec inspect: %w", err)
+	}
+}
+
+// poll calls check every interval until it reports done, then returns the
+// error check returned with it. An error check returns while not done is
+// treated as transient and retried. When ctx ends first, poll returns the
+// error of the last check, or ctx.Err() if that check had none.
+func poll(ctx context.Context, interval time.Duration, check func(context.Context) (done bool, err error)) error {
+	var lastErr error
+	for {
+		done, err := check(ctx)
+		if done {
+			return err
+		}
+		if ctx.Err() == nil {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
 }
 
 // NetworkInfo is returned by CreateNetwork with the Docker-assigned addresses.
