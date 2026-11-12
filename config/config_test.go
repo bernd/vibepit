@@ -680,6 +680,36 @@ func TestWriteProjectConfig(t *testing.T) {
 	assert.Contains(t, string(updated), "# allow-http:")
 }
 
+func TestLoadGlobalPrompt(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string // empty for no file
+		want    bool
+		wantErr bool
+	}{
+		{name: "no file"},
+		{name: "on", content: "prompt: true\n", want: true},
+		{name: "off", content: "prompt: false\n"},
+		{name: "invalid", content: "prompt: maybe\n", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if tt.content != "" {
+				require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o644))
+			}
+			global, err := LoadGlobal(path)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "prompt")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, global.Prompt)
+		})
+	}
+}
+
 func TestMergeHoldTimeout(t *testing.T) {
 	tests := []struct {
 		name    string

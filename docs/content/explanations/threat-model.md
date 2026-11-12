@@ -86,8 +86,8 @@ Vibepit filters network traffic, not terminal output. A compromised agent can di
 
 ### Blocked connection prompts
 
-With `vibepit run --prompt`, a blocked request from the sandbox opens an
-allow/deny prompt over your session. See the
+With `--prompt`, or `prompt: true` in the global config, a blocked request
+from the sandbox opens an allow/deny prompt over your session. See the
 [CLI reference](../reference/cli.md#blocked-connection-prompt). This gives
 the agent a way to put a question in front of you: it can make requests on
 purpose to trigger prompts, and it chooses the domain names they show. A

@@ -24,7 +24,7 @@ func ConnectCommand() *cli.Command {
 		Name:    "connect",
 		Aliases: []string{"c"},
 		Usage:   "Connect to the running sandbox",
-		Flags:   []cli.Flag{promptCLIFlag},
+		Flags:   []cli.Flag{promptCLIFlag()},
 		Action:  ConnectAction,
 	}
 }

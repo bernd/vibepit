@@ -14,7 +14,7 @@ func RunCommand() *cli.Command {
 	return &cli.Command{
 		Name:   "run",
 		Usage:  "Start the sandbox",
-		Flags:  append(sandboxFlags(), promptCLIFlag),
+		Flags:  append(sandboxFlags(), promptCLIFlag()),
 		Action: RunAction,
 	}
 }

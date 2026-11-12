@@ -39,6 +39,10 @@ type GlobalConfig struct {
 	UpstreamDNS string   `koanf:"upstream-dns"`
 	Memory      string   `koanf:"memory"`
 	HoldTimeout string   `koanf:"hold-timeout"`
+	// Prompt turns the blocked connection prompt on by default. It has no
+	// project counterpart: it is the user's preference, and the project
+	// config is usually shared with the repository.
+	Prompt bool `koanf:"prompt"`
 }
 
 type ProjectConfig struct {
@@ -99,6 +103,16 @@ func Load(globalPath, projectPath string) (*Config, error) {
 		return nil, err
 	}
 
+	return cfg, nil
+}
+
+// LoadGlobal loads only the global config, for settings no project can
+// change. A missing file gives the defaults.
+func LoadGlobal(path string) (*GlobalConfig, error) {
+	cfg := &GlobalConfig{}
+	if err := loadFile(path, cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 

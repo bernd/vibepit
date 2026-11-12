@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bernd/vibepit/config"
 	ctr "github.com/bernd/vibepit/container"
 	"github.com/bernd/vibepit/overlay"
 	"github.com/bernd/vibepit/proxy"
@@ -17,9 +18,13 @@ import (
 
 const promptFlag = "prompt"
 
-var promptCLIFlag = &cli.BoolFlag{
-	Name:  promptFlag,
-	Usage: "Show an allow/deny prompt over the session when the proxy blocks a connection",
+// promptCLIFlag returns a new flag each time: a parsed flag remembers that
+// it was set, and startBlockPrompter depends on telling unset from false.
+func promptCLIFlag() cli.Flag {
+	return &cli.BoolFlag{
+		Name:  promptFlag,
+		Usage: "Show an allow/deny prompt over the session when the proxy blocks a connection (default: the \"prompt\" key of the global config)",
+	}
 }
 
 // promptFunc asks the user about the queued targets. The prompt posts the
@@ -52,7 +57,7 @@ const (
 	maxPromptFailures = 5
 	// maxPromptTargets bounds the targets a session tracks. The sandbox
 	// picks their names, so past it prompting stops rather than holding
-	// more: the targets stay blocked, as without --prompt.
+	// more: the targets stay blocked, as without a prompt.
 	maxPromptTargets = 1000
 )
 
@@ -288,9 +293,9 @@ func startPrompterLoop(ctx context.Context, cc *ControlClient, prompt promptFunc
 // blockPrompter is the prompting set up for one attach: the hooks that hand
 // it the session's terminal, and a stop function.
 type blockPrompter struct {
-	hooks ctr.TerminalHooks // start prompting on the session's terminal; zero without --prompt
+	hooks ctr.TerminalHooks // start prompting on the session's terminal; zero when prompting is off
 	stop  func()            // ends prompting and closes an open prompt; always safe to call
-	notes *promptNotes      // what prompting couldn't show; nil without --prompt
+	notes *promptNotes      // what prompting couldn't show; nil when prompting is off
 }
 
 // report prints the notes collected during the session. Call it after stop,
@@ -303,21 +308,61 @@ func (bp *blockPrompter) report() {
 
 var noBlockPrompter = &blockPrompter{stop: func() {}}
 
-// startBlockPrompter sets up prompting when --prompt is set. The session
-// and the control client are resolved before the attach takes over the
-// terminal, so a failure prints normally and stops the command. Prompting
-// starts once the attach hands over the session's terminal.
+// startBlockPrompter sets up prompting when the --prompt flag or the global
+// config asks for it. The session and the control client are resolved
+// before the attach takes over the terminal, so a failure prints normally.
+// Prompting starts once the attach hands over the session's terminal.
 func startBlockPrompter(ctx context.Context, cmd *cli.Command, getSession func() (*SessionInfo, error)) (*blockPrompter, error) {
-	if !cmd.Bool(promptFlag) {
+	return startBlockPrompterFrom(ctx, cmd, config.DefaultGlobalPath(), tui.Warn, getSession)
+}
+
+// startBlockPrompterFrom is startBlockPrompter with the global config file
+// and the warning output passed in.
+//
+// The flag wins when given, also as --prompt=false, and the config isn't
+// read then. A prompt the flag asks for has to work, so a failure stops
+// the command. One that only the config asks for is a default for every
+// session: a failure costs the prompt and a warning, never the attach,
+// which needs neither the config nor the control API. That covers connect
+// and run attaching to a running session; a run that starts one has loaded
+// the config by now and stopped on a broken one.
+func startBlockPrompterFrom(ctx context.Context, cmd *cli.Command, globalPath string, warnf func(format string, args ...any), getSession func() (*SessionInfo, error)) (*blockPrompter, error) {
+	if cmd.IsSet(promptFlag) {
+		if !cmd.Bool(promptFlag) {
+			return noBlockPrompter, nil
+		}
+		bp, err := newBlockPrompter(ctx, getSession)
+		if err != nil {
+			return noBlockPrompter, fmt.Errorf("--prompt: %w", err)
+		}
+		return bp, nil
+	}
+	global, err := config.LoadGlobal(globalPath)
+	if err != nil {
+		warnf("continuing without the blocked connection prompt: cannot read its setting from %s: %v", globalPath, err)
 		return noBlockPrompter, nil
 	}
+	if !global.Prompt {
+		return noBlockPrompter, nil
+	}
+	bp, err := newBlockPrompter(ctx, getSession)
+	if err != nil {
+		warnf("continuing without the blocked connection prompt set in %s: %v", globalPath, err)
+		return noBlockPrompter, nil
+	}
+	return bp, nil
+}
+
+// newBlockPrompter resolves the session and its control client and returns
+// the prompting for one attach.
+func newBlockPrompter(ctx context.Context, getSession func() (*SessionInfo, error)) (*blockPrompter, error) {
 	session, err := getSession()
 	if err != nil {
-		return noBlockPrompter, fmt.Errorf("--prompt: %w", err)
+		return nil, err
 	}
 	cc, err := NewControlClient(session)
 	if err != nil {
-		return noBlockPrompter, fmt.Errorf("--prompt: %w", err)
+		return nil, err
 	}
 	notes := &promptNotes{}
 
