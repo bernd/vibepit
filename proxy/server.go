@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/bernd/vibepit/netpipe"
 )
 
 const (
@@ -199,40 +200,19 @@ func (s *Server) runSSHForwarder(targetAddr string) error {
 		return fmt.Errorf("ssh forwarder listen: %w", err)
 	}
 	fmt.Printf("proxy: SSH forwarder listening on :%d -> %s\n", SSHForwardPort, targetAddr)
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			return fmt.Errorf("ssh forwarder accept: %w", err)
-		}
-		go forwardTCP(conn, targetAddr)
+	if err := netpipe.AcceptLoop(ln, func(conn net.Conn) { forwardTCP(conn, targetAddr) }); err != nil {
+		return fmt.Errorf("ssh forwarder accept: %w", err)
 	}
+	return nil
 }
 
 func forwardTCP(client net.Conn, targetAddr string) {
-	defer client.Close() //nolint:errcheck
 	target, err := net.Dial("tcp", targetAddr)
 	if err != nil {
+		client.Close() //nolint:errcheck
 		return
 	}
-	defer target.Close() //nolint:errcheck
-
-	done := make(chan struct{}, 2)
-	go func() {
-		io.Copy(target, client) //nolint:errcheck
-		// Half-close the write side so the target sees EOF while keeping
-		// the read side open for remaining output.
-		if tc, ok := target.(*net.TCPConn); ok {
-			tc.CloseWrite() //nolint:errcheck
-		}
-		done <- struct{}{}
-	}()
-	go func() {
-		io.Copy(client, target) //nolint:errcheck
-		done <- struct{}{}
-	}()
-	// Wait for both directions to finish.
-	<-done
-	<-done
+	netpipe.Join(client, target)
 }
 
 func (s *Server) dnsPort() int {

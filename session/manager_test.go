@@ -957,3 +957,37 @@ func TestSession_RecordsLastDetachReason(t *testing.T) {
 
 	assert.Equal(t, DetachKeepalive, s.Info().LastDetachReason)
 }
+
+func TestCreateWithBanner(t *testing.T) {
+	t.Run("banner is in the attach replay", func(t *testing.T) {
+		m := testManager(t, 5)
+		s, err := m.CreateWithBanner(80, 24, nil, []byte("HELLO BANNER\r\n"))
+		require.NoError(t, err)
+		c := s.Attach(80, 24)
+		defer c.Close() //nolint:errcheck
+		select {
+		case replay := <-c.output:
+			assert.Contains(t, string(replay), "HELLO BANNER")
+		case <-time.After(5 * time.Second):
+			t.Fatal("no attach replay")
+		}
+	})
+
+	// A status query makes the emulator write a reply that only drainVTE
+	// reads; written before drainVTE ran, it blocked creation for good
+	// while holding the manager's lock.
+	t.Run("emulator reply does not block", func(t *testing.T) {
+		m := testManager(t, 5)
+		done := make(chan error, 1)
+		go func() {
+			_, err := m.CreateWithBanner(80, 24, nil, []byte("\x1b[6n\x1b[c\r\n"))
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("CreateWithBanner blocked on the emulator's reply")
+		}
+	})
+}

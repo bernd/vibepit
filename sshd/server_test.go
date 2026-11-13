@@ -770,3 +770,95 @@ func TestSelectorOutputUsesCRLFViaSSH(t *testing.T) {
 
 	stdin.Write([]byte("q")) //nolint:errcheck
 }
+
+// TestLocalPortForwardViaSSH checks that direct-tcpip channels reach a
+// loopback service and that other destinations are refused.
+func TestLocalPortForwardViaSSH(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { echo.Close() }) //nolint:errcheck
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close() //nolint:errcheck
+				io.Copy(c, c)   //nolint:errcheck
+			}()
+		}
+	}()
+	port := fmt.Sprint(echo.Addr().(*net.TCPAddr).Port)
+
+	client := dialTestServer(t, session.NewManager(50))
+
+	for _, host := range []string{"127.0.0.1", "localhost"} {
+		t.Run(host, func(t *testing.T) {
+			conn, err := client.Dial("tcp", net.JoinHostPort(host, port))
+			require.NoError(t, err)
+			defer conn.Close() //nolint:errcheck
+			_, err = conn.Write([]byte("ping"))
+			require.NoError(t, err)
+			buf := make([]byte, 4)
+			_, err = io.ReadFull(conn, buf)
+			require.NoError(t, err)
+			assert.Equal(t, "ping", string(buf))
+		})
+	}
+
+	t.Run("half-close keeps response", func(t *testing.T) {
+		// Answers only after the request's EOF, like a request/EOF protocol.
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer l.Close() //nolint:errcheck
+		go func() {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() //nolint:errcheck
+			req, _ := io.ReadAll(c)
+			time.Sleep(50 * time.Millisecond)
+			c.Write(append([]byte("re:"), req...)) //nolint:errcheck
+		}()
+
+		conn, err := client.Dial("tcp", l.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close() //nolint:errcheck
+		_, err = conn.Write([]byte("ping"))
+		require.NoError(t, err)
+		require.NoError(t, conn.(interface{ CloseWrite() error }).CloseWrite())
+		got, err := io.ReadAll(conn)
+		require.NoError(t, err)
+		assert.Equal(t, "re:ping", string(got))
+	})
+
+	t.Run("non-loopback refused", func(t *testing.T) {
+		_, err := client.Dial("tcp", net.JoinHostPort("10.0.0.1", port))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "prohibited")
+	})
+}
+
+func TestForwardHostAllowed(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+	}{
+		{"localhost", true},
+		{"LocalHost", true},
+		{"127.0.0.1", true},
+		{"127.1.2.3", true},
+		{"::1", true},
+		{"0.0.0.0", false},
+		{"10.0.0.1", false},
+		{"example.com", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.host, func(t *testing.T) {
+			assert.Equal(t, tt.want, ForwardHostAllowed(tt.host))
+		})
+	}
+}

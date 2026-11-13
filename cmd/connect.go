@@ -24,18 +24,70 @@ func ConnectCommand() *cli.Command {
 		Name:    "connect",
 		Aliases: []string{"c"},
 		Usage:   "Connect to the running sandbox",
-		Flags:   []cli.Flag{promptCLIFlag()},
-		Action:  ConnectAction,
+		Flags: []cli.Flag{
+			promptCLIFlag(),
+			singleLineHelp{&cli.StringSliceFlag{
+				Name:    forwardFlag,
+				Aliases: []string{"L"},
+				// The full ssh -L syntax is in the CLI reference; help
+				// shows the forms people actually type.
+				Usage: "Forward host port LOCAL (default: same as PORT) to sandbox port PORT while connected (repeatable)",
+			}},
+		},
+		Action: ConnectAction,
 	}
 }
 
+const forwardFlag = "forward"
+
+// singleLineHelp hides that a slice flag can repeat from the help output,
+// where urfave/cli would print its names and placeholder a second time as
+// "[ --flag X, -f X ]". Repetition belongs in the usage text instead.
+type singleLineHelp struct {
+	*cli.StringSliceFlag
+}
+
+func (singleLineHelp) IsMultiValueFlag() bool { return false }
+
+// String must be overridden too: the embedded one formats the inner flag,
+// which bypasses the methods here.
+func (f singleLineHelp) String() string { return cli.FlagStringer(f) }
+
+// TypeName sets the placeholder. A backtick placeholder in Usage would also
+// stay in the usage sentence.
+func (singleLineHelp) TypeName() string { return "[LOCAL:]PORT" }
+
 func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 	debug := cmd.Root().Bool(debugFlag)
+	// Parse before connecting so a typo fails without touching the sandbox.
+	var forwards []forwardSpec
+	for _, s := range cmd.StringSlice(forwardFlag) {
+		spec, err := parseForwardSpec(s)
+		if err != nil {
+			return err
+		}
+		forwards = append(forwards, spec)
+	}
+
 	conn, sandbox, err := newSSHClient(ctx, debug)
 	if err != nil {
 		return err
 	}
 	defer conn.Close() //nolint:errcheck
+
+	if len(forwards) > 0 {
+		pf, err := startForwards(conn, forwards)
+		if err != nil {
+			return err
+		}
+		// Runs before conn.Close, so tunnels are closed before the SSH
+		// connection under them goes away.
+		// Not announced here: vibed's attach replay starts with a terminal
+		// reset, so anything printed now only flashes. vibed lists them in
+		// a banner when it creates a new session for this shell (see
+		// sshd.ForwardsRequestType); a reattached session shows none.
+		defer pf.Close() //nolint:errcheck
+	}
 
 	prompter, err := startBlockPrompter(ctx, cmd, func() (*SessionInfo, error) {
 		client, err := ctr.NewClient(ctr.WithDebug(debug))
@@ -55,6 +107,13 @@ func ConnectAction(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("connect session: %w", err)
 	}
 	defer session.Close() //nolint:errcheck
+
+	if len(forwards) > 0 {
+		// Informational only, so no reply: an older vibed rejects it and
+		// the forwards work regardless. Channel requests are handled in
+		// order, so it arrives before the shell request.
+		session.SendRequest(sshd.ForwardsRequestType, false, ssh.Marshal(forwardsRequest(forwards))) //nolint:errcheck
+	}
 
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)

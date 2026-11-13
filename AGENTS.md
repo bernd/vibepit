@@ -162,6 +162,13 @@ Ed25519 SSH keypair generation. Produces PEM-encoded private keys and
 OpenSSH-format authorized keys. Used by `up` to create ephemeral per-session
 keypairs.
 
+### Stream relay (`netpipe/`)
+
+`Join` relays two streams in both directions with half-close, and
+`AcceptLoop` accepts connections with backoff on temporary errors. Used by
+the proxy's SSH forwarder, vibed's `direct-tcpip` handler, and
+`connect --forward`; use it rather than writing another copy loop.
+
 ### Terminal emulator (`vt/`)
 
 Shadow terminal emulator: parses a byte stream, reports terminal state, and
