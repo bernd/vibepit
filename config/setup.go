@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/bernd/vibepit/proxy"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -19,9 +21,8 @@ func RunFirstTimeSetup(projectDir, projectConfigPath string) ([]string, error) {
 	detected := DetectPresets(projectDir)
 
 	preChecked := make(map[string]bool)
-	preChecked["default"] = true
-	for _, d := range detected {
-		preChecked[d] = true
+	for _, p := range initialPresets(detected) {
+		preChecked[p] = true
 	}
 
 	selected, err := runPresetSelectorTUI(preChecked, detected)
@@ -29,7 +30,7 @@ func RunFirstTimeSetup(projectDir, projectConfigPath string) ([]string, error) {
 		return nil, err
 	}
 
-	return selected, writeProjectConfig(projectConfigPath, selected)
+	return selected, saveProjectPresets(projectConfigPath, selected)
 }
 
 // RunReconfigure re-runs the interactive preset selector and rewrites only the
@@ -54,28 +55,37 @@ func RunReconfigure(projectConfigPath, projectDir string) ([]string, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(projectConfigPath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return selected, writeProjectConfig(projectConfigPath, selected)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read project config: %w", err)
-	}
-
-	updated, err := replaceYAMLListSection(data, "presets", selected)
-	if err != nil {
-		return nil, err
-	}
-	return selected, os.WriteFile(projectConfigPath, updated, 0o600)
+	return selected, saveProjectPresets(projectConfigPath, selected)
 }
 
-// writeProjectConfig writes a fresh config file with the given presets and
-// commented-out placeholder sections for the other keys.
-func writeProjectConfig(path string, presets []string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
+// initialPresets are the presets first-run setup preselects: default plus
+// the ones detected in the project.
+func initialPresets(detected []string) []string {
+	return append([]string{"default"}, detected...)
+}
 
+// saveProjectPresets initializes the project config, or updates only presets
+// if it exists, e.g. another client created it while setup was open.
+func saveProjectPresets(path string, presets []string) error {
+	return withProjectConfigLock(path, true, func(path string) error {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return writeProjectConfigFile(path, projectConfigTemplate(presets))
+		}
+		if err != nil {
+			return fmt.Errorf("read project config: %w", err)
+		}
+		updated, err := replaceYAMLListSection(data, "presets", presets)
+		if err != nil {
+			return err
+		}
+		return writeProjectConfigFile(path, updated)
+	})
+}
+
+// projectConfigTemplate is a fresh config with the given presets and
+// commented-out placeholder sections for the other keys.
+func projectConfigTemplate(presets []string) []byte {
 	var sb strings.Builder
 	writeConfigHeader(&sb)
 	writePresetsSection(&sb, presets)
@@ -87,8 +97,7 @@ func writeProjectConfig(path string, presets []string) error {
 		"# Domains that only need DNS resolution (no HTTP proxy).",
 		"allow-dns",
 		[]string{"internal.corp.example.com"})
-
-	return os.WriteFile(path, []byte(sb.String()), 0o600)
+	return []byte(sb.String())
 }
 
 // writeConfigHeader writes the shared file header comment block.
@@ -129,9 +138,13 @@ func writeYAMLListSection(sb *strings.Builder, comment, key string, examples []s
 	}
 }
 
-// formatYAMLListValue quotes values that would otherwise be parsed as aliases.
+// formatYAMLListValue quotes values that wouldn't read back as the same plain
+// string, e.g. an alias ("*"), a comment ("#"), an anchor ("&"), a tag ("!"),
+// a flow collection or a number. Entries can come from hostnames the sandbox
+// chose, so any of these could otherwise corrupt the saved config.
 func formatYAMLListValue(v string) string {
-	if strings.HasPrefix(v, "*") {
+	var parsed []any
+	if yaml.Unmarshal([]byte("- "+v), &parsed) != nil || len(parsed) != 1 || parsed[0] != any(v) {
 		return fmt.Sprintf("%q", v)
 	}
 	return v
@@ -150,47 +163,64 @@ func AppendAllowDNS(projectConfigPath string, entries []string) error {
 }
 
 func appendAllowEntries(projectConfigPath, sectionKey string, entries []string) error {
-	var cfg ProjectConfig
-	if err := loadFile(projectConfigPath, &cfg); err != nil {
-		return fmt.Errorf("load project config: %w", err)
-	}
+	return withProjectConfigLock(projectConfigPath, false, func(path string) error {
+		return appendListEntriesLocked(path, sectionKey, entries, nil)
+	})
+}
 
+// appendListEntriesLocked adds the entries missing from the list keyed by
+// sectionKey. A missing file is created from newConfig, or not at all when
+// it is nil. Caller holds the config lock.
+func appendListEntriesLocked(path, sectionKey string, entries []string, newConfig func() []byte) error {
+	// YAML can't hold invalid UTF-8: the quoted form would read back as a
+	// different string, so the saved rule wouldn't match the target.
+	for _, entry := range entries {
+		if !utf8.ValidString(entry) {
+			return fmt.Errorf("%s: entry %q is not valid UTF-8", sectionKey, entry)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if newConfig != nil && errors.Is(err, fs.ErrNotExist) {
+		data, err = newConfig(), nil
+	}
+	if err != nil {
+		return fmt.Errorf("read project config: %w", err)
+	}
+	_, root, err := parseProjectConfigYAML(data)
+	if err != nil {
+		return err
+	}
 	var current []string
-	switch sectionKey {
-	case "allow-http":
-		current = cfg.AllowHTTP
-	case "allow-dns":
-		current = cfg.AllowDNS
-	default:
-		return fmt.Errorf("unknown config section %q", sectionKey)
+	if _, value := findYAMLMappingPair(root, sectionKey); value != nil {
+		if err := value.Decode(&current); err != nil {
+			return fmt.Errorf("%s: %w", sectionKey, err)
+		}
 	}
 
+	// Rules ignore case and port zero padding, so other spellings of an
+	// entry are the same rule and would only duplicate it.
 	existing := make(map[string]bool, len(current))
 	for _, d := range current {
-		existing[d] = true
+		existing[proxy.EntryKey(d)] = true
 	}
 	var added []string
 	for _, d := range entries {
-		if existing[d] {
+		key := proxy.EntryKey(d)
+		if existing[key] {
 			continue
 		}
-		existing[d] = true
+		existing[key] = true
 		added = append(added, d)
 	}
 	if len(added) == 0 {
 		return nil
 	}
 
-	data, err := os.ReadFile(projectConfigPath)
-	if err != nil {
-		return fmt.Errorf("read project config: %w", err)
-	}
-
 	updated, err := appendYAMLListEntries(data, sectionKey, added)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(projectConfigPath, updated, 0o600)
+	return writeProjectConfigFile(path, updated)
 }
 
 // appendYAMLListEntries adds entries to a YAML list keyed by sectionKey in the
@@ -593,4 +623,35 @@ func isCommentedYAMLListEntry(line string) bool {
 	}
 	rest := strings.TrimLeft(trimmed[1:], " \t")
 	return rest == "-" || strings.HasPrefix(rest, "- ")
+}
+
+// AppendDenyHTTP persists enforced HTTP rules, creating a private config if absent.
+func AppendDenyHTTP(path string, entries []string) error {
+	if err := proxy.ValidateHTTPEntries(entries); err != nil {
+		return fmt.Errorf("deny-http: %w", err)
+	}
+	return appendDenyEntries(path, "deny-http", entries)
+}
+
+// AppendDenyDNS persists enforced DNS rules, creating a private config if absent.
+func AppendDenyDNS(path string, entries []string) error {
+	if err := proxy.ValidateDNSEntries(entries); err != nil {
+		return fmt.Errorf("deny-dns: %w", err)
+	}
+	return appendDenyEntries(path, "deny-dns", entries)
+}
+
+func appendDenyEntries(path, section string, entries []string) error {
+	// A missing config gets the presets first-run setup would preselect:
+	// bootstrap skips setup once the file exists, so a file holding only
+	// these entries would start the next session without the project's
+	// presets. The project is found from the path as given, before any
+	// symlinked .vibepit is resolved.
+	projectDir := filepath.Dir(filepath.Dir(path))
+	newConfig := func() []byte {
+		return projectConfigTemplate(initialPresets(DetectPresets(projectDir)))
+	}
+	return withProjectConfigLock(path, true, func(path string) error {
+		return appendListEntriesLocked(path, section, entries, newConfig)
+	})
 }

@@ -32,7 +32,7 @@ func TestDNSServer(t *testing.T) {
 	blocker := NewCIDRBlocker(nil, nil)
 	log := NewLogBuffer(100)
 
-	srv := NewDNSServer(al, blocker, log, "8.8.8.8:53")
+	srv := NewDNSServer(NewPolicy(nil, al, nil), blocker, log, "8.8.8.8:53")
 	addr, cleanup := srv.ListenAndServeTest()
 	defer cleanup()
 
@@ -106,7 +106,7 @@ func TestDNSServerBlockedIPCode(t *testing.T) {
 	al, err := NewDNSAllowlist([]string{"rebind.example.com"})
 	require.NoError(t, err)
 	log := NewLogBuffer(10)
-	srv := NewDNSServer(al, NewCIDRBlocker(nil, nil), log, pc.LocalAddr().String())
+	srv := NewDNSServer(NewPolicy(nil, al, nil), NewCIDRBlocker(nil, nil), log, pc.LocalAddr().String())
 	addr, cleanup := srv.ListenAndServeTest()
 	defer cleanup()
 	time.Sleep(50 * time.Millisecond)
@@ -131,7 +131,7 @@ func TestDNSHostVibepit(t *testing.T) {
 
 	proxyIP := net.ParseIP("10.42.0.2")
 
-	srv := NewDNSServer(al, blocker, log, "8.8.8.8:53")
+	srv := NewDNSServer(NewPolicy(nil, al, nil), blocker, log, "8.8.8.8:53")
 	srv.SetProxyIP(proxyIP)
 	addr, cleanup := srv.ListenAndServeTest()
 	defer cleanup()

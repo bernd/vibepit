@@ -20,8 +20,7 @@ type approveScreen struct {
 	session       *SessionInfo
 	client        *ControlClient
 	queue         *promptQueue
-	deciding      proxy.Target // the target the in-flight decision applies to
-	busy          bool         // a decision is being applied
+	busy          bool // a decision is being applied
 	checkInFlight bool
 	// shown is the first target as last drawn. The prompter settles
 	// targets between draws, and the keys must not act on one that moved
@@ -30,6 +29,10 @@ type approveScreen struct {
 	// dismissed holds the targets queued when the user dismissed the
 	// screen. Targets queued after that weren't dismissed.
 	dismissed []proxy.Target
+	denied    map[proxy.Target]bool
+	// A save can fail after HoldDenied removes the live queue item. Keep its
+	// target here until saved or dismissed, independently of settlement events.
+	saving *promptItem
 }
 
 // checkResultMsg carries the targets that someone else has decided meanwhile,
@@ -41,7 +44,11 @@ type checkResultMsg struct {
 
 // decisionResultMsg reports whether the user's allow or deny was applied.
 type decisionResultMsg struct {
-	err error
+	from    *approveScreen
+	target  proxy.Target
+	applied bool
+	deny    bool
+	err     error
 }
 
 func newApproveScreen(session *SessionInfo, client *ControlClient, q *promptQueue) *approveScreen {
@@ -57,13 +64,20 @@ func (s *approveScreen) allowCmd(entry proxy.LogEntry, save bool) tea.Cmd {
 			// Leading with the live allow: the footer may cut the rest off.
 			err = fmt.Errorf("allowed for this session, not saved: %w", err)
 		}
-		return decisionResultMsg{err: err}
+		return decisionResultMsg{from: s, target: entry.Target(), applied: status != statusNone, err: err}
 	}
 }
 
 func (s *approveScreen) denyCmd(entry proxy.LogEntry) tea.Cmd {
 	return func() tea.Msg {
-		return decisionResultMsg{err: s.client.Deny(entry)}
+		return decisionResultMsg{from: s, target: entry.Target(), err: s.client.Deny(entry)}
+	}
+}
+
+func (s *approveScreen) denySavedCmd(entry proxy.LogEntry) tea.Cmd {
+	return func() tea.Msg {
+		applied, err := denyEntries(s.client, s.session, entry.Source, []string{entry.Target().String()}, true)
+		return decisionResultMsg{from: s, target: entry.Target(), applied: applied, deny: true, err: err}
 	}
 }
 
@@ -89,9 +103,8 @@ func (s *approveScreen) checkCmd() tea.Cmd {
 	}
 }
 
-func (s *approveScreen) decide(w *tui.Window, entry proxy.LogEntry, cmd tea.Cmd) (tui.Screen, tea.Cmd) {
+func (s *approveScreen) decide(w *tui.Window, cmd tea.Cmd) (tui.Screen, tea.Cmd) {
 	s.busy = true
-	s.deciding = entry.Target()
 	w.ClearError()
 	return s, cmd
 }
@@ -105,20 +118,43 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 		if s.busy {
 			return s, nil
 		}
-		items := s.queue.Items()
+		items := s.items()
 		// Returning without a command still redraws, so the next press
 		// acts on what the user then sees.
 		onScreen := len(items) > 0 && items[0].Entry.Target() == s.shown
 		switch msg.String() {
 		case "a", "A":
+			if onScreen && !s.denied[items[0].Entry.Target()] {
+				return s.decide(w, s.allowCmd(items[0].Entry, msg.String() == "A"))
+			}
+		case "N":
 			if onScreen {
-				return s.decide(w, items[0].Entry, s.allowCmd(items[0].Entry, msg.String() == "A"))
+				item := items[0]
+				s.saving = &item
+				return s.decide(w, s.denySavedCmd(items[0].Entry))
 			}
 		case "n":
-			if onScreen {
-				return s.decide(w, items[0].Entry, s.denyCmd(items[0].Entry))
+			if onScreen && !s.denied[items[0].Entry.Target()] {
+				return s.decide(w, s.denyCmd(items[0].Entry))
 			}
-		case "esc", "q", "ctrl+c":
+		case "esc":
+			// A deny that applied but didn't save stays pinned until saved or
+			// skipped. esc skips just it, so the rest of the queue can still
+			// be decided instead of only dismissed.
+			// items puts s.saving first, so onScreen means it is shown.
+			if onScreen && s.saving != nil && s.denied[s.saving.Entry.Target()] {
+				t := s.saving.Entry.Target()
+				s.saving = nil
+				s.queue.Remove(t)
+				s.dismissed = append(s.dismissed, t)
+				w.ClearError()
+				if len(s.items()) == 0 {
+					return s, tea.Quit
+				}
+				return s, nil
+			}
+			fallthrough
+		case "q", "ctrl+c":
 			// Dismiss only: no decision is recorded, other clients keep asking.
 			for _, it := range items {
 				s.dismissed = append(s.dismissed, it.Entry.Target())
@@ -128,7 +164,7 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 
 	case tui.TickMsg:
 		// The queue may have been emptied elsewhere, e.g. by the event stream.
-		if s.queue.Len() == 0 && !s.busy && w.Err() == nil {
+		if len(s.items()) == 0 && !s.busy && w.Err() == nil {
 			return s, tea.Quit
 		}
 		if s.busy || w.Err() != nil || s.checkInFlight || s.client == nil {
@@ -147,19 +183,42 @@ func (s *approveScreen) Update(msg tea.Msg, w *tui.Window) (tui.Screen, tea.Cmd)
 			for _, t := range msg.decided {
 				s.queue.Remove(t)
 			}
-			if s.queue.Len() == 0 {
+			if len(s.items()) == 0 {
 				return s, tea.Quit
 			}
 		}
 
 	case decisionResultMsg:
+		if msg.from != s {
+			return s, nil
+		}
 		s.busy = false
+		if msg.deny && !msg.applied && !s.denied[msg.target] && s.saving != nil && s.saving.Entry.Target() == msg.target {
+			// Nothing was ever denied, so the item stays only while the live
+			// queue still has it, with its current hold state. After an
+			// earlier deny whose save failed, a failed retry keeps the
+			// snapshot: the deny is active and the save still owed.
+			s.saving = nil
+		}
+		if msg.deny && msg.applied {
+			if s.denied == nil {
+				s.denied = make(map[proxy.Target]bool)
+			}
+			s.denied[msg.target] = true
+			if s.saving != nil && s.saving.Entry.Target() == msg.target && s.saving.Entry.Action == proxy.ActionHold {
+				s.saving.Deadline = time.Time{}
+				s.saving.Ended = proxy.HoldDenied
+			}
+		}
 		if msg.err != nil {
 			w.SetError(msg.err)
 			return s, nil
 		}
-		s.queue.Remove(s.deciding)
-		if s.queue.Len() == 0 {
+		s.queue.Remove(msg.target)
+		if s.saving != nil && s.saving.Entry.Target() == msg.target {
+			s.saving = nil
+		}
+		if len(s.items()) == 0 {
 			return s, tea.Quit
 		}
 	}
@@ -171,8 +230,24 @@ func (s *approveScreen) result() promptResult {
 	return promptResult{Dismissed: s.dismissed}
 }
 
-func (s *approveScreen) View(w *tui.Window) string {
+// items combines the screen-owned save target with the live queue without
+// reinserting it where a late hold event could remove it again.
+func (s *approveScreen) items() []promptItem {
 	items := s.queue.Items()
+	if s.saving == nil {
+		return items
+	}
+	result := []promptItem{*s.saving}
+	for _, item := range items {
+		if item.Entry.Target() != s.saving.Entry.Target() {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (s *approveScreen) View(w *tui.Window) string {
+	items := s.items()
 	if len(items) == 0 {
 		s.shown = proxy.Target{}
 		return ""
@@ -183,6 +258,9 @@ func (s *approveScreen) View(w *tui.Window) string {
 	entry := first.Entry
 	target := tui.SanitizeText(entry.Target().String())
 	reason := tui.SanitizeText(entry.Reason)
+	if s.denied[entry.Target()] {
+		reason = "denied by rule (active in running proxy)"
+	}
 	label := lipgloss.NewStyle().Foreground(tui.ColorField)
 	value := lipgloss.NewStyle().Bold(true)
 
@@ -210,7 +288,7 @@ func (s *approveScreen) View(w *tui.Window) string {
 		fmt.Sprintf("  %s %s", label.Render("reason:"), reason),
 		fmt.Sprintf("  %s %s", label.Render("time:  "), entry.Time.Local().Format("15:04:05")),
 		"",
-		"  Allow this connection?",
+		s.decisionQuestion(entry.Target()),
 	)
 	if s.busy {
 		lines = append(lines, "", "  applying...")
@@ -256,11 +334,22 @@ func (s *approveScreen) othersView(rest []promptItem, now time.Time, room int) [
 
 func (s *approveScreen) FooterStatus(w *tui.Window) string { return "" }
 
+func (s *approveScreen) decisionQuestion(target proxy.Target) string {
+	if s.denied[target] {
+		return "  Deny is active. Retry saving, or skip this target."
+	}
+	return "  Allow this connection?"
+}
+
 func (s *approveScreen) FooterKeys(w *tui.Window) []tui.FooterKey {
+	if s.denied[s.shown] {
+		return []tui.FooterKey{{Key: "N", Desc: "retry save"}, {Key: "esc", Desc: "skip"}, {Key: "q", Desc: "dismiss all"}}
+	}
 	return []tui.FooterKey{
 		{Key: "a", Desc: "allow"},
 		{Key: "A", Desc: "allow+save"},
-		{Key: "n", Desc: "deny"},
+		{Key: "n", Desc: "reject"},
+		{Key: "N", Desc: "deny+save"},
 		{Key: "esc", Desc: "dismiss"},
 	}
 }

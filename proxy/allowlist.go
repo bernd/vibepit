@@ -72,6 +72,29 @@ func labelMatches(pattern, label string) bool {
 	return pattern == label
 }
 
+// normalizePort drops leading zeros from a numeric port, so every spelling
+// of a port compares equal: requests arrive with plain decimal ports, and a
+// rule written "0443" means port 443. "*" and the empty string are kept.
+func normalizePort(port string) string {
+	if port == "" || port == "*" {
+		return port
+	}
+	if trimmed := strings.TrimLeft(port, "0"); trimmed != "" {
+		return trimmed
+	}
+	return "0"
+}
+
+// EntryKey is the form two allow or deny entries are compared in to tell
+// whether they're the same rule: lowercase, with a normalized port.
+func EntryKey(entry string) string {
+	entry = strings.ToLower(entry)
+	if i := strings.LastIndexByte(entry, ':'); i > 0 {
+		return entry[:i+1] + normalizePort(entry[i+1:])
+	}
+	return entry
+}
+
 func portMatches(pattern, port string) bool {
 	if pattern == "*" {
 		return true
@@ -129,7 +152,7 @@ func (al *HTTPAllowlist) Add(entries []string) error {
 func parseHTTPRule(entry string) HTTPRule {
 	var r HTTPRule
 	if idx := strings.LastIndex(entry, ":"); idx > 0 {
-		r.Port = entry[idx+1:]
+		r.Port = normalizePort(entry[idx+1:])
 		entry = entry[:idx]
 	}
 	r.Domain = parseDomainPattern(entry)
@@ -141,6 +164,7 @@ func (al *HTTPAllowlist) Allows(host, port string) bool {
 	if host == "" {
 		return false
 	}
+	port = normalizePort(port)
 	rules := *al.rules.Load()
 	for _, r := range rules {
 		if portMatches(r.Port, port) && r.Domain.matches(host) {
@@ -258,27 +282,27 @@ func ValidateHTTPEntries(entries []string) error {
 // Entry format is "domain:port" where port is an exact number or '*'.
 func ValidateHTTPEntry(entry string) error {
 	if entry == "" {
-		return fmt.Errorf("invalid allow entry: empty string")
+		return fmt.Errorf("invalid HTTP entry: empty string")
 	}
 	idx := strings.LastIndex(entry, ":")
 	if idx <= 0 || idx == len(entry)-1 {
-		return fmt.Errorf("invalid allow entry %q: expected domain:port", entry)
+		return fmt.Errorf("invalid HTTP entry %q: expected domain:port", entry)
 	}
 	domain := entry[:idx]
 	port := entry[idx+1:]
 	if strings.Contains(domain, ":") {
-		return fmt.Errorf("invalid allow entry %q: domain must not contain ':'", entry)
+		return fmt.Errorf("invalid HTTP entry %q: domain must not contain ':'", entry)
 	}
 	if strings.Contains(domain, " ") || strings.Contains(port, " ") {
-		return fmt.Errorf("invalid allow entry %q: spaces are not allowed", entry)
+		return fmt.Errorf("invalid HTTP entry %q: spaces are not allowed", entry)
 	}
 	if err := validateDomainPattern(domain); err != nil {
-		return fmt.Errorf("invalid allow entry %q: %w", entry, err)
+		return fmt.Errorf("invalid HTTP entry %q: %w", entry, err)
 	}
 	if port != "*" {
 		for _, ch := range port {
 			if ch < '0' || ch > '9' {
-				return fmt.Errorf("invalid allow entry %q: port must be a number or '*'", entry)
+				return fmt.Errorf("invalid HTTP entry %q: port must be a number or '*'", entry)
 			}
 		}
 	}
@@ -299,16 +323,16 @@ func ValidateDNSEntries(entries []string) error {
 // Entry format is a domain pattern without port.
 func ValidateDNSEntry(entry string) error {
 	if entry == "" {
-		return fmt.Errorf("invalid allow-dns entry: empty string")
+		return fmt.Errorf("invalid DNS entry: empty string")
 	}
 	if strings.Contains(entry, ":") {
-		return fmt.Errorf("invalid allow-dns entry %q: ports are not allowed", entry)
+		return fmt.Errorf("invalid DNS entry %q: ports are not allowed", entry)
 	}
 	if strings.Contains(entry, " ") {
-		return fmt.Errorf("invalid allow-dns entry %q: spaces are not allowed", entry)
+		return fmt.Errorf("invalid DNS entry %q: spaces are not allowed", entry)
 	}
 	if err := validateDomainPattern(entry); err != nil {
-		return fmt.Errorf("invalid allow-dns entry %q: %w", entry, err)
+		return fmt.Errorf("invalid DNS entry %q: %w", entry, err)
 	}
 	return nil
 }

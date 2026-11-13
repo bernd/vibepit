@@ -296,22 +296,32 @@ func TestLogEntryAllowable(t *testing.T) {
 	}
 }
 
-func TestLogBuffer_HoldEntriesDontCountInHosts(t *testing.T) {
+func TestLogBuffer_HoldEntriesListButDontCount(t *testing.T) {
 	buf := NewLogBuffer(10)
-	hold := LogEntry{Time: time.Now(), Domain: "docs.example.com", Port: "443", Action: ActionHold, Source: SourceProxy, Code: BlockNotAllowlisted}
+	t0 := time.Now()
+	hold := LogEntry{Time: t0, Domain: "docs.example.com", Port: "443", Action: ActionHold, Source: SourceProxy,
+		Reason: reasonNotAllowlisted, Code: BlockNotAllowlisted}
 
 	buf.Add(hold)
-	assert.Empty(t, buf.Hosts())
+	hosts, lastID := buf.HostsAt()
+	require.Len(t, hosts, 1, "a held host is listed before the request is decided")
+	assert.Equal(t, uint64(1), lastID)
+	assert.Zero(t, hosts[0].Allowed+hosts[0].Blocked)
+	assert.Equal(t, ActionHold, hosts[0].LastAction)
+	assert.Equal(t, BlockNotAllowlisted, hosts[0].LastBlockCode)
 
 	block := hold
-	block.Action = ActionBlock
+	block.Time, block.Action = t0.Add(time.Second), ActionBlock
 	buf.Add(block)
 
-	hosts := buf.Hosts()
+	hosts, lastID = buf.HostsAt()
 	require.Len(t, hosts, 1)
+	assert.Equal(t, uint64(2), lastID)
 	assert.Equal(t, 1, hosts[0].Blocked)
 	assert.Equal(t, 0, hosts[0].Allowed)
 	assert.Equal(t, ActionBlock, hosts[0].LastAction)
+	assert.Equal(t, ActionHold, hosts[0].FirstAction)
+	assert.Equal(t, t0, hosts[0].FirstSeen)
 }
 
 func TestLogBuffer_AddReturnsID(t *testing.T) {

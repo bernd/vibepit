@@ -92,7 +92,7 @@ func (q *promptQueue) EndHold(end proxy.HoldEnd) {
 		return
 	}
 	switch end.Outcome {
-	case proxy.HoldAllowed, proxy.HoldDenied:
+	case proxy.HoldAllowed, proxy.HoldDenied, proxy.HoldRejected:
 		q.items = slices.Delete(q.items, i, i+1)
 	default:
 		if q.items[i].Entry.ID == end.ID {

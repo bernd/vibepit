@@ -50,6 +50,8 @@ func RootCommand() *cli.Command {
 			StatusCommand(),
 			AllowHTTPCommand(),
 			AllowDNSCommand(),
+			DenyHTTPCommand(),
+			DenyDNSCommand(),
 			ProxyCommand(),
 			VibedCommand(),
 			MonitorCommand(),

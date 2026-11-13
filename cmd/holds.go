@@ -140,6 +140,8 @@ func holdOutcomeLabel(o proxy.HoldOutcome) string {
 		return "allowed"
 	case proxy.HoldDenied:
 		return "denied"
+	case proxy.HoldRejected:
+		return "rejected"
 	case proxy.HoldAbandoned:
 		return "request gone"
 	case proxy.HoldUnwatched:

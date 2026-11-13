@@ -21,6 +21,11 @@ var (
 	ColorField     = lipgloss.Color("#0099cc")
 	ColorError     = ColorPurple // lipgloss.Color("#ef4444") - this one is too similar to the orange
 	ColorHighlight = lipgloss.Color("#1e2d3d")
+	// ColorRejected (Robot Gray) marks targets rejected for the session
+	// only, which an allow can still fix. ColorDenied (Error Red) marks
+	// targets an enforced deny rule matches, which no allow overrides.
+	ColorRejected = lipgloss.Color("#6b7280")
+	ColorDenied   = lipgloss.Color("#ef4444")
 )
 
 // letterGlyph holds the three rows of a block-art character.

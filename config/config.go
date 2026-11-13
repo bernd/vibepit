@@ -31,6 +31,8 @@ const (
 )
 
 type GlobalConfig struct {
+	DenyHTTP    []string `koanf:"deny-http"`
+	DenyDNS     []string `koanf:"deny-dns"`
 	AllowHTTP   []string `koanf:"allow-http"`
 	AllowDNS    []string `koanf:"allow-dns"`
 	BlockCIDR   []string `koanf:"block-cidr"`
@@ -46,6 +48,8 @@ type GlobalConfig struct {
 }
 
 type ProjectConfig struct {
+	DenyHTTP       []string `koanf:"deny-http"`
+	DenyDNS        []string `koanf:"deny-dns"`
 	Presets        []string `koanf:"presets"`
 	AllowHTTP      []string `koanf:"allow-http"`
 	AllowDNS       []string `koanf:"allow-dns"`
@@ -60,6 +64,8 @@ type Config struct {
 }
 
 type MergedConfig struct {
+	DenyHTTP       []string `json:"deny-http"`
+	DenyDNS        []string `json:"deny-dns"`
 	AllowHTTP      []string `json:"allow-http"`
 	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
@@ -149,12 +155,23 @@ func (c *Config) Merge(cliAllow []string, cliPresets []string) (MergedConfig, er
 		return MergedConfig{}, fmt.Errorf("allow-dns: %w", err)
 	}
 
+	denyHTTP := dedup(c.Global.DenyHTTP, c.Project.DenyHTTP)
+	if err := proxy.ValidateHTTPEntries(denyHTTP); err != nil {
+		return MergedConfig{}, fmt.Errorf("deny-http: %w", err)
+	}
+	denyDNS := dedup(c.Global.DenyDNS, c.Project.DenyDNS)
+	if err := proxy.ValidateDNSEntries(denyDNS); err != nil {
+		return MergedConfig{}, fmt.Errorf("deny-dns: %w", err)
+	}
+
 	holdTimeout := cmp.Or(c.Project.HoldTimeout, c.Global.HoldTimeout, DefaultHoldTimeout)
 	if _, err := proxy.ParseHoldTimeout(holdTimeout); err != nil {
 		return MergedConfig{}, err
 	}
 
 	return MergedConfig{
+		DenyHTTP:       denyHTTP,
+		DenyDNS:        denyDNS,
 		HoldTimeout:    holdTimeout,
 		AllowHTTP:      allowHTTP,
 		AllowDNS:       allowDNS,

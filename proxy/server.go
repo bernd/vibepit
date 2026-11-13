@@ -27,6 +27,8 @@ const (
 
 // ProxyConfig is the JSON config file passed to the proxy container.
 type ProxyConfig struct {
+	DenyHTTP       []string `json:"deny-http"`
+	DenyDNS        []string `json:"deny-dns"`
 	AllowHTTP      []string `json:"allow-http"`
 	AllowDNS       []string `json:"allow-dns"`
 	BlockCIDR      []string `json:"block-cidr"`
@@ -98,16 +100,19 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("allow-dns: %w", err)
 	}
+	rules, err := NewDenyRules(s.config.DenyHTTP, s.config.DenyDNS)
+	if err != nil {
+		return err
+	}
 	cidr := NewCIDRBlocker(s.config.BlockCIDR, s.config.AllowCIDR)
 	log := NewLogBuffer(LogBufferCapacity)
 
-	httpProxy := NewHTTPProxy(allowlist, cidr, log, s.config.UpstreamDNS)
-	dnsServer := NewDNSServer(dnsAllowlist, cidr, log, s.config.UpstreamDNS)
-	controlAPI := NewControlAPI(log, s.config, allowlist, dnsAllowlist)
+	policy := NewPolicy(allowlist, dnsAllowlist, rules)
+	httpProxy := NewHTTPProxy(policy, cidr, log, s.config.UpstreamDNS)
+	dnsServer := NewDNSServer(policy, cidr, log, s.config.UpstreamDNS)
+	controlAPI := NewControlAPI(log, s.config, policy)
 
-	hub, holds := WireEvents(log, s.holdTimeout, controlAPI.Denied(), func(t Target) bool {
-		return allowlist.Allows(t.Host, t.Port)
-	})
+	hub, holds := WireEvents(log, s.holdTimeout, controlAPI.Denied(), policy)
 	controlAPI.SetEvents(hub, holds)
 	httpProxy.SetHolds(holds)
 

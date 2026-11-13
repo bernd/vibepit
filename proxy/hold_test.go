@@ -13,6 +13,7 @@ import (
 const testHoldTimeout = 200 * time.Millisecond
 
 type holdsFixture struct {
+	rules     *DenyRules
 	holds     *Holds
 	log       *LogBuffer
 	hub       *EventHub
@@ -27,14 +28,15 @@ func newHoldsFixture(t *testing.T, timeout time.Duration, watch bool) *holdsFixt
 	t.Helper()
 	al, err := NewHTTPAllowlist(nil)
 	require.NoError(t, err)
+	rules, err := NewDenyRules(nil, nil)
+	require.NoError(t, err)
 	f := &holdsFixture{
 		log:       NewLogBuffer(100),
 		denied:    &DenySet{},
 		allowlist: al,
+		rules:     rules,
 	}
-	f.hub, f.holds = WireEvents(f.log, timeout, f.denied, func(t Target) bool {
-		return al.Allows(t.Host, t.Port)
-	})
+	f.hub, f.holds = WireEvents(f.log, timeout, f.denied, NewPolicy(al, nil, rules))
 	if watch {
 		f.events, f.unsubscribe = f.hub.Subscribe()
 		// Unwatching ends every open hold, so no Wait outlives the test.
@@ -125,8 +127,12 @@ func TestHolds_NotHeld(t *testing.T) {
 				f.denied.Add(tt.key.Target())
 			}
 
+			want := HoldNone
+			if tt.deny {
+				want = HoldRejected
+			}
 			start := time.Now()
-			assert.Equal(t, HoldNone, waitOutcome(f.holds.Wait(context.Background(), tt.key)))
+			assert.Equal(t, want, waitOutcome(f.holds.Wait(context.Background(), tt.key)))
 			assert.Less(t, time.Since(start), 50*time.Millisecond)
 			assert.Empty(t, f.log.Entries())
 			assert.Empty(t, f.holds.Open())
@@ -249,7 +255,7 @@ func TestHolds_DeniedBeforeRegistration(t *testing.T) {
 	f.holds.End(k.Target(), HoldDenied)
 
 	start := time.Now()
-	assert.Equal(t, HoldNone, waitOutcome(f.holds.Wait(context.Background(), k)))
+	assert.Equal(t, HoldRejected, waitOutcome(f.holds.Wait(context.Background(), k)))
 	assert.Less(t, time.Since(start), 50*time.Millisecond)
 	assert.Empty(t, f.holdEntries())
 }

@@ -659,7 +659,7 @@ func TestWriteProjectConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".vibepit", "network.yaml")
 
-	require.NoError(t, writeProjectConfig(path, []string{"default", "pkg-go"}))
+	require.NoError(t, saveProjectPresets(path, []string{"default", "pkg-go"}))
 
 	cfg := &ProjectConfig{}
 	require.NoError(t, loadFile(path, cfg))

@@ -30,7 +30,7 @@ func TestControlAPI(t *testing.T) {
 	require.NoError(t, err)
 	dnsAllowlist, err := NewDNSAllowlist([]string{"c.com"})
 	require.NoError(t, err)
-	api := NewControlAPI(log, mergedConfig, allowlist, dnsAllowlist)
+	api := NewControlAPI(log, mergedConfig, NewPolicy(allowlist, dnsAllowlist, nil))
 
 	t.Run("GET /logs returns entries", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/logs", nil)
@@ -61,6 +61,7 @@ func TestControlAPI(t *testing.T) {
 		assert.Equal(t, 1, byDomain["b.com"].Blocked)
 		assert.True(t, byDomain["a.com"].Allowlisted)
 		assert.False(t, byDomain["b.com"].Allowlisted, "b.com is only in the HTTP allowlist")
+		assert.Equal(t, "2", w.Header().Get(HostsLastIDHeader), "the stats include both entries")
 	})
 
 	t.Run("GET /hosts reflects runtime allows", func(t *testing.T) {
@@ -80,6 +81,24 @@ func TestControlAPI(t *testing.T) {
 			}
 		}
 		t.Fatal("b.com not found")
+	})
+
+	t.Run("GET /hosts reports session rejections", func(t *testing.T) {
+		api.Denied().Add(Target{Source: SourceProxy, Host: "a.com", Port: "443"})
+
+		req := httptest.NewRequest(http.MethodGet, "/hosts", nil)
+		w := httptest.NewRecorder()
+		api.ServeHTTP(w, req)
+
+		var hosts []HostStats
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &hosts))
+		byDomain := map[string]HostStats{}
+		for _, h := range hosts {
+			byDomain[h.Domain] = h
+		}
+		assert.True(t, byDomain["a.com"].Rejected)
+		assert.False(t, byDomain["a.com"].Denied, "a rejection is not a deny rule")
+		assert.False(t, byDomain["b.com"].Rejected)
 	})
 
 	t.Run("GET /config returns merged config", func(t *testing.T) {
@@ -186,7 +205,7 @@ func TestControlAPIPanicRecovery(t *testing.T) {
 	require.NoError(t, err)
 	dnsAllowlist, err := NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	api := NewControlAPI(log, nil, allowlist, dnsAllowlist)
+	api := NewControlAPI(log, nil, NewPolicy(allowlist, dnsAllowlist, nil))
 
 	// Register a handler that panics.
 	api.mux.HandleFunc("GET /panic", func(w http.ResponseWriter, r *http.Request) {
@@ -249,7 +268,7 @@ func TestControlAPI_Check(t *testing.T) {
 	require.NoError(t, err)
 	dnsAL, err := NewDNSAllowlist([]string{"c.com"})
 	require.NoError(t, err)
-	api := NewControlAPI(NewLogBuffer(10), nil, httpAL, dnsAL)
+	api := NewControlAPI(NewLogBuffer(10), nil, NewPolicy(httpAL, dnsAL, nil))
 
 	tests := []struct {
 		name        string
@@ -297,7 +316,7 @@ func TestControlAPI_LogsCursor(t *testing.T) {
 	for range 30 {
 		log.Add(LogEntry{Domain: "x.com"})
 	}
-	api := NewControlAPI(log, nil, nil, nil)
+	api := NewControlAPI(log, nil, NewPolicy(nil, nil, nil))
 
 	get := func(q string) []LogEntry {
 		req := httptest.NewRequest(http.MethodGet, "/logs?"+q, nil)
@@ -326,7 +345,7 @@ func TestControlAPI_Deny(t *testing.T) {
 	require.NoError(t, err)
 	dnsAL, err := NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	api := NewControlAPI(NewLogBuffer(10), nil, httpAL, dnsAL)
+	api := NewControlAPI(NewLogBuffer(10), nil, NewPolicy(httpAL, dnsAL, nil))
 
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -383,10 +402,8 @@ func newEventsFixture(t *testing.T, holdTimeout time.Duration, configure func(*h
 		log:       NewLogBuffer(1000),
 		allowlist: httpAL,
 	}
-	f.api = NewControlAPI(f.log, nil, httpAL, dnsAL)
-	f.hub, f.holds = WireEvents(f.log, holdTimeout, f.api.Denied(), func(t Target) bool {
-		return httpAL.Allows(t.Host, t.Port)
-	})
+	f.api = NewControlAPI(f.log, nil, NewPolicy(httpAL, dnsAL, nil))
+	f.hub, f.holds = WireEvents(f.log, holdTimeout, f.api.Denied(), NewPolicy(httpAL, nil, nil))
 	f.api.SetEvents(f.hub, f.holds)
 
 	f.srv = httptest.NewUnstartedServer(f.api)
@@ -500,7 +517,7 @@ func (s *eventStream) history(t *testing.T) ([]uint64, uint64) {
 }
 
 func TestControlAPI_EventsUnsupportedWithoutHub(t *testing.T) {
-	api := NewControlAPI(NewLogBuffer(10), nil, nil, nil)
+	api := NewControlAPI(NewLogBuffer(10), nil, NewPolicy(nil, nil, nil))
 	req := httptest.NewRequest(http.MethodGet, "/events", nil)
 	w := httptest.NewRecorder()
 	api.ServeHTTP(w, req)
@@ -643,17 +660,17 @@ func TestControlAPI_EventsReplayHoldOutcome(t *testing.T) {
 	f.watch(t)
 	ch := f.startHold(t, proxyKey("a.com"))
 	f.post(t, "/deny", `{"source":"proxy","target":"a.com:443"}`)
-	require.Equal(t, HoldDenied, recvOutcome(t, ch, time.Second))
+	require.Equal(t, HoldRejected, recvOutcome(t, ch, time.Second))
 
 	s := f.open(t, "?after=0")
 	e := s.next(t)
 	require.Equal(t, EventLog, e.Type)
 	assert.Equal(t, ActionHold, e.Log.Action)
-	assert.Equal(t, HoldDenied, e.Log.Outcome)
+	assert.Equal(t, HoldRejected, e.Log.Outcome)
 }
 
 func TestResponseState_SupportsResponseController(t *testing.T) {
-	api := NewControlAPI(NewLogBuffer(10), nil, nil, nil)
+	api := NewControlAPI(NewLogBuffer(10), nil, NewPolicy(nil, nil, nil))
 	results := make(chan error, 2)
 	api.mux.HandleFunc("GET /flush", func(w http.ResponseWriter, r *http.Request) {
 		rc := http.NewResponseController(w)
@@ -712,7 +729,7 @@ func TestControlAPI_DenyEndsHold(t *testing.T) {
 	ch := f.startHold(t, proxyKey("a.com"))
 
 	f.post(t, "/deny", `{"source":"proxy","target":"a.com:443"}`)
-	assert.Equal(t, HoldDenied, recvOutcome(t, ch, time.Second))
+	assert.Equal(t, HoldRejected, recvOutcome(t, ch, time.Second), "n rejects; only a deny rule denies")
 }
 
 func TestControlAPI_ClosingStreamEndsHolds(t *testing.T) {

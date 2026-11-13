@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,23 +25,31 @@ const eventsWriteTimeout = 10 * time.Second
 
 // ControlAPI serves proxy status and configuration over HTTP.
 type ControlAPI struct {
-	mux           *http.ServeMux
-	log           *LogBuffer
-	config        any
-	httpAllowlist *HTTPAllowlist
-	dnsAllowlist  *DNSAllowlist
-	denied        DenySet
-	hub           *EventHub
-	holds         *Holds
+	// ruleMu serializes rule changes: an allow's "is this denied?" check
+	// and its add must not interleave with a deny of the same target, or
+	// the allow would be reported, and saved, after the deny refused it.
+	ruleMu sync.Mutex
+	policy *Policy
+	mux    *http.ServeMux
+	log    *LogBuffer
+	config any
+	denied DenySet
+	hub    *EventHub
+	holds  *Holds
 }
 
-func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dnsAllowlist *DNSAllowlist) *ControlAPI {
+// testHookAllowChecked runs while an allow holds ruleMu, between its deny
+// check and its add, so tests can race a deny against it.
+var testHookAllowChecked func()
+
+// NewControlAPI serves the control API for the proxy's policy. Without deny
+// rules in it, the deny endpoints refuse to add rules nothing would enforce.
+func NewControlAPI(log *LogBuffer, config any, policy *Policy) *ControlAPI {
 	api := &ControlAPI{
-		mux:           http.NewServeMux(),
-		log:           log,
-		config:        config,
-		httpAllowlist: httpAllowlist,
-		dnsAllowlist:  dnsAllowlist,
+		policy: policy,
+		mux:    http.NewServeMux(),
+		log:    log,
+		config: config,
 	}
 	api.mux.HandleFunc("GET /logs", api.handleLogs)
 	api.mux.HandleFunc("GET /hosts", api.handleHosts)
@@ -47,6 +58,8 @@ func NewControlAPI(log *LogBuffer, config any, httpAllowlist *HTTPAllowlist, dns
 	api.mux.HandleFunc("POST /allow-dns", api.handleAllowDNS)
 	api.mux.HandleFunc("GET /check", api.handleCheck)
 	api.mux.HandleFunc("POST /deny", api.handleDeny)
+	api.mux.HandleFunc("POST /deny-http", api.handleDenyHTTP)
+	api.mux.HandleFunc("POST /deny-dns", api.handleDenyDNS)
 	api.mux.HandleFunc("GET /events", api.handleEvents)
 	return api
 }
@@ -246,19 +259,47 @@ func (a *ControlAPI) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// HostsLastIDHeader carries the ID of the last log entry a /hosts response
+// includes. Proxies from before it was added don't send it.
+const HostsLastIDHeader = "X-Vibepit-Last-Log-ID"
+
 func (a *ControlAPI) handleHosts(w http.ResponseWriter, r *http.Request) {
-	hosts := a.log.Hosts()
+	hosts, lastID := a.log.HostsAt()
+	w.Header().Set(HostsLastIDHeader, strconv.FormatUint(lastID, 10))
 	for i := range hosts {
-		hosts[i].Allowlisted = a.allowlisted(hosts[i].HostKey)
+		t := hosts[i].HostKey.Target()
+		decision := a.policy.Decide(t)
+		hosts[i].Denied = decision == Denied
+		hosts[i].Allowlisted = decision == Allowed
+		hosts[i].Rejected = a.denied.Denied(t)
 	}
 	writeJSON(w, hosts)
 }
 
-func (a *ControlAPI) allowlisted(k HostKey) bool {
-	if k.Source == SourceDNS {
-		return a.dnsAllowlist.Allows(k.Domain)
+// rejectDenied refuses allow entries naming a target an enforced rule denies:
+// such an allow could never take effect, and callers would save it anyway.
+// Patterns are let through; the deny still wins for the targets it covers.
+// The whole batch is refused: applying the rest would leave the caller
+// unsure what it saved, so the error names every denied entry instead.
+func (a *ControlAPI) rejectDenied(w http.ResponseWriter, source Source, entries []string) bool {
+	var denied []string
+	for _, entry := range entries {
+		if strings.ContainsRune(entry, '*') {
+			continue
+		}
+		t, err := ParseTarget(string(source), entry)
+		if err == nil && a.policy.Denied(t) {
+			// Quoted like validation errors: an entry can be a hostname the
+			// sandbox chose, and clients show this message in a terminal.
+			denied = append(denied, strconv.Quote(entry))
+		}
 	}
-	return a.httpAllowlist.Allows(k.Domain, k.Port)
+	if len(denied) == 0 {
+		return false
+	}
+	msg := fmt.Sprintf("denied by a deny rule: %s; nothing was allowed", strings.Join(denied, ", "))
+	writeError(w, msg, http.StatusConflict)
+	return true
 }
 
 func (a *ControlAPI) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -269,11 +310,16 @@ func (a *ControlAPI) decodeAllowRequest(r *http.Request) ([]string, error) {
 	var req struct {
 		Entries []string `json:"entries"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return nil, fmt.Errorf(`{"error":"invalid JSON"}`)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&req); err != nil {
+		return nil, errors.New("invalid JSON")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("invalid JSON")
 	}
 	if len(req.Entries) == 0 {
-		return nil, fmt.Errorf(`{"error":"entries required"}`)
+		return nil, errors.New("entries required")
 	}
 	return req.Entries, nil
 }
@@ -281,11 +327,26 @@ func (a *ControlAPI) decodeAllowRequest(r *http.Request) ([]string, error) {
 func (a *ControlAPI) handleAllowHTTP(w http.ResponseWriter, r *http.Request) {
 	entries, err := a.decodeAllowRequest(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := a.httpAllowlist.Add(entries); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+	// Validate first: a malformed entry is the caller's first problem.
+	if err := ValidateHTTPEntries(entries); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.ruleMu.Lock()
+	if a.rejectDenied(w, SourceProxy, entries) {
+		a.ruleMu.Unlock()
+		return
+	}
+	if testHookAllowChecked != nil {
+		testHookAllowChecked()
+	}
+	err = a.policy.AddAllowHTTP(entries)
+	a.ruleMu.Unlock()
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Only after Add: a hold opening concurrently then either sees the new
@@ -299,11 +360,23 @@ func (a *ControlAPI) handleAllowHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *ControlAPI) handleAllowDNS(w http.ResponseWriter, r *http.Request) {
 	entries, err := a.decodeAllowRequest(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := a.dnsAllowlist.Add(entries); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+	// Validate first: a malformed entry is the caller's first problem.
+	if err := ValidateDNSEntries(entries); err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.ruleMu.Lock()
+	if a.rejectDenied(w, SourceDNS, entries) {
+		a.ruleMu.Unlock()
+		return
+	}
+	err = a.policy.AddAllowDNS(entries)
+	a.ruleMu.Unlock()
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, map[string]any{"added": entries})
@@ -316,17 +389,11 @@ func (a *ControlAPI) handleCheck(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	t, err := ParseTarget(q.Get("source"), q.Get("target"))
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var allowed bool
-	switch t.Source {
-	case SourceProxy:
-		allowed = a.httpAllowlist.Allows(t.Host, t.Port)
-	case SourceDNS:
-		allowed = a.dnsAllowlist.Allows(t.Host)
-	}
-	writeJSON(w, map[string]bool{"allowed": allowed, "denied": a.denied.Denied(t)})
+	decision := a.policy.Decide(t)
+	writeJSON(w, map[string]bool{"allowed": decision == Allowed, "denied": decision == Denied || a.denied.Denied(t)})
 }
 
 func (a *ControlAPI) handleDeny(w http.ResponseWriter, r *http.Request) {
@@ -335,22 +402,65 @@ func (a *ControlAPI) handleDeny(w http.ResponseWriter, r *http.Request) {
 		Target string `json:"target"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		writeError(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 	t, err := ParseTarget(req.Source, req.Target)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	a.denied.Add(t)
 	if a.holds != nil {
-		a.holds.End(t, HoldDenied)
+		a.holds.End(t, HoldRejected)
 	}
 	writeJSON(w, map[string]string{"denied": t.String()})
+}
+
+// writeError sends msg as the {"error": ...} body clients read. It is
+// encoded as JSON, not with Go quoting, which isn't JSON for every string.
+func writeError(w http.ResponseWriter, msg string, code int) {
+	body, _ := json.Marshal(map[string]string{"error": msg})
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	w.Write(append(body, '\n'))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+func (a *ControlAPI) handleDenyHTTP(w http.ResponseWriter, r *http.Request) {
+	a.handleDenyRules(w, r, a.policy.Rules().AddHTTP)
+}
+
+func (a *ControlAPI) handleDenyDNS(w http.ResponseWriter, r *http.Request) {
+	a.handleDenyRules(w, r, a.policy.Rules().AddDNS)
+}
+
+// handleDenyRules adds entries with add, a method of the policy's deny
+// rules. The method value of nil rules is only checked here, never called.
+func (a *ControlAPI) handleDenyRules(w http.ResponseWriter, r *http.Request, add func([]string) error) {
+	if a.policy.Rules() == nil {
+		writeError(w, "deny rules not supported", http.StatusNotFound)
+		return
+	}
+	entries, err := a.decodeAllowRequest(r)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.ruleMu.Lock()
+	err = add(entries)
+	a.ruleMu.Unlock()
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if a.holds != nil {
+		a.holds.EndDenied()
+	}
+	writeJSON(w, map[string]any{"added": entries})
 }
