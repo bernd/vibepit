@@ -15,14 +15,14 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/docker/go-units v0.5.0
 	github.com/dustin/go-humanize v1.1.0
-	github.com/elazarl/goproxy v1.9.3
+	github.com/elazarl/goproxy v1.9.4
 	github.com/google/go-containerregistry v0.22.1
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.4.1
 	github.com/miekg/dns v1.1.73
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/rs/xid v1.6.0
 	github.com/sigstore/cosign/v3 v3.1.4
 	github.com/sigstore/sigstore-go v1.4.0
