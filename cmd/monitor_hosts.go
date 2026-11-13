@@ -63,20 +63,40 @@ const (
 
 // hostsView renders the aggregated per-host overview.
 type hostsView struct {
-	hosts       []proxy.HostStats        // polled rows plus synthesized held rows
-	polled      []proxy.HostStats        // the last /hosts result, the base of every merge
-	holdIDs     map[proxy.HostKey]uint64 // hosts held at the last merge
-	cursor      tui.Cursor               // Offset is the first visible row
-	selecting   bool                     // Pos is a selection the user made; see selectionTimeout
-	sort        hostSort
-	expanded    *proxy.HostKey
-	unsupported bool
-	err         error // last failed poll that was not a connection failure
+	hosts   []proxy.HostStats        // polled rows brought up to date by pending
+	polled  []proxy.HostStats        // the last /hosts result, the base of every merge
+	holdIDs map[proxy.HostKey]uint64 // hosts held at the last merge
+	// pending are the feed entries the last poll doesn't include. covered
+	// is the ID of the last entry it does include, so entries the feed
+	// delivers late are not counted twice.
+	pending []proxy.LogEntry
+	covered uint64
+	// denied are the hosts known to be denied, from polls, hold endings and
+	// this monitor's own denies. Enforced denies can't be lifted at
+	// runtime, so it only grows, and it survives stale polls.
+	denied map[proxy.HostKey]bool
+	// rejected are the hosts known to be rejected for the session, from
+	// polls, hold endings and this monitor's n.
+	rejected map[proxy.HostKey]bool
+	// allowlisted are this monitor's allows that no poll has confirmed yet.
+	allowlisted map[proxy.HostKey]bool
+	// unsavedDenies are denies this monitor applied but failed to save; N
+	// retries the save for them.
+	unsavedDenies map[proxy.HostKey]bool
+	cursor        tui.Cursor // Offset is the first visible row
+	selecting     bool       // Pos is a selection the user made; see selectionTimeout
+	sort          hostSort
+	expanded      *proxy.HostKey
+	unsupported   bool
+	err           error // last failed poll that was not a connection failure
 
 	// Cached per host list so frames do not walk every host.
-	longestHost int
-	countW      int
-	blocked     int
+	longestHost   int
+	countW        int
+	blocked       int
+	allowedCount  int
+	deniedCount   int
+	rejectedCount int
 }
 
 func (v *hostsView) selected() (proxy.HostStats, bool) {
@@ -92,7 +112,19 @@ func (v *hostsView) isExpandedHost(k proxy.HostKey) bool {
 
 // indexOf returns the row index of the host, or -1.
 func (v *hostsView) indexOf(k proxy.HostKey) int {
-	return slices.IndexFunc(v.hosts, func(h proxy.HostStats) bool { return h.HostKey == k })
+	return hostIndex(v.hosts, k)
+}
+
+func hostIndex(hosts []proxy.HostStats, k proxy.HostKey) int {
+	return slices.IndexFunc(hosts, func(h proxy.HostStats) bool { return h.HostKey == k })
+}
+
+// addKey adds k to the set *m, making the set on first use.
+func addKey(m *map[proxy.HostKey]bool, k proxy.HostKey) {
+	if *m == nil {
+		*m = make(map[proxy.HostKey]bool)
+	}
+	(*m)[k] = true
 }
 
 // setHeight sizes the list area; h includes the summary and column header.
@@ -108,7 +140,69 @@ func (v *hostsView) setHeight(h int) {
 // poll decodes a fresh slice.
 func (v *hostsView) setHosts(hosts []proxy.HostStats, held *heldTargets, now time.Time) {
 	v.polled = hosts
+	for _, h := range hosts {
+		// Allows bump allowGen, so a poll that gets here started after them.
+		delete(v.allowlisted, h.HostKey)
+		if h.Denied {
+			addKey(&v.denied, h.HostKey)
+		}
+		if h.Rejected {
+			addKey(&v.rejected, h.HostKey)
+		}
+	}
 	v.merge(held, now)
+}
+
+// applyPoll replaces the polled rows. When the proxy says which log entry
+// the poll includes last, the feed entries after it still apply; a proxy
+// from before that sends nothing, and its poll is all there is.
+func (v *hostsView) applyPoll(hosts []proxy.HostStats, lastID uint64, exact bool, held *heldTargets, now time.Time) {
+	if exact {
+		v.covered = max(v.covered, lastID)
+		v.pending = slices.DeleteFunc(v.pending, func(e proxy.LogEntry) bool { return e.ID <= v.covered })
+	} else {
+		v.pending = nil
+	}
+	v.setHosts(hosts, held, now)
+}
+
+// maxPendingEntries bounds pending while polls fail. Dropping the oldest
+// only undercounts until the next poll.
+const maxPendingEntries = 10000
+
+// applyFeed brings the rows up to date with feed entries and hold changes,
+// so they move with the traffic between polls.
+func (v *hostsView) applyFeed(entries []proxy.LogEntry, held *heldTargets, now time.Time) {
+	added := false
+	for _, e := range entries {
+		if e.ID > v.covered {
+			v.pending = append(v.pending, e)
+			added = true
+		}
+	}
+	if over := len(v.pending) - maxPendingEntries; over > 0 {
+		v.pending = slices.Delete(v.pending, 0, over)
+	}
+	if added || v.holdsChanged(held, now) {
+		v.merge(held, now)
+	}
+}
+
+// settled reports whether k was denied or rejected, which ends its hold
+// before the hold's end event arrives.
+func (v *hostsView) settled(k proxy.HostKey) bool {
+	return v.denied[k] || v.rejected[k]
+}
+
+// noteHoldEnd records what a hold's ending says about its host, before a
+// poll does.
+func (v *hostsView) noteHoldEnd(k proxy.HostKey, o proxy.HoldOutcome) {
+	switch o {
+	case proxy.HoldRejected:
+		addKey(&v.rejected, k)
+	case proxy.HoldDenied:
+		addKey(&v.denied, k)
+	}
 }
 
 // refresh merges again when hold state may have changed without a poll: a
@@ -126,6 +220,9 @@ func (v *hostsView) holdsChanged(held *heldTargets, now time.Time) bool {
 	n := 0
 	if held != nil {
 		for k := range held.open {
+			if v.settled(k) {
+				continue
+			}
 			oh, ok := held.Open(k, now)
 			if !ok {
 				continue
@@ -139,35 +236,54 @@ func (v *hostsView) holdsChanged(held *heldTargets, now time.Time) bool {
 	return n != len(v.holdIDs)
 }
 
-// merge rebuilds the rows from the last poll and the open holds. A held host
-// the poll doesn't list yet gets a row from its hold entry, and a row that
-// is no longer held and still unlisted disappears here.
+// merge rebuilds the rows from the last poll, the entries logged since and
+// the open holds. A held host with no row gets one from its hold entry:
+// proxies from before held hosts were listed don't have it in the poll.
 func (v *hostsView) merge(held *heldTargets, now time.Time) {
 	sel, hadSel := v.selected()
 	v.hosts = slices.Clone(v.polled)
+	rows := make(map[proxy.HostKey]int, len(v.hosts))
+	for i, h := range v.hosts {
+		rows[h.HostKey] = i
+	}
+	for _, e := range v.pending {
+		k := e.HostKey()
+		i, ok := rows[k]
+		if !ok {
+			i = len(v.hosts)
+			rows[k] = i
+			v.hosts = append(v.hosts, proxy.HostStats{HostKey: k})
+		}
+		v.hosts[i].Record(e)
+	}
 	v.holdIDs = nil
 	if held != nil {
-		listed := make(map[proxy.HostKey]bool, len(v.polled))
-		for _, h := range v.polled {
-			listed[h.HostKey] = true
-		}
 		for k := range held.open {
+			if v.settled(k) {
+				continue
+			}
 			oh, ok := held.Open(k, now)
 			if !ok {
 				continue
 			}
 			v.setHold(k, oh.ID)
-			if listed[k] {
+			if _, listed := rows[k]; listed {
 				continue
 			}
-			v.hosts = append(v.hosts, proxy.HostStats{
-				HostKey:     k,
-				FirstSeen:   oh.Time,
-				FirstAction: oh.Action,
-				LastSeen:    oh.Time,
-				LastAction:  oh.Action,
-			})
+			row := proxy.HostStats{HostKey: k}
+			row.Record(oh)
+			v.hosts = append(v.hosts, row)
 		}
+	}
+	for i := range v.hosts {
+		h := &v.hosts[i]
+		if v.allowlisted[h.HostKey] {
+			h.Allowlisted = true
+		}
+		if v.denied[h.HostKey] {
+			h.Denied, h.Allowlisted = true, false
+		}
+		h.Rejected = h.Rejected || v.rejected[h.HostKey]
 	}
 	v.measure()
 	if !v.resort(sel, hadSel) {
@@ -176,6 +292,13 @@ func (v *hostsView) merge(held *heldTargets, now time.Time) {
 	if v.expandedIndex() < 0 {
 		v.expanded = nil
 	}
+}
+
+// markRejected applies a successful n until the next poll confirms it. merge
+// also stops showing the host as held, before the hold's end arrives.
+func (v *hostsView) markRejected(k proxy.HostKey, held *heldTargets, now time.Time) {
+	addKey(&v.rejected, k)
+	v.merge(held, now)
 }
 
 func (v *hostsView) setHold(k proxy.HostKey, id uint64) {
@@ -218,21 +341,32 @@ func (v *hostsView) selectionExpired() {
 
 // markAllowlisted applies a successful allow until the next poll confirms it.
 func (v *hostsView) markAllowlisted(k proxy.HostKey) {
+	addKey(&v.allowlisted, k)
 	if i := v.indexOf(k); i >= 0 {
 		v.hosts[i].Allowlisted = true
-		if j := slices.IndexFunc(v.polled, func(h proxy.HostStats) bool { return h.HostKey == k }); j >= 0 {
-			v.polled[j].Allowlisted = true
-		}
 		v.measure()
 	}
 }
 
 func (v *hostsView) measure() {
-	v.longestHost, v.countW, v.blocked = 0, hostsCountWidth, 0
+	v.longestHost, v.countW = 0, hostsCountWidth
+	v.allowedCount, v.blocked, v.deniedCount, v.rejectedCount = 0, 0, 0, 0
 	for _, h := range v.hosts {
 		v.longestHost = max(v.longestHost, ansi.StringWidth(hostLabel(h.HostKey)))
 		v.countW = max(v.countW, len(formatCount(h.Allowed+h.Blocked)))
-		if _, held := v.holdIDs[h.HostKey]; !held && isBlocked(h) {
+		if _, held := v.holdIDs[h.HostKey]; held {
+			continue
+		}
+		// The counts don't tell this monitor's allows apart. A hold that
+		// ended undecided counts as nothing.
+		switch allowState(nil).hostStatus(h) {
+		case hostAllowed:
+			v.allowedCount++
+		case hostDenied:
+			v.deniedCount++
+		case hostRejected:
+			v.rejectedCount++
+		case hostBlocked:
 			v.blocked++
 		}
 	}
@@ -288,7 +422,7 @@ func (v *hostsView) handleKey(msg tea.KeyPressMsg) bool {
 func (v *hostsView) footerKeys(allows allowState, held *heldTargets, now time.Time) []tui.FooterKey {
 	var keys []tui.FooterKey
 	if sel, ok := v.selected(); ok {
-		keys = append(keys, hostKeys(allows, held, sel, now)...)
+		keys = append(keys, hostKeys(allows, held, sel, now, v.unsavedDenies[sel.HostKey])...)
 		desc := "details"
 		if v.isExpandedHost(sel.HostKey) {
 			desc = "collapse"
@@ -356,23 +490,45 @@ func (v *hostsView) renderSummary() string {
 		return lipgloss.NewStyle().Foreground(tui.ColorOrange).Render("cannot load hosts: " + v.err.Error())
 	}
 	held := len(v.holdIDs)
-	allowed, blocked := len(v.hosts)-v.blocked-held, v.blocked
+	allowed, blocked := v.allowedCount, v.blocked
 	summary := lipgloss.NewStyle().Foreground(tui.ColorField).Render(fmt.Sprintf("%d hosts", len(v.hosts))) + "  " +
 		lipgloss.NewStyle().Foreground(tui.ColorCyan).Render(fmt.Sprintf("● %d allowed", allowed)) + "  " +
 		lipgloss.NewStyle().Foreground(tui.ColorError).Render(fmt.Sprintf("● %d blocked", blocked))
+	if v.rejectedCount > 0 {
+		summary += "  " + lipgloss.NewStyle().Foreground(tui.ColorRejected).Render(fmt.Sprintf("● %d rejected", v.rejectedCount))
+	}
+	if v.deniedCount > 0 {
+		summary += "  " + lipgloss.NewStyle().Foreground(tui.ColorDenied).Render(fmt.Sprintf("● %d denied", v.deniedCount))
+	}
 	if held > 0 {
 		summary += "  " + lipgloss.NewStyle().Foreground(tui.ColorYellow).Render(fmt.Sprintf("● %d held", held))
 	}
 	return summary
 }
 
+// heldRow reports whether h's row shows an open hold. A deny or rejection
+// ends the hold before its end event arrives.
+func heldRow(held *heldTargets, h proxy.HostStats, now time.Time) bool {
+	_, ok := openHold(held, h, now)
+	return ok
+}
+
+// openHold returns the open hold heldRow shows for h.
+func openHold(held *heldTargets, h proxy.HostStats, now time.Time) (proxy.LogEntry, bool) {
+	if h.Denied || h.Rejected {
+		return proxy.LogEntry{}, false
+	}
+	return held.Open(h.HostKey, now)
+}
+
 // hostKeys are the keys that act on host h, for the footer and the row's
 // inline hint alike.
-func hostKeys(allows allowState, held *heldTargets, h proxy.HostStats, now time.Time) []tui.FooterKey {
-	if held.Held(h.HostKey, now) {
-		return append(allowFooterKeys(allows.forHeld(h.HostKey)), tui.FooterKey{Key: "n", Desc: "deny"})
+func hostKeys(allows allowState, held *heldTargets, h proxy.HostStats, now time.Time, unsavedDeny bool) []tui.FooterKey {
+	deny := denyFooterKeys(h.HostKey, h.Denied, unsavedDeny)
+	if heldRow(held, h, now) {
+		return append(append(allowFooterKeys(allows.forHeld(h.HostKey)), tui.FooterKey{Key: "n", Desc: "reject"}), deny...)
 	}
-	return allowFooterKeys(allows.forHost(h))
+	return append(allowFooterKeys(allows.forHost(h)), deny...)
 }
 
 var sortArrowStyle = lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true)
@@ -417,7 +573,12 @@ func (v *hostsView) renderList(allows allowState, held *heldTargets, width int, 
 	var details []string
 	if expandedAt >= 0 {
 		h := v.hosts[expandedAt]
-		details = renderHostDetails(h, allows.hostStatus(h), width)
+		st := allows.hostStatus(h)
+		if st == hostHoldEnded && heldRow(held, h, now) {
+			// The hold is still open: its request waits, it didn't leave.
+			st = hostBlocked
+		}
+		details = renderHostDetails(h, st, width)
 	}
 	// Page keys move by the rows that fit next to the details.
 	v.cursor.VpHeight = max(listH-len(details), 1)
@@ -427,7 +588,7 @@ func (v *hostsView) renderList(allows allowState, held *heldTargets, width int, 
 
 	var lines []string
 	for i := v.cursor.Offset; i < len(v.hosts) && len(lines) < listH; i++ {
-		lines = append(lines, renderHostRow(v.hosts[i], allows, held, v.selecting && i == v.cursor.Pos, width, cols, now))
+		lines = append(lines, renderHostRow(v.hosts[i], allows, held, v.selecting && i == v.cursor.Pos, width, cols, now, v.unsavedDenies[v.hosts[i].HostKey]))
 		if i == expandedAt {
 			lines = append(lines, details...)
 		}
@@ -466,18 +627,21 @@ func (v *hostsView) scroll(expandedAt, detailsH, listH int) {
 	v.cursor.Offset = off
 }
 
-func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, selected bool, width int, cols hostColumns, now time.Time) string {
+func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, selected bool, width int, cols hostColumns, now time.Time, unsavedDeny bool) string {
 	base, marker := tui.LineStyle(selected)
 	st := allows.hostStatus(h)
-	oh, isHeld := held.Open(h.HostKey, now)
-	statusColor, statusLabel := st.color(), st.label()
+	oh, isHeld := openHold(held, h, now)
+	var dot, status string
 	if isHeld {
 		tint := "#1f2119"
 		if selected {
 			tint = "#2a2e22"
 		}
 		base = base.Background(lipgloss.Color(tint))
-		statusColor, statusLabel = tui.ColorYellow, heldLabel(secondsLeft(oh.Deadline, now))
+		heldStyle := base.Foreground(tui.ColorYellow)
+		dot, status = heldStyle.Render("●"), heldStyle.Bold(true).Render(padRight(heldLabel(secondsLeft(oh.Deadline, now)), hostsStatusWidth))
+	} else {
+		dot, status = st.style(base).Render("●"), st.labelStyle(base).Render(padRight(st.label(), hostsStatusWidth))
 	}
 
 	timeColor := tui.ColorField
@@ -486,7 +650,7 @@ func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, sele
 	}
 	hostStyle := base
 	switch {
-	case isHeld || st == hostBlocked:
+	case isHeld || st.blocks() && !st.faded():
 		hostStyle = hostStyle.Bold(true)
 	case !selected:
 		hostStyle = hostStyle.Faint(true)
@@ -494,19 +658,19 @@ func renderHostRow(h proxy.HostStats, allows allowState, held *heldTargets, sele
 	host := ansi.Truncate(hostLabel(h.HostKey), cols.hostW-1, "…")
 
 	left := marker +
-		base.Foreground(statusColor).Render("●") + base.Render(" ") +
+		dot + base.Render(" ") +
 		base.Foreground(timeColor).Render(padRight(h.LastSeen.Format(time.TimeOnly), hostsTimeWidth)) +
 		hostStyle.Render(host) + base.Render(strings.Repeat(" ", cols.hostW-ansi.StringWidth(host))) +
 		base.Foreground(tui.ColorField).Render(padRight(string(h.Source), hostsSourceWidth))
 
 	var hint string
 	if selected {
-		for _, k := range hostKeys(allows, held, h, now) {
+		for _, k := range hostKeys(allows, held, h, now, unsavedDeny) {
 			hint += base.Foreground(tui.ColorCyan).Bold(true).Render(k.Key) +
 				base.Foreground(tui.ColorField).Render(" "+k.Desc+"  ")
 		}
 	}
-	right := base.Foreground(statusColor).Bold(true).Render(padRight(statusLabel, hostsStatusWidth))
+	right := status
 	if cols.showCount {
 		right = base.Render(padLeft(formatCount(h.Allowed+h.Blocked), cols.countW)+"  ") + right
 	}
@@ -524,13 +688,16 @@ func renderHostDetails(h proxy.HostStats, st hostStatus, width int) []string {
 	label := func(s string) string { return "      " + field.Render(padRight(s, 12)) }
 	action := func(a proxy.Action) string {
 		st := hostBlocked
-		if a == proxy.ActionAllow {
+		switch a {
+		case proxy.ActionAllow:
 			st = hostAllowed
+		case proxy.ActionHold:
+			st = hostHoldEnded
 		}
-		return lipgloss.NewStyle().Foreground(st.color()).Render(st.label())
+		return st.style(lipgloss.NewStyle()).Render(st.label())
 	}
 
-	status := lipgloss.NewStyle().Foreground(st.color()).Bold(true).Render(st.label())
+	status := st.labelStyle(lipgloss.NewStyle()).Render(st.label())
 	switch st {
 	case hostAllowedTemp:
 		status += field.Render("  (this session only)")
@@ -559,8 +726,17 @@ func renderHostDetails(h proxy.HostStats, st hostStatus, width int) []string {
 			lipgloss.NewStyle().Foreground(tui.ColorCyan).Bold(true).Render(formatCount(h.Allowed)+" allowed") + "  " +
 			lipgloss.NewStyle().Foreground(tui.ColorError).Bold(true).Render(formatCount(h.Blocked)+" blocked"),
 	}
-	if st == hostBlocked {
-		lines = append(lines, label("reason:")+tui.SanitizeText(h.LastBlockReason))
+	if st.blocks() {
+		reason := h.LastBlockReason
+		switch {
+		case h.Denied:
+			reason = "target is denied"
+		case st == hostRejected:
+			reason = "rejected this session"
+		case st == hostHoldEnded:
+			reason = "held, no decision logged"
+		}
+		lines = append(lines, label("reason:")+tui.SanitizeText(reason))
 	}
 	return append(lines, "", sep)
 }

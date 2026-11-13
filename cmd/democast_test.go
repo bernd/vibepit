@@ -388,10 +388,10 @@ func recordMonitorCast(t *testing.T) *cast {
 		p.request(domain, times[i])
 	}
 
-	api := proxy.NewControlAPI(p.log, map[string]any{}, allowlist, dnsAllowlist)
+	api := proxy.NewControlAPI(p.log, map[string]any{}, proxy.NewPolicy(allowlist, dnsAllowlist, nil))
 	// The event stream delivers each request as it happens, independent of
 	// the wall clock the recording must not depend on.
-	api.SetEvents(proxy.WireEvents(p.log, 0, api.Denied(), func(proxy.Target) bool { return false }))
+	api.SetEvents(proxy.WireEvents(p.log, 0, api.Denied(), proxy.NewPolicy(nil, nil, nil)))
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	client := &ControlClient{http: srv.Client(), stream: srv.Client(), baseURL: srv.URL}

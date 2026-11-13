@@ -655,3 +655,42 @@ func TestDaemonAnswered(t *testing.T) {
 		})
 	}
 }
+
+// The mount source hiding .vibepit is created here, not left to the
+// runtime, and the sandbox gets it read-only over the project's .vibepit.
+func TestCreateSandboxContainerCreatesFakeConfigDir(t *testing.T) {
+	var body struct {
+		HostConfig struct{ Binds []string }
+	}
+	cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/containers/create") {
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"c1"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	projectDir, runtimeDir := t.TempDir(), t.TempDir()
+	id, err := (&Client{docker: cli}).CreateSandboxContainer(context.Background(), SandboxContainerConfig{
+		Image:      "vibepit:test",
+		ProjectDir: projectDir,
+		RuntimeDir: runtimeDir,
+		ProxyIP:    "10.0.0.2",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "c1", id)
+
+	fake := filepath.Join(runtimeDir, ".vibepit")
+	real := filepath.Join(projectDir, ".vibepit")
+	for _, dir := range []string{fake, real} {
+		info, err := os.Stat(dir)
+		require.NoError(t, err, dir)
+		assert.True(t, info.IsDir(), dir)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), dir)
+	}
+	entries, err := os.ReadDir(fake)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	assert.Contains(t, body.HostConfig.Binds, fake+":"+real+":ro")
+}

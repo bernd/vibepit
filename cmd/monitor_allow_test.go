@@ -141,14 +141,34 @@ func TestMonitorFlashesSanitizeText(t *testing.T) {
 		{"save failed", func(s *monitorScreen) tea.Msg {
 			return allowResultMsg{from: s, key: key, status: statusTemp, err: failed}
 		}, "allowed evil[2J.com:443, but saving failed: bad]0;title thing"},
-		{"denied", func(s *monitorScreen) tea.Msg { return denyResultMsg{from: s, key: key} }, "denied evil[2J.com:443"},
-		{"deny failed", func(s *monitorScreen) tea.Msg { return denyResultMsg{from: s, key: key, err: failed} }, "deny evil[2J.com:443 failed: bad]0;title thing"},
+		{"rejected", func(s *monitorScreen) tea.Msg { return rejectResultMsg{from: s, key: key} }, "rejected evil[2J.com:443"},
+		{"reject failed", func(s *monitorScreen) tea.Msg { return rejectResultMsg{from: s, key: key, err: failed} }, "reject evil[2J.com:443 failed: bad]0;title thing"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, w := newPollingTestScreen(t, nil, nil)
 			s.Update(tt.msg(s), w)
 			assert.Equal(t, tt.want, w.Flash())
+		})
+	}
+}
+
+func TestHostStatus_RejectionOnlyNamesAllowlistBlocks(t *testing.T) {
+	k := proxy.HostKey{Source: proxy.SourceProxy, Domain: "example.com", Port: "443"}
+	tests := []struct {
+		name        string
+		allowlisted bool
+		code        proxy.BlockCode
+		want        hostStatus
+	}{
+		{"not allowlisted", false, proxy.BlockNotAllowlisted, hostRejected},
+		{"allowed, then blocked by CIDR", true, proxy.BlockCIDR, hostBlocked},
+		{"allowed since the block", true, proxy.BlockNotAllowlisted, hostAllowed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := proxy.HostStats{HostKey: k, Rejected: true, Allowlisted: tt.allowlisted, LastAction: proxy.ActionBlock, LastBlockCode: tt.code}
+			assert.Equal(t, tt.want, allowState(nil).hostStatus(h))
 		})
 	}
 }

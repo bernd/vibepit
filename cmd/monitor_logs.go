@@ -127,7 +127,7 @@ func (v *logView) footerKeys(target func(proxy.LogEntry) allowTarget) []tui.Foot
 func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool, held *heldTargets, now time.Time) string {
 	base, marker := tui.LineStyle(highlighted)
 
-	var symbol, reason string
+	var symbol, reason, outcome string
 	var sourceColor color.Color
 	reasonStyle := base
 	switch {
@@ -139,7 +139,8 @@ func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool, held 
 		} else {
 			sourceColor = tui.ColorField
 			symbol = base.Foreground(sourceColor).Render("?")
-			reason = "held · " + holdOutcomeLabel(holdEnding(e, held, now))
+			o := holdEnding(e, held, now)
+			reason, outcome = "held · ", holdOutcomeStatus(o).style(base).Render(holdOutcomeLabel(o))
 		}
 		reasonStyle = base.Foreground(sourceColor)
 	case status == statusTemp:
@@ -148,6 +149,9 @@ func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool, held 
 	case status == statusSaved:
 		symbol = base.Foreground(tui.ColorOrange).Bold(true).Render("A")
 		sourceColor = tui.ColorOrange
+	case e.Action == proxy.ActionBlock && e.Code == proxy.BlockDenied:
+		symbol = base.Foreground(tui.ColorDenied).Render("-")
+		sourceColor = tui.ColorDenied
 	case e.Action == proxy.ActionBlock:
 		symbol = base.Foreground(tui.ColorError).Render("x")
 		sourceColor = tui.ColorError
@@ -162,9 +166,27 @@ func renderLogLine(e proxy.LogEntry, status allowStatus, highlighted bool, held 
 	if e.Action != proxy.ActionHold {
 		reason = tui.SanitizeText(e.Reason)
 	}
-	reasonStr := reasonStyle.Render(reason)
+	reasonStr := reasonStyle.Render(reason) + outcome
 	sp := base.Render(" ")
 	return marker + base.Render("[") + ts + base.Render("]") + sp + symbol + sp + src + sp + hostStr + sp + reasonStr
+}
+
+// holdOutcomeStatus is the hosts-tab status a hold's outcome usually leaves
+// its host in, so both tabs color it alike. An allowed hold can still end
+// blocked by a later check, which only the following log entry shows.
+func holdOutcomeStatus(o proxy.HoldOutcome) hostStatus {
+	switch o {
+	case proxy.HoldAllowed:
+		return hostAllowed
+	case proxy.HoldRejected:
+		return hostRejected
+	case proxy.HoldDenied:
+		return hostDenied
+	case proxy.HoldAbandoned:
+		return hostHoldEnded
+	default:
+		return hostBlocked
+	}
 }
 
 // holdEnding is how the hold of entry e ended. The entry's own outcome

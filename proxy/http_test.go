@@ -22,7 +22,7 @@ func TestHTTPProxy(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -65,7 +65,7 @@ func TestHTTPProxy(t *testing.T) {
 		// Empty blocker so localhost backend isn't blocked by default private CIDRs.
 		blocker := &CIDRBlocker{}
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -85,7 +85,7 @@ func TestHTTPProxy(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -107,7 +107,7 @@ func TestHTTPProxy(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 
 		srv := httptest.NewServer(p.Handler())
 		defer srv.Close()
@@ -135,7 +135,7 @@ func TestHTTPProxy(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 		p.resolver = &net.Resolver{
 			PreferGo: true,
 			Dial: func(context.Context, string, string) (net.Conn, error) {
@@ -154,7 +154,7 @@ func TestHTTPProxy(t *testing.T) {
 func TestHTTPProxyBlockMessage(t *testing.T) {
 	al, err := NewHTTPAllowlist([]string{"10.0.0.1:80"})
 	require.NoError(t, err)
-	p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), NewLogBuffer(10), DefaultUpstreamDNS)
+	p := NewHTTPProxy(NewPolicy(al, nil, nil), NewCIDRBlocker(nil, nil), NewLogBuffer(10), DefaultUpstreamDNS)
 	srv := httptest.NewServer(p.Handler())
 	defer srv.Close()
 	proxyURL, _ := url.Parse(srv.URL)
@@ -196,7 +196,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{backendPortInt})
 
 		srv := httptest.NewServer(p.Handler())
@@ -219,7 +219,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, []int{9999})
 
 		srv := httptest.NewServer(p.Handler())
@@ -240,7 +240,7 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		require.NoError(t, err)
 		blocker := NewCIDRBlocker(nil, nil)
 		log := NewLogBuffer(100)
-		p := NewHTTPProxy(al, blocker, log, DefaultUpstreamDNS)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), blocker, log, DefaultUpstreamDNS)
 		p.SetHostVibepit(backendURL.Host, nil)
 
 		srv := httptest.NewServer(p.Handler())
@@ -310,7 +310,7 @@ func TestCheckRequestBlockCode(t *testing.T) {
 			al, err := NewHTTPAllowlist(tt.allowlist)
 			require.NoError(t, err)
 			log := NewLogBuffer(100)
-			p := NewHTTPProxy(al, NewCIDRBlocker(nil, nil), log, DefaultUpstreamDNS)
+			p := NewHTTPProxy(NewPolicy(al, nil, nil), NewCIDRBlocker(nil, nil), log, DefaultUpstreamDNS)
 			if tt.setup != nil {
 				tt.setup(p)
 			}
@@ -329,7 +329,7 @@ func TestCheckRequestBlockCode(t *testing.T) {
 func heldProxy(t *testing.T, timeout time.Duration, watch bool, cidr *CIDRBlocker) (*holdsFixture, *http.Client) {
 	t.Helper()
 	f := newHoldsFixture(t, timeout, watch)
-	p := NewHTTPProxy(f.allowlist, cidr, f.log, DefaultUpstreamDNS)
+	p := NewHTTPProxy(NewPolicy(f.allowlist, nil, nil), cidr, f.log, DefaultUpstreamDNS)
 	p.SetHolds(f.holds)
 	srv := httptest.NewServer(p.Handler())
 	t.Cleanup(srv.Close)
@@ -425,7 +425,7 @@ func TestHTTPProxy_HeldCONNECTDenied(t *testing.T) {
 
 	target := Target{Source: SourceProxy, Host: "denied.example", Port: "443"}
 	f.denied.Add(target)
-	f.holds.End(target, HoldDenied)
+	f.holds.End(target, HoldRejected)
 
 	r := <-res
 	require.Error(t, r.err)
@@ -433,8 +433,30 @@ func TestHTTPProxy_HeldCONNECTDenied(t *testing.T) {
 	require.Len(t, entries, 2)
 	assert.Equal(t, ActionHold, entries[0].Action)
 	assert.Equal(t, ActionBlock, entries[1].Action)
-	assert.Equal(t, BlockNotAllowlisted, entries[1].Code)
+	assert.Equal(t, BlockNotAllowlisted, entries[1].Code, "an allow still fixes a rejection")
+	assert.Equal(t, reasonRejected, entries[1].Reason)
 	assert.Equal(t, entries[0].ID, entries[1].HoldID)
+
+	// Later requests aren't held but still say why they are blocked.
+	_, err := client.Get("https://denied.example:443/")
+	require.Error(t, err)
+	entries = f.log.Entries()
+	require.Len(t, entries, 3)
+	assert.Equal(t, reasonRejected, entries[2].Reason)
+	assert.Zero(t, entries[2].HoldID)
+}
+
+func TestHTTPProxy_RejectedResponseSaysSo(t *testing.T) {
+	f, client := heldProxy(t, 5*time.Second, true, NewCIDRBlocker(nil, nil))
+	f.denied.Add(Target{Source: SourceProxy, Host: "rejected.example", Port: "80"})
+
+	resp, err := client.Get("http://rejected.example/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, string(body), `domain "rejected.example" was rejected for this session`)
+	assert.NotContains(t, string(body), "not in the allowlist")
 }
 
 func TestHTTPProxy_HoldTimesOut(t *testing.T) {

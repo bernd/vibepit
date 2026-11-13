@@ -405,7 +405,7 @@ func TestHostsViewRender(t *testing.T) {
 			h := mkHost("abcdefghijklmnopqrst.com", "443", proxy.SourceProxy, hostsT0, 0, 1, proxy.ActionBlock)
 			h.Allowlisted = true
 			v.setHosts([]proxy.HostStats{h}, nil, hostsT0)
-			out := ansi.Strip(renderHostRow(v.hosts[0], allowState{h.HostKey: statusTemp}, nil, false, width, v.columns(width), now))
+			out := ansi.Strip(renderHostRow(v.hosts[0], allowState{h.HostKey: statusTemp}, nil, false, width, v.columns(width), now, false))
 			assert.LessOrEqual(t, ansi.StringWidth(out), width, "width %d: %q", width, out)
 			assert.True(t, strings.HasSuffix(out, "allowed*"), "width %d: %q", width, out)
 		}
@@ -752,6 +752,8 @@ func TestHostsView_SynthesizesHeldRow(t *testing.T) {
 	out := renderPlainHeld(v, allowState{}, held, 100, 12, hostsT0)
 	assert.Contains(t, lineContaining(out, "new.example"), "held 7s")
 
+	// Only a proxy from before held hosts were listed leaves the row to
+	// the hold alone.
 	t.Run("disappears once no longer held and still unlisted", func(t *testing.T) {
 		v.refresh(held, hostsT0.Add(8*time.Second))
 		assert.Equal(t, -1, v.indexOf(proxy.HostKey{Source: proxy.SourceProxy, Domain: "new.example", Port: "443"}))
@@ -763,6 +765,112 @@ func TestHostsView_SynthesizesHeldRow(t *testing.T) {
 		v.refresh(held, hostsT0)
 		assert.Equal(t, "new.example", v.hosts[0].Domain)
 	})
+}
+
+func TestHostsView_Denied(t *testing.T) {
+	hosts := hostsFixture()
+	for i := range hosts {
+		if hosts[i].Domain == "a.com" && hosts[i].Source == proxy.SourceProxy {
+			hosts[i].Denied = true
+		}
+	}
+	v := &hostsView{}
+	v.setHosts(hosts, &heldTargets{}, hostsT0)
+	out := renderPlain(v, allowState{}, 100, 12, hostsT0)
+	summary := strings.Split(out, "\n")[0]
+	assert.Contains(t, summary, "● 1 denied")
+	assert.Contains(t, summary, "● 1 allowed", "a.com:443 counts as denied, not allowed")
+	assert.Contains(t, summary, "● 2 blocked", "a deny is not counted as a block")
+	assert.True(t, strings.HasSuffix(strings.TrimRight(lineContaining(out, "proxy"), " "), "denied"))
+
+	v = &hostsView{}
+	v.setHosts(hostsFixture(), &heldTargets{}, hostsT0)
+	assert.NotContains(t, renderPlain(v, allowState{}, 100, 12, hostsT0), "denied")
+}
+
+// A request that was held and left before a decision blocked nothing: its
+// host reads as held, dim, counts as nothing, and can still be allowed.
+func TestHostsView_HoldEndedUndecided(t *testing.T) {
+	k := proxy.HostKey{Source: proxy.SourceProxy, Domain: "gone.example", Port: "443"}
+	h := proxy.HostStats{HostKey: k}
+	h.Record(proxy.LogEntry{Time: hostsT0, Domain: k.Domain, Port: k.Port, Source: k.Source, Action: proxy.ActionHold,
+		Reason: "domain not in allowlist", Code: proxy.BlockNotAllowlisted})
+
+	assert.Equal(t, hostHoldEnded, allowState{}.hostStatus(h))
+	assert.True(t, allowState{}.forHost(h).canAllow())
+
+	v := &hostsView{}
+	v.setHosts(append(hostsFixture(), h), &heldTargets{}, hostsT0)
+	out := renderPlain(v, allowState{}, 100, 12, hostsT0)
+	assert.True(t, strings.HasSuffix(strings.TrimRight(lineContaining(out, "gone.example"), " "), "0  held"))
+	summary := strings.Split(out, "\n")[0]
+	assert.Contains(t, summary, "● 2 allowed")
+	assert.Contains(t, summary, "● 2 blocked", "the undecided hold is no block")
+
+	details := ansi.Strip(strings.Join(renderHostDetails(h, hostHoldEnded, 100), "\n"))
+	assert.Contains(t, details, "first seen: 20:00:00  held")
+	assert.Contains(t, details, "reason:     held, no decision logged")
+}
+
+// The details of a host whose hold is still open don't claim its request
+// left.
+func TestHostsView_OpenHoldDetails(t *testing.T) {
+	held := heldFixture(t, "wait.example", 1, hostsT0.Add(7*time.Second))
+	v := &hostsView{}
+	v.setHosts(nil, held, hostsT0)
+	require.Len(t, v.hosts, 1)
+	k := v.hosts[0].HostKey
+	v.expanded = &k
+	out := renderPlainHeld(v, allowState{}, held, 100, 20, hostsT0)
+	assert.NotContains(t, out, "no decision logged")
+	assert.Contains(t, out, "status:     blocked")
+}
+
+// A block by a deny rule reads as denied as soon as the feed delivers it,
+// also when it blocked an alias of a denied name, which the poll's Denied
+// doesn't cover.
+func TestHostsView_DenyBlockFromFeed(t *testing.T) {
+	v := &hostsView{}
+	v.applyPoll(nil, 0, true, &heldTargets{}, hostsT0)
+	alias := proxy.LogEntry{ID: 1, Time: hostsT0, Domain: "cdn.example", Port: "443", Source: proxy.SourceProxy,
+		Action: proxy.ActionBlock, Code: proxy.BlockDenied, Reason: "alias of denied tracker.example"}
+	v.applyFeed([]proxy.LogEntry{alias}, &heldTargets{}, hostsT0)
+
+	require.Len(t, v.hosts, 1)
+	h := v.hosts[0]
+	assert.Equal(t, hostDenied, allowState{}.hostStatus(h))
+	assert.False(t, allowState{}.forHost(h).canAllow())
+	details := ansi.Strip(strings.Join(renderHostDetails(h, hostDenied, 100), "\n"))
+	assert.Contains(t, details, "alias of denied tracker.example", "the block's own reason, not the target's")
+}
+
+func TestHostsView_Rejected(t *testing.T) {
+	hosts := hostsFixture()
+	for i := range hosts {
+		if hosts[i].Domain == "b.com" {
+			hosts[i].Rejected = true
+		}
+	}
+	v := &hostsView{}
+	v.setHosts(hosts, &heldTargets{}, hostsT0)
+	out := renderPlain(v, allowState{}, 100, 12, hostsT0)
+	summary := strings.Split(out, "\n")[0]
+	assert.Contains(t, summary, "● 1 rejected")
+	assert.Contains(t, summary, "● 1 blocked", "only c.com is plainly blocked")
+	assert.Contains(t, summary, "● 2 allowed")
+	assert.True(t, strings.HasSuffix(strings.TrimRight(lineContaining(out, "b.com"), " "), "rejected"))
+	assert.True(t, allowState{}.forHost(v.hosts[slices.IndexFunc(v.hosts, func(h proxy.HostStats) bool { return h.Domain == "b.com" })]).canAllow(),
+		"an allow still fixes a rejection")
+
+	// Once allowed, the host is just allowed: a rejection only names a block.
+	hosts = hostsFixture()
+	for i := range hosts {
+		if hosts[i].Domain == "b.com" {
+			hosts[i].Rejected, hosts[i].Allowlisted = true, true
+		}
+	}
+	v.setHosts(hosts, &heldTargets{}, hostsT0)
+	assert.True(t, strings.HasSuffix(strings.TrimRight(lineContaining(renderPlain(v, allowState{}, 100, 12, hostsT0), "b.com"), " "), "allowed"))
 }
 
 func TestHostsView_SummaryCountsHeld(t *testing.T) {
@@ -785,10 +893,10 @@ func TestHostsView_HeldRowFooterKeys(t *testing.T) {
 	v.setHosts(hostsFixture(), held, hostsT0)
 	selectDomain(t, v, "new.example", proxy.SourceProxy)
 	keys := v.footerKeys(allowState{}, held, hostsT0)
-	assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "deny"}}, keys[:3])
+	assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "reject"}}, keys[:3])
 
 	line := lineContaining(renderPlainHeld(v, allowState{}, held, 140, 12, hostsT0), "new.example")
-	assert.Contains(t, line, "a allow  A allow+save  n deny", "the row hints the footer's keys")
+	assert.Contains(t, line, "a allow  A allow+save  n reject", "the row hints the footer's keys")
 }
 
 func TestHeldLabel(t *testing.T) {

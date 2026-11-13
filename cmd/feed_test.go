@@ -29,7 +29,7 @@ func newEventsProxy(t *testing.T) *eventsProxy {
 	t.Helper()
 	tp := newTestProxy(t)
 	ep := &eventsProxy{log: tp.log, api: tp.api, client: tp.client}
-	ep.hub, ep.holds = proxy.WireEvents(ep.log, 10*time.Second, ep.api.Denied(), func(proxy.Target) bool { return false })
+	ep.hub, ep.holds = proxy.WireEvents(ep.log, 10*time.Second, ep.api.Denied(), proxy.NewPolicy(nil, nil, nil))
 	ep.api.SetEvents(ep.hub, ep.holds)
 	return ep
 }

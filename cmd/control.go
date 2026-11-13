@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/bernd/vibepit/config"
@@ -50,12 +51,25 @@ func (c *ControlClient) Close() {
 	c.http.CloseIdleConnections()
 }
 
-func (c *ControlClient) Hosts() ([]proxy.HostStats, error) {
-	var hosts []proxy.HostStats
-	if err := c.get("/hosts", &hosts); err != nil {
-		return nil, err
+// HostsSnapshot is a /hosts result. LastID is the last log entry the stats
+// include; Exact is false for a proxy that predates reporting it.
+type HostsSnapshot struct {
+	Hosts  []proxy.HostStats
+	LastID uint64
+	Exact  bool
+}
+
+func (c *ControlClient) Hosts() (HostsSnapshot, error) {
+	var snap HostsSnapshot
+	header, err := c.getHeader("/hosts", &snap.Hosts)
+	if err != nil {
+		return HostsSnapshot{}, err
 	}
-	return hosts, nil
+	if v := header.Get(proxy.HostsLastIDHeader); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		snap.LastID, snap.Exact = id, err == nil
+	}
+	return snap, nil
 }
 
 func (c *ControlClient) Config() (*config.MergedConfig, error) {
@@ -68,12 +82,22 @@ func (c *ControlClient) Config() (*config.MergedConfig, error) {
 
 // AllowHTTP adds domains to the proxy HTTP allowlist and returns the entries that were added.
 func (c *ControlClient) AllowHTTP(entries []string) ([]string, error) {
-	return c.postAllow("/allow-http", entries)
+	return c.postEntries("/allow-http", entries)
 }
 
 // AllowDNS adds domains to the proxy DNS allowlist and returns the entries that were added.
 func (c *ControlClient) AllowDNS(entries []string) ([]string, error) {
-	return c.postAllow("/allow-dns", entries)
+	return c.postEntries("/allow-dns", entries)
+}
+
+// DenyHTTP adds enforced HTTP deny rules to the proxy and returns the entries that were added.
+func (c *ControlClient) DenyHTTP(entries []string) ([]string, error) {
+	return c.postEntries("/deny-http", entries)
+}
+
+// DenyDNS adds enforced DNS deny rules to the proxy and returns the entries that were added.
+func (c *ControlClient) DenyDNS(entries []string) ([]string, error) {
+	return c.postEntries("/deny-dns", entries)
 }
 
 // CheckResult is the proxy's view of a blocked target: allowed by the live
@@ -190,13 +214,29 @@ type statusError struct {
 	method, path string
 	code         int
 	status       string
+	msg          string // the API's {"error": ...} message, if any
 }
 
 func (e *statusError) Error() string {
+	if e.msg != "" {
+		return fmt.Sprintf("%s %s: %s: %s", e.method, e.path, e.status, e.msg)
+	}
 	return fmt.Sprintf("%s %s: %s", e.method, e.path, e.status)
 }
 
-func (c *ControlClient) postAllow(path string, entries []string) ([]string, error) {
+// apiErrorMessage reads the control API's JSON error body, e.g. why an allow
+// was refused. Anything else yields "".
+func apiErrorMessage(body io.Reader) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.NewDecoder(io.LimitReader(body, 4096)).Decode(&e) != nil {
+		return ""
+	}
+	return e.Error
+}
+
+func (c *ControlClient) postEntries(path string, entries []string) ([]string, error) {
 	var result struct {
 		Added []string `json:"added"`
 	}
@@ -218,7 +258,7 @@ func (c *ControlClient) post(path string, body, dest any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return &statusError{method: "POST", path: path, code: resp.StatusCode, status: resp.Status}
+		return &statusError{method: "POST", path: path, code: resp.StatusCode, status: resp.Status, msg: apiErrorMessage(resp.Body)}
 	}
 	if dest == nil {
 		return nil
@@ -230,16 +270,22 @@ func (c *ControlClient) post(path string, body, dest any) error {
 }
 
 func (c *ControlClient) get(path string, dest any) error {
+	_, err := c.getHeader(path, dest)
+	return err
+}
+
+// getHeader is get for callers that also read the response header.
+func (c *ControlClient) getHeader(path string, dest any) (http.Header, error) {
 	resp, err := c.http.Get(c.baseURL + path)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", path, err)
+		return nil, fmt.Errorf("GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 
 	if err := getStatus(path, resp); err != nil {
-		return err
+		return nil, err
 	}
-	return json.NewDecoder(resp.Body).Decode(dest)
+	return resp.Header, json.NewDecoder(resp.Body).Decode(dest)
 }
 
 // getStatus turns a GET response other than 200 OK into an error. A 404

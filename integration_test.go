@@ -8,14 +8,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/miekg/dns"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/bernd/vibepit/config"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -269,4 +272,188 @@ func TestProxyServerIntegration(t *testing.T) {
 		assert.Equal(t, hold.Log.ID, end.HoldEnd.ID)
 		assert.Equal(t, proxy.HoldAllowed, end.HoldEnd.Outcome)
 	})
+}
+
+// TestPersistentDenyReloadIntegration follows a deny from the running proxy
+// to network.yaml and back: a deny installed and saved the way deny-http
+// does it must still block after the proxy restarts from the reloaded config.
+func TestPersistentDenyReloadIntegration(t *testing.T) {
+	creds, err := proxy.GenerateMTLSCredentials(10 * time.Minute)
+	require.NoError(t, err)
+	t.Setenv(proxy.EnvProxyTLSKey, string(creds.ServerKeyPEM()))
+	t.Setenv(proxy.EnvProxyTLSCert, string(creds.ServerCertPEM()))
+	t.Setenv(proxy.EnvProxyCACert, string(creds.CACertPEM()))
+	tlsConfig, err := creds.ClientTLSConfig()
+	require.NoError(t, err)
+	controlClient := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}, Timeout: 5 * time.Second}
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer backend.Close()
+	backendPort := mustParseURL(backend.URL).Port()
+
+	projectDir := t.TempDir()
+	projectPath := config.DefaultProjectPath(projectDir)
+	require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o700))
+	require.NoError(t, os.WriteFile(projectPath, []byte("allow-host-ports:\n  - "+backendPort+"\nallow-dns:\n  - host.vibepit\nhold-timeout: 5s\n"), 0o600))
+
+	type running struct {
+		base, dnsAddr string
+		client        *http.Client
+	}
+	// start runs a proxy from the project config as bootstrap does: load,
+	// merge, then hand the merged config to the proxy as JSON.
+	start := func() running {
+		cfg, err := config.Load("", projectPath)
+		require.NoError(t, err)
+		merged, err := cfg.Merge(nil, nil)
+		require.NoError(t, err)
+		merged.HostGateway = "127.0.0.1"
+		merged.ProxyIP = "127.0.0.1"
+		merged.ProxyPort = mustGetFreePort(t)
+		merged.ControlAPIPort = mustGetFreePort(t)
+		data, err := json.Marshal(merged)
+		require.NoError(t, err)
+		var pc proxy.ProxyConfig
+		require.NoError(t, json.Unmarshal(data, &pc))
+		pc.DNSPort = mustGetFreePort(t)
+		data, err = json.Marshal(pc)
+		require.NoError(t, err)
+		configPath := filepath.Join(t.TempDir(), "proxy.json")
+		require.NoError(t, os.WriteFile(configPath, data, 0o600))
+		server, err := proxy.NewServer(configPath)
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go server.Run(ctx)
+		base := fmt.Sprintf("https://127.0.0.1:%d", pc.ControlAPIPort)
+		require.Eventually(t, func() bool {
+			r, e := controlClient.Get(base + "/config")
+			if e != nil {
+				return false
+			}
+			r.Body.Close()
+			return r.StatusCode == 200
+		}, 3*time.Second, 10*time.Millisecond)
+		proxyURL := mustParseURL(fmt.Sprintf("http://127.0.0.1:%d", pc.ProxyPort))
+		return running{
+			base:    base,
+			dnsAddr: fmt.Sprintf("127.0.0.1:%d", pc.DNSPort),
+			client:  &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 5 * time.Second},
+		}
+	}
+	get := func(r running, host string) int {
+		resp, err := r.client.Get("http://" + host + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	resolve := func(r running) int {
+		query := new(dns.Msg)
+		query.SetQuestion("host.vibepit.", dns.TypeA)
+		answer, _, err := new(dns.Client).Exchange(query, r.dnsAddr)
+		require.NoError(t, err)
+		return answer.Rcode
+	}
+	target := "host.vibepit:" + backendPort
+
+	first := start()
+	require.Equal(t, 200, get(first, target), "allowed before the deny")
+	require.Equal(t, dns.RcodeSuccess, resolve(first))
+
+	// The stream subscription enables holding: two requests a wildcard deny
+	// matches wait in holds, and the runtime deny must end both.
+	streamCtx, stopStream := context.WithCancel(context.Background())
+	defer stopStream()
+	req, err := http.NewRequestWithContext(streamCtx, "GET", first.base+"/events", nil)
+	require.NoError(t, err)
+	stream, err := controlClient.Do(req)
+	require.NoError(t, err)
+	defer stream.Body.Close()
+	events := make(chan proxy.Event, 32)
+	go func() {
+		reader := bufio.NewReader(stream.Body)
+		for {
+			e, err := proxy.ReadEvent(reader)
+			if err != nil {
+				return
+			}
+			events <- e
+		}
+	}()
+	results := make(chan int, 2)
+	for _, host := range []string{"a.example.com", "b.example.com"} {
+		go func() {
+			r, e := first.client.Get("http://" + host + "/")
+			if e != nil {
+				results <- 0
+				return
+			}
+			r.Body.Close()
+			results <- r.StatusCode
+		}()
+	}
+	opened := 0
+	for opened < 2 {
+		select {
+		case e := <-events:
+			if e.Type == proxy.EventLog && e.Log.Action == proxy.ActionHold {
+				opened++
+			}
+		case <-time.After(2 * time.Second):
+			require.FailNow(t, "requests were not held")
+		}
+	}
+
+	// Install and save the denies as deny-http and deny-dns do.
+	httpDenies := []string{target, "*.example.com:80"}
+	for _, d := range []struct {
+		path    string
+		entries []string
+		save    func(string, []string) error
+	}{
+		{"/deny-http", httpDenies, config.AppendDenyHTTP},
+		{"/deny-dns", []string{"host.vibepit"}, config.AppendDenyDNS},
+	} {
+		body, err := json.Marshal(map[string][]string{"entries": d.entries})
+		require.NoError(t, err)
+		resp := controlAPIPostJSON(t, controlClient, first.base+d.path, string(body))
+		resp.Body.Close()
+		require.Equal(t, 200, resp.StatusCode)
+		require.NoError(t, d.save(projectPath, d.entries))
+	}
+
+	for range 2 {
+		select {
+		case status := <-results:
+			require.Equal(t, 403, status)
+		case <-time.After(2 * time.Second):
+			require.FailNow(t, "denied request remained held")
+		}
+	}
+	ended := 0
+	for ended < 2 {
+		select {
+		case e := <-events:
+			if e.Type == proxy.EventHoldEnd {
+				require.Equal(t, proxy.HoldDenied, e.HoldEnd.Outcome)
+				ended++
+			}
+		case <-time.After(2 * time.Second):
+			require.FailNow(t, "missing denied hold settlement events")
+		}
+	}
+	require.Equal(t, 403, get(first, target), "denied at runtime")
+	require.Equal(t, dns.RcodeNameError, resolve(first))
+	stopStream()
+
+	saved, err := config.Load("", projectPath)
+	require.NoError(t, err)
+	require.Equal(t, httpDenies, saved.Project.DenyHTTP)
+	require.Equal(t, []string{"host.vibepit"}, saved.Project.DenyDNS)
+
+	// A fresh proxy knows only what network.yaml holds.
+	second := start()
+	require.Equal(t, 403, get(second, target), "deny survives the restart")
+	require.Equal(t, 403, get(second, "a.example.com"), "wildcard deny survives the restart")
+	require.Equal(t, dns.RcodeNameError, resolve(second))
 }

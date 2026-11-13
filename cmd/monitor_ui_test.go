@@ -107,6 +107,19 @@ func TestRenderLogLine_Block(t *testing.T) {
 	require.Contains(t, line, "not allowed")
 }
 
+func TestRenderLogLine_Denied(t *testing.T) {
+	entry := proxy.LogEntry{
+		Domain: "evil.com",
+		Port:   "443",
+		Action: proxy.ActionBlock,
+		Source: proxy.SourceProxy,
+		Code:   proxy.BlockDenied,
+		Reason: "domain in denylist",
+	}
+	line := ansi.Strip(renderLogLine(entry, statusNone, false, nil, time.Time{}))
+	require.Contains(t, line, "] - proxy evil.com:443 domain in denylist", "a deny rule's block has its own symbol")
+}
+
 func TestRenderLogLine_AllowStatuses(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -632,7 +645,7 @@ func TestMonitorScreen_IgnoresResultsFromOtherScreens(t *testing.T) {
 	assert.Nil(t, cmd, "a stale feed result must not wait on the feed again")
 	s.Update(feedMsg{from: old, batch: feedBatch{Err: errors.New("connection refused")}}, w)
 	s.Update(allowResultMsg{from: old, key: key, status: statusTemp}, w)
-	s.Update(denyResultMsg{from: old, key: key}, w)
+	s.Update(rejectResultMsg{from: old, key: key}, w)
 
 	assert.Empty(t, s.hosts.hosts)
 	assert.False(t, s.hosts.unsupported)
@@ -660,8 +673,8 @@ func TestMonitorScreen_TickPollingIsAsync(t *testing.T) {
 
 	d := newAsyncDriver(t, s, w)
 	d.run(cmd)
-	d.until(func() bool { return len(s.logs.items) == 1 && len(s.hosts.hosts) == 1 })
-	assert.False(t, s.hostsPollInFlight)
+	// The feed alone can fill the host row, so wait for the poll too.
+	d.until(func() bool { return len(s.logs.items) == 1 && len(s.hosts.hosts) == 1 && !s.hostsPollInFlight })
 	assert.Contains(t, requests.all(), "/events?tail=25", "the feed asks for the recent tail")
 	assert.Contains(t, w.View().Content, "HOSTS (1)")
 	assert.Contains(t, w.View().Content, "LOGS (1)")
@@ -714,6 +727,9 @@ func TestMonitor_ProxyRestartResetsTheFeedState(t *testing.T) {
 	s.Update(tea.KeyPressMsg{Code: tea.KeyUp}, w)
 	require.True(t, s.logs.selecting)
 	require.Len(t, s.hosts.holdIDs, 1, "the held host has a row")
+	polled := mkHost("polled.com", "443", proxy.SourceProxy, approveEpoch, 3, 0, proxy.ActionAllow)
+	s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{polled}, lastID: 2, exact: true}, w)
+	require.GreaterOrEqual(t, s.hosts.indexOf(polled.HostKey), 0)
 
 	_, cmd := s.Update(feedMsg{from: s, batch: feedBatch{Reset: true}}, w)
 	assert.NotNil(t, cmd, "the feed is read on")
@@ -730,6 +746,7 @@ func TestMonitor_ProxyRestartResetsTheFeedState(t *testing.T) {
 	assert.False(t, s.logs.selecting, "the selected line is gone")
 	assert.Zero(t, s.held.Count(clock.now))
 	assert.Equal(t, -1, s.hosts.indexOf(hold.HostKey()), "no stale held row")
+	assert.Equal(t, -1, s.hosts.indexOf(polled.HostKey), "a poll from before the reset may already count the replay")
 	assert.Empty(t, s.hosts.holdIDs)
 	view := ansi.Strip(w.View().Content)
 	assert.NotContains(t, view, "held.com")
@@ -798,11 +815,14 @@ func TestMonitor_HeldLogLine(t *testing.T) {
 		tests := []struct {
 			outcome proxy.HoldOutcome
 			want    string
+			color   hostStatus // the status the outcome is colored like
 		}{
-			{proxy.HoldDenied, "held · denied"},
-			{proxy.HoldTimeout, "held · timed out"},
-			{proxy.HoldAbandoned, "held · request gone"},
-			{proxy.HoldUnwatched, "held · nobody watching"},
+			{proxy.HoldAllowed, "held · allowed", hostAllowed},
+			{proxy.HoldDenied, "held · denied", hostDenied},
+			{proxy.HoldRejected, "held · rejected", hostRejected},
+			{proxy.HoldTimeout, "held · timed out", hostBlocked},
+			{proxy.HoldAbandoned, "held · request gone", hostHoldEnded},
+			{proxy.HoldUnwatched, "held · nobody watching", hostBlocked},
 		}
 		for _, tt := range tests {
 			t.Run(string(tt.outcome), func(t *testing.T) {
@@ -810,8 +830,11 @@ func TestMonitor_HeldLogLine(t *testing.T) {
 				e.Outcome = tt.outcome
 				var held heldTargets
 				held.Apply(proxy.Event{Type: proxy.EventLog, Log: e})
-				line := ansi.Strip(renderLogLine(e, statusNone, false, &held, approveEpoch))
-				assert.Contains(t, line, tt.want)
+				raw := renderLogLine(e, statusNone, false, &held, approveEpoch)
+				assert.Contains(t, ansi.Strip(raw), tt.want)
+				base, _ := tui.LineStyle(false)
+				label := holdOutcomeLabel(tt.outcome)
+				assert.Contains(t, raw, tt.color.style(base).Render(label))
 			})
 		}
 	})
@@ -831,6 +854,50 @@ func openHoldEntry(id uint64) proxy.LogEntry {
 		Deadline: time.Now().Add(time.Hour)}
 }
 
+// Host rows follow the feed between polls, and a poll replaces only what it
+// includes: the row of a new held host never vanishes, and no entry is
+// counted twice.
+func TestMonitor_HostRowsFollowTheFeed(t *testing.T) {
+	s, w := newPollingTestScreen(t, nil, nil)
+	hold := openHoldEntry(1)
+	key := hold.HostKey()
+	row := func() string {
+		t.Helper()
+		line := lineContaining(ansi.Strip(w.View().Content), "held.com")
+		require.NotEmpty(t, line, "the row is shown")
+		return strings.TrimRight(line, " ")
+	}
+
+	s.Update(logEvents(s, hold), w)
+	assert.Contains(t, row(), "held ")
+
+	s.Update(feedMsg{from: s, batch: feedBatch{Events: []proxy.Event{{Type: proxy.EventHoldEnd,
+		HoldEnd: proxy.HoldEnd{ID: 1, HostKey: key, Outcome: proxy.HoldRejected}}}}}, w)
+	assert.True(t, strings.HasSuffix(row(), "0  rejected"), "the hold's ending names the status before a poll")
+
+	block := proxy.LogEntry{ID: 2, Time: time.Now(), Domain: "held.com", Port: "443", Action: proxy.ActionBlock,
+		Source: proxy.SourceProxy, Reason: "rejected this session", Code: proxy.BlockNotAllowlisted, HoldID: 1}
+	s.Update(logEvents(s, block), w)
+	assert.True(t, strings.HasSuffix(row(), "1  rejected"), "the waiting request's block is counted")
+
+	// A poll taken before the block lists the host from its hold.
+	polledHold := proxy.HostStats{HostKey: key}
+	polledHold.Record(hold)
+	s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{polledHold}, lastID: 1, exact: true}, w)
+	assert.True(t, strings.HasSuffix(row(), "1  rejected"), "the block after the poll still counts")
+
+	// A poll that includes the block replaces it, and the late feed copy of
+	// an entry it includes doesn't count again.
+	polled := polledHold
+	polled.Record(block)
+	polled.Rejected = true
+	s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{polled}, lastID: 2, exact: true}, w)
+	assert.True(t, strings.HasSuffix(row(), "1  rejected"))
+	assert.Empty(t, s.hosts.pending)
+	s.Update(logEvents(s, block), w)
+	assert.True(t, strings.HasSuffix(row(), "1  rejected"))
+}
+
 func TestMonitor_DenyHeldEntry(t *testing.T) {
 	heldKey := proxy.HostKey{Source: proxy.SourceProxy, Domain: "held.com", Port: "443"}
 	n := tea.KeyPressMsg{Code: 'n', Text: "n"}
@@ -845,13 +912,16 @@ func TestMonitor_DenyHeldEntry(t *testing.T) {
 		d.until(func() bool { return len(s.logs.items) == 1 })
 
 		d.send(keyPress("k"))
-		assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "deny"}},
+		assert.Equal(t, []tui.FooterKey{{Key: "a", Desc: "allow"}, {Key: "A", Desc: "allow+save"}, {Key: "n", Desc: "reject"}},
 			s.FooterKeys(w)[:3])
 
 		d.send(n)
 		d.until(func() bool { return w.Flash() != "" })
-		assert.Equal(t, "denied held.com:443", w.Flash())
+		assert.Equal(t, "rejected held.com:443", w.Flash())
 		assert.True(t, ep.api.Denied().Denied(heldKey.Target()))
+		view := ansi.Strip(w.View().Content)
+		assert.Contains(t, view, "held · rejected", "the line stops counting down at once")
+		assert.NotContains(t, view, "waiting for a decision")
 	})
 
 	t.Run("host row", func(t *testing.T) {
@@ -868,8 +938,15 @@ func TestMonitor_DenyHeldEntry(t *testing.T) {
 		for _, msg := range runCmd(cmd) {
 			s.Update(msg, w)
 		}
-		assert.Equal(t, "denied held.com:443", w.Flash())
+		assert.Equal(t, "rejected held.com:443", w.Flash())
 		assert.True(t, tp.api.Denied().Denied(heldKey.Target()))
+		h, ok := s.hosts.selected()
+		require.True(t, ok)
+		assert.Equal(t, hostRejected, s.allows.hostStatus(h), "the row shows the rejection before the next poll")
+		assert.NotContains(t, s.hosts.holdIDs, heldKey, "the hold is over before its end arrives")
+		assert.False(t, footerHas(s.FooterKeys(w), "n", "reject"), "n has nothing left to reject")
+		_, cmd = s.Update(n, w)
+		assert.Nil(t, cmd)
 	})
 
 	t.Run("error flashes longer", func(t *testing.T) {
@@ -887,9 +964,9 @@ func TestMonitor_DenyHeldEntry(t *testing.T) {
 		for _, msg := range runCmd(cmd) {
 			s.Update(msg, w)
 		}
-		assert.Contains(t, w.Flash(), "deny held.com:443 failed: ")
+		assert.Contains(t, w.Flash(), "reject held.com:443 failed: ")
 		clock.now = clock.now.Add(allowErrorFlash - time.Second)
-		assert.Contains(t, w.Flash(), "deny held.com:443 failed: ")
+		assert.Contains(t, w.Flash(), "reject held.com:443 failed: ")
 	})
 }
 
@@ -1092,7 +1169,7 @@ func TestMonitorScreen_HostsAllow(t *testing.T) {
 		require.NoError(t, err)
 		dnsAllowlist, err := proxy.NewDNSAllowlist(nil)
 		require.NoError(t, err)
-		client := testControlClient(t, proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist))
+		client := testControlClient(t, proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewPolicy(httpAllowlist, dnsAllowlist, nil)))
 		s, w := newPollingTestScreen(t, client, nil)
 
 		h := mkHost("a.com", "443", proxy.SourceProxy, time.Now().Add(-time.Minute), 0, 1, proxy.ActionBlock)
@@ -1141,7 +1218,7 @@ func TestMonitorScreen_AllowCmd_SourceRouting(t *testing.T) {
 		require.NoError(t, err)
 		dnsAllowlist, err := proxy.NewDNSAllowlist(nil)
 		require.NoError(t, err)
-		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAllowlist, dnsAllowlist)
+		api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewPolicy(httpAllowlist, dnsAllowlist, nil))
 		client := testControlClient(t, api)
 		screen := newMonitorScreen(&SessionInfo{
 			SessionID:  "test123456",
@@ -1370,9 +1447,19 @@ func TestMonitorScreen_StaleHostsPollAfterAllow(t *testing.T) {
 	s.Update(allowResultMsg{from: s, key: blocked.HostKey, status: statusTemp}, w)
 	require.Equal(t, hostAllowedTemp, s.allows.hostStatus(s.hosts.hosts[0]))
 
-	s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{blocked}, gen: 0}, w)
+	_, cmd := s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{blocked}, gen: 0}, w)
 	assert.Equal(t, hostAllowedTemp, s.allows.hostStatus(s.hosts.hosts[0]), "stale snapshot is dropped")
+	assert.Nil(t, cmd, "the next due poll replaces it")
 	assert.False(t, s.hostsPollInFlight)
+
+	t.Run("after a feed reset a fresh poll starts at once", func(t *testing.T) {
+		s, w := newPollingTestScreen(t, fakeProxyClient(t, new(requestLog), http.StatusOK), nil)
+		require.NotNil(t, s.pollHosts()) // in flight across the reset
+		s.Update(feedMsg{from: s, batch: feedBatch{Reset: true}}, w)
+		_, cmd := s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{blocked}, gen: 0}, w)
+		assert.NotNil(t, cmd, "the rows hold only the replayed tail")
+		assert.True(t, s.hostsPollInFlight)
+	})
 
 	s.Update(hostsPollResultMsg{from: s, hosts: []proxy.HostStats{blocked}, gen: s.allowGen}, w)
 	assert.Equal(t, hostBlocked, s.allows.hostStatus(s.hosts.hosts[0]), "a current snapshot wins")

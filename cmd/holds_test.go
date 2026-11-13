@@ -157,6 +157,7 @@ func TestHoldOutcomeLabel(t *testing.T) {
 	tests := map[proxy.HoldOutcome]string{
 		proxy.HoldAllowed:   "allowed",
 		proxy.HoldDenied:    "denied",
+		proxy.HoldRejected:  "rejected",
 		proxy.HoldTimeout:   "timed out",
 		proxy.HoldAbandoned: "request gone",
 		proxy.HoldUnwatched: "nobody watching",

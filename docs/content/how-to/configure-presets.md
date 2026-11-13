@@ -6,7 +6,8 @@ description: Manage network presets, allowlist entries, and host port access in 
 
 Vibepit filters all network traffic from the sandbox container through a proxy.
 Only domains you explicitly allow — via presets or individual entries — are
-reachable. Configuration lives in YAML files at the project and global level.
+reachable, unless a matching deny rule blocks them. Configuration lives in YAML
+files at the project and global level.
 
 ## The project config file
 
@@ -30,8 +31,9 @@ allow-dns:
 - **`presets`** — named bundles of domains for common ecosystems (e.g.,
   `pkg-go` covers Go module proxies and the Go playground).
 - **`allow-http`** — individual `domain:port` entries the HTTP proxy allows.
-- **`allow-dns`** — domains that need DNS resolution but do not go through the
-  HTTP proxy.
+- **`allow-dns`** — domains the sandbox DNS service may resolve.
+- **`deny-http`** — `domain:port` patterns blocked by the HTTP proxy.
+- **`deny-dns`** — domain patterns blocked by the sandbox DNS service.
 
 ## First-run preset selector
 
@@ -61,8 +63,8 @@ vibepit run -r
 ```
 
 The selector opens with your current presets pre-checked. After you confirm,
-the file is rewritten with the new preset selection. Existing `allow-http` and
-`allow-dns` entries are preserved.
+the file is rewritten with the new preset selection. Existing `allow-http`,
+`allow-dns`, `deny-http`, and `deny-dns` entries are preserved.
 
 ## Manual entries
 
@@ -84,6 +86,43 @@ neither matches the apex domain. Ports must be an exact number or `*` for any
 port. See the
 [Monitor and Allowlist](allowlist-and-monitor.md) guide for full wildcard
 details.
+
+## Deny rules
+
+Both the global config and `.vibepit/network.yaml` accept deny rules:
+
+```yaml
+deny-http:
+  - telemetry.example.com:443
+  - '*.tracking.example.com:*'
+deny-dns:
+  - telemetry.example.com
+  - '**.tracking.example.com'
+```
+
+Global and project deny lists are merged and deduplicated. Rules use the same
+syntax as their corresponding allow lists and are validated before containers
+start. A matching deny overrides every allow, including presets, CLI allows,
+and the special `host.vibepit` allowance. Explicitly denied requests fail
+without entering the hold queue or opening a prompt.
+
+Denies also follow aliases: an allowed name whose CNAME chain includes a
+denied name is refused, for DNS queries against `deny-dns` and for proxied
+requests against `deny-http`. With HTTP deny rules configured, the proxy makes
+one extra DNS query per allowed request to see the chain, and refuses the
+request if that query fails.
+
+The two protocols are independent: an HTTP deny does not deny DNS resolution,
+and a DNS deny governs the sandbox DNS service, not the HTTP proxy's own
+upstream resolution. Add both rules when you want both scopes blocked.
+
+Use [`deny-http` or `deny-dns`](allowlist-and-monitor.md#deny-domains) to apply
+rules to a running proxy and save them, or press `N` in the prompt or monitor.
+Saved rules preserve unrelated YAML keys and comments; missing project config
+files are created. Manual edits take effect after restarting the session.
+To remove a saved deny, edit the file that contains it and restart; adding an
+allow cannot override it. Existing established tunnels are not terminated;
+denies govern new requests.
 
 ## Allow host ports
 
@@ -206,6 +245,12 @@ allow-http:
 allow-dns:
   - internal.corp.example.com
 
+deny-http:
+  - telemetry.example.com:443
+
+deny-dns:
+  - telemetry.example.com
+
 block-cidr:
   - 10.0.0.0/8
 
@@ -229,6 +274,8 @@ uniformly — each key follows its own rules:
 | `presets` | Project config. Expanded into HTTP allow entries after loading. |
 | `allow-http` | Global config + project config + CLI flags, then preset entries appended after explicit entries. |
 | `allow-dns` | Global config + project config. No CLI or preset layer. |
+| `deny-http` | Global config + project config, deduplicated; overrides matching HTTP allows. |
+| `deny-dns` | Global config + project config, deduplicated; overrides matching DNS allows. |
 | `block-cidr` | Global config only. Adds custom ranges to the default IP blocklist. |
 | `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges — see the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
 | `allow-host-ports` | Project config only. |

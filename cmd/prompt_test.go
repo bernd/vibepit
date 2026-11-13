@@ -62,6 +62,10 @@ func TestBlockWatcher_Next(t *testing.T) {
 				withCode(block(2, proxy.SourceProxy, "b.com", "443"), proxy.BlockResolutionFailed),
 				withCode(block(3, proxy.SourceProxy, "c.com", "443"), proxy.BlockNotAllowlisted),
 				withCode(block(4, proxy.SourceDNS, "d.com", ""), proxy.BlockCIDR),
+				// Nothing can allow or deny an IPv6 literal, so the prompt
+				// never asks about one.
+				withCode(block(5, proxy.SourceProxy, "2001:db8::1", "443"), proxy.BlockNotAllowlisted),
+				withCode(block(6, proxy.SourceProxy, "e.com", "0"), proxy.BlockInvalidTarget),
 			}},
 			want: [][]string{{"c.com:443"}},
 		},

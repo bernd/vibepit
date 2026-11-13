@@ -21,9 +21,12 @@ const (
 type HoldOutcome string
 
 const (
-	HoldNone      HoldOutcome = ""
-	HoldAllowed   HoldOutcome = "allowed"
-	HoldDenied    HoldOutcome = "denied"
+	HoldNone    HoldOutcome = ""
+	HoldAllowed HoldOutcome = "allowed"
+	HoldDenied  HoldOutcome = "denied"
+	// HoldRejected ends a hold the user rejected for this session without
+	// installing a deny rule (lowercase n).
+	HoldRejected  HoldOutcome = "rejected"
 	HoldTimeout   HoldOutcome = "timeout"
 	HoldAbandoned HoldOutcome = "abandoned"
 	HoldUnwatched HoldOutcome = "unwatched"
@@ -41,14 +44,23 @@ const (
 type BlockCode string
 
 const (
+	BlockDenied           BlockCode = "denied"
 	BlockNotAllowlisted   BlockCode = "not_allowlisted"
 	BlockCIDR             BlockCode = "blocked_cidr"
 	BlockResolutionFailed BlockCode = "resolution_failed"
+	// BlockInvalidTarget: the request names no port the proxy can check,
+	// e.g. a scheme it doesn't forward or a port out of range.
+	BlockInvalidTarget BlockCode = "invalid_target"
 )
 
 // reasonNotAllowlisted is the reason logged for BlockNotAllowlisted, by
 // blocks and holds alike.
 const reasonNotAllowlisted = "domain not in allowlist"
+
+// reasonRejected replaces reasonNotAllowlisted for a target the user
+// rejected this session. The code stays BlockNotAllowlisted: an allow still
+// fixes it.
+const reasonRejected = "rejected this session"
 
 type LogEntry struct {
 	ID     uint64    `json:"id"`
@@ -108,6 +120,9 @@ func (e LogEntry) HostKey() HostKey {
 	return HostKey{Source: e.Source, Domain: e.Domain, Port: e.Port}
 }
 
+// HostStats are the per-host stats. A held host has a row before its first
+// block or allow: LastAction is ActionHold until the request that waited is
+// logged, and neither count includes the hold.
 type HostStats struct {
 	HostKey
 	Allowed         int       `json:"allowed"`
@@ -118,6 +133,13 @@ type HostStats struct {
 	LastAction      Action    `json:"last_action"`
 	LastBlockReason string    `json:"last_block_reason,omitempty"`
 	LastBlockCode   BlockCode `json:"last_block_code,omitempty"`
+	// Denied reports whether an enforced deny rule matches the host at
+	// snapshot time. It wins over Allowlisted.
+	Denied bool `json:"denied,omitempty"`
+	// Rejected reports whether a user rejected the host for this session.
+	// Unlike Denied it filters nothing, and it stays set after an allow:
+	// clients read it only while the host is blocked.
+	Rejected bool `json:"rejected,omitempty"`
 	// Allowlisted reports whether the allowlist admits the host at snapshot
 	// time. It covers runtime allows from any client, so it can be true
 	// while LastAction is still a block from before the allow.
@@ -197,29 +219,35 @@ func (b *LogBuffer) SetHoldOutcome(id uint64, o HoldOutcome) bool {
 
 // recordHostLocked updates the per-host stats. Caller must hold b.mu.
 func (b *LogBuffer) recordHostLocked(entry LogEntry) {
-	// A hold is undecided, so it counts as neither allowed nor blocked. The
-	// block or allow that follows is what the stats record.
-	if entry.Action == ActionHold {
-		return
-	}
 	key := entry.HostKey()
 	h, ok := b.hosts[key]
 	if !ok {
 		if len(b.hosts) >= b.maxHosts {
 			b.evictOldestHostLocked()
 		}
-		h = &HostStats{HostKey: key, FirstSeen: entry.Time, FirstAction: entry.Action}
+		h = &HostStats{HostKey: key}
 		b.hosts[key] = h
 	}
-	h.LastSeen = entry.Time
-	h.LastAction = entry.Action
-	switch entry.Action {
+	h.Record(entry)
+}
+
+// Record folds a log entry of the host into its stats. A hold is
+// undecided, so it counts as neither allowed nor blocked; the block or allow
+// that follows is what the counts record. Clients use it to bring a
+// snapshot up to date with the entries logged after it.
+func (h *HostStats) Record(e LogEntry) {
+	if h.FirstSeen.IsZero() {
+		h.FirstSeen, h.FirstAction = e.Time, e.Action
+	}
+	h.LastSeen, h.LastAction = e.Time, e.Action
+	switch e.Action {
 	case ActionAllow:
 		h.Allowed++
 	case ActionBlock:
 		h.Blocked++
-		h.LastBlockReason = entry.Reason
-		h.LastBlockCode = entry.Code
+		h.LastBlockReason, h.LastBlockCode = e.Reason, e.Code
+	case ActionHold:
+		h.LastBlockReason, h.LastBlockCode = e.Reason, e.Code
 	}
 }
 
@@ -301,6 +329,13 @@ func (b *LogBuffer) lastLocked(n int) []LogEntry {
 
 // Hosts returns a snapshot of the per-host stats in no particular order.
 func (b *LogBuffer) Hosts() []HostStats {
+	hosts, _ := b.HostsAt()
+	return hosts
+}
+
+// HostsAt returns the host stats and the ID of the last entry they include,
+// taken together so a client can apply exactly the entries after it.
+func (b *LogBuffer) HostsAt() ([]HostStats, uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -308,5 +343,5 @@ func (b *LogBuffer) Hosts() []HostStats {
 	for _, h := range b.hosts {
 		result = append(result, *h)
 	}
-	return result
+	return result, b.nextID - 1
 }

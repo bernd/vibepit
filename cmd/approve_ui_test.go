@@ -295,7 +295,7 @@ func TestApproveScreen_ViewSanitizesUntrustedText(t *testing.T) {
 func TestApproveScreen_FooterKeys(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w
-	assert.Equal(t, []string{"allow", "allow+save", "deny", "dismiss"}, footerKeyDescs(s.FooterKeys(w)))
+	assert.Equal(t, []string{"allow", "allow+save", "reject", "deny+save", "dismiss"}, footerKeyDescs(s.FooterKeys(w)))
 }
 
 func TestApproveScreen_Allow(t *testing.T) {
@@ -391,7 +391,7 @@ func TestApproveScreen_DenyOnOlderProxy(t *testing.T) {
 func TestApproveScreen_DenyErrorStaysOpen(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w
-	_, cmd := s.Update(decisionResultMsg{err: assert.AnError}, w)
+	_, cmd := s.Update(decisionResultMsg{from: s, target: blockedEntry.Target(), err: assert.AnError}, w)
 	assert.Nil(t, cmd)
 	assert.Error(t, w.Err())
 	_, cmd = s.Update(checkResultMsg{decided: []proxy.Target{blockedEntry.Target()}}, w)
@@ -497,7 +497,7 @@ func TestApproveScreen_FailedSaveSaysAllowed(t *testing.T) {
 func TestApproveScreen_ErrorStaysOpen(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w
-	_, cmd := s.Update(decisionResultMsg{err: assert.AnError}, w)
+	_, cmd := s.Update(decisionResultMsg{from: s, target: blockedEntry.Target(), err: assert.AnError}, w)
 	assert.Nil(t, cmd)
 	assert.Error(t, w.Err())
 }
@@ -544,7 +544,7 @@ func TestApproveScreen_FailedAllowStaysOpenUntilAcknowledged(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w
 	s.busy = true
-	_, cmd := s.Update(decisionResultMsg{err: assert.AnError}, w)
+	_, cmd := s.Update(decisionResultMsg{from: s, target: blockedEntry.Target(), err: assert.AnError}, w)
 	assert.Nil(t, cmd)
 
 	// The live allowlist may already contain the target (save failed after
@@ -567,7 +567,7 @@ func TestApproveScreen_RetryAfterFailedAllowClearsError(t *testing.T) {
 	f := makeApproveSetup(t, blockedEntry)
 	s, w := f.s, f.w
 	httpAL := f.proxy.http
-	s.Update(decisionResultMsg{err: assert.AnError}, w)
+	s.Update(decisionResultMsg{from: s, target: blockedEntry.Target(), err: assert.AnError}, w)
 
 	_, cmd := s.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}, w)
 	require.NotNil(t, cmd)
@@ -670,4 +670,132 @@ func TestApproveScreen_OtherTargetsFitTheViewport(t *testing.T) {
 	assert.LessOrEqual(t, len(strings.Split(view, "\n")), f.w.VpHeight())
 	assert.Contains(t, view, "also waiting (59)")
 	assert.Contains(t, view, " more")
+}
+
+func TestApproveScreen_DenySaveFailureBlocksAllowAndCanRetry(t *testing.T) {
+	for _, entry := range []proxy.LogEntry{blockedEntry, {Action: proxy.ActionBlock, Source: proxy.SourceDNS, Domain: "api.example.com", Reason: "domain not in allowlist"}} {
+		t.Run(string(entry.Source), func(t *testing.T) {
+			f := makeApproveSetup(t, entry)
+			require.NoError(t, os.Remove(f.projectPath))
+			require.NoError(t, os.Mkdir(f.projectPath, 0755))
+			_, command := f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+			require.NotNil(t, command)
+			_, command = f.s.Update(command(), f.w)
+			require.Nil(t, command)
+			require.Error(t, f.w.Err())
+			saveErr := f.w.Err()
+			for _, key := range []string{"a", "A"} {
+				_, command = f.s.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key}, f.w)
+				assert.Nil(t, command)
+				assert.Equal(t, saveErr, f.w.Err())
+			}
+			assert.NotContains(t, footerKeyDescs(f.s.FooterKeys(f.w)), "allow")
+			assert.NotContains(t, footerKeyDescs(f.s.FooterKeys(f.w)), "allow+save")
+			assert.Contains(t, f.s.View(f.w), "denied by rule")
+			assert.Contains(t, f.s.View(f.w), "blocked")
+			assert.NotContains(t, f.s.View(f.w), "hold ended")
+			require.NoError(t, os.Remove(f.projectPath))
+			_, command = f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+			require.NotNil(t, command)
+			_, command = f.s.Update(command(), f.w)
+			require.NoError(t, f.w.Err())
+			assert.Equal(t, 0, f.q.Len())
+			data, err := os.ReadFile(f.projectPath)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), entry.Target().String())
+		})
+	}
+}
+
+func TestApproveScreen_HeldDenySaveFailureSurvivesSettlement(t *testing.T) {
+	for _, before := range []bool{true, false} {
+		for _, another := range []bool{false, true} {
+			t.Run(fmt.Sprintf("eventBeforeResult=%v/another=%v", before, another), func(t *testing.T) {
+				entry := heldEntry("retry.example.com", 1, approveEpoch.Add(time.Minute))
+				f := makeApproveSetup(t, entry)
+				if another {
+					f.q.Add(heldEntry("next.example.com", 2, approveEpoch.Add(time.Minute)))
+				}
+				require.NoError(t, os.Remove(f.projectPath))
+				require.NoError(t, os.Mkdir(f.projectPath, 0755))
+				_, command := f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+				require.NotNil(t, command)
+				_, duplicate := f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+				require.Nil(t, duplicate)
+				result := command()
+				end := func() { f.q.EndHold(proxy.HoldEnd{ID: 1, HostKey: entry.HostKey(), Outcome: proxy.HoldDenied}) }
+				if before {
+					end()
+				}
+				_, command = f.s.Update(result, f.w)
+				require.Nil(t, command)
+				if !before {
+					end()
+				}
+				require.Error(t, f.w.Err())
+				require.Contains(t, f.s.View(f.w), "retry.example.com:443")
+				require.Contains(t, f.s.View(f.w), "Retry saving")
+				require.Contains(t, f.s.View(f.w), "hold ended · denied")
+				require.NotContains(t, f.s.View(f.w), "the agent is waiting")
+				f.clock.now = approveEpoch.Add(2 * time.Minute)
+				require.Contains(t, f.s.View(f.w), "hold ended · denied")
+				require.NotContains(t, strings.Split(f.s.View(f.w), "also waiting")[0], "timed out")
+				_, command = f.s.Update(tui.TickMsg{}, f.w)
+				require.Nil(t, command)
+				for _, key := range []string{"a", "A", "n"} {
+					_, command = f.s.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key}, f.w)
+					require.Nil(t, command)
+				}
+				require.NoError(t, os.Remove(f.projectPath))
+				_, command = f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+				require.NotNil(t, command)
+				f.s.Update(command(), f.w)
+				require.NoError(t, f.w.Err())
+				data, err := os.ReadFile(f.projectPath)
+				require.NoError(t, err)
+				require.Contains(t, string(data), "retry.example.com:443")
+				require.NotContains(t, string(data), "next.example.com")
+				if another {
+					require.Contains(t, f.s.View(f.w), "next.example.com:443")
+				} else {
+					require.Empty(t, f.s.View(f.w))
+				}
+			})
+		}
+	}
+}
+
+func TestApproveScreen_DismissFailedHeldDenySave(t *testing.T) {
+	entry := heldEntry("retry.example.com", 1, approveEpoch.Add(time.Minute))
+	next := heldEntry("next.example.com", 2, approveEpoch.Add(time.Minute))
+	f := makeApproveSetup(t, entry, next)
+	require.NoError(t, os.Remove(f.projectPath))
+	require.NoError(t, os.Mkdir(f.projectPath, 0755))
+	_, command := f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+	require.NotNil(t, command)
+	f.q.EndHold(proxy.HoldEnd{ID: 1, HostKey: entry.HostKey(), Outcome: proxy.HoldDenied})
+	f.s.Update(command(), f.w)
+	require.Error(t, f.w.Err())
+	f.s.View(f.w)
+	// esc skips only the pinned target; the next one can still be decided.
+	_, command = f.s.Update(tea.KeyPressMsg{Code: tea.KeyEscape}, f.w)
+	require.Nil(t, command)
+	require.NoError(t, f.w.Err())
+	require.Contains(t, f.s.View(f.w), "next.example.com:443")
+	require.NotContains(t, f.s.View(f.w), "retry.example.com")
+	require.True(t, footerHas(f.s.FooterKeys(f.w), "a", "allow"))
+	_, command = f.s.Update(tea.KeyPressMsg{Code: 'a', Text: "a"}, f.w)
+	require.NotNil(t, command, "the next target can be allowed")
+
+	// q still dismisses everything at once.
+	f = makeApproveSetup(t, entry, next)
+	require.NoError(t, os.Remove(f.projectPath))
+	require.NoError(t, os.Mkdir(f.projectPath, 0755))
+	_, command = f.s.Update(tea.KeyPressMsg{Code: 'N', Text: "N"}, f.w)
+	f.s.Update(command(), f.w)
+	f.s.View(f.w)
+	_, command = f.s.Update(tea.KeyPressMsg{Code: 'q', Text: "q"}, f.w)
+	require.NotNil(t, command)
+	require.IsType(t, tea.QuitMsg{}, command())
+	require.ElementsMatch(t, []proxy.Target{entry.Target(), next.Target()}, f.s.result().Dismissed)
 }

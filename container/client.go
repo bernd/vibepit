@@ -1000,11 +1000,18 @@ func (c *Client) CreateSandboxContainer(ctx context.Context, cfg SandboxContaine
 		cfg.LinuxbrewVolumeName + ":" + LinuxbrewMountPath,
 		cfg.ProjectDir + ":" + cfg.ProjectDir,
 	}
-	// Hide the project's .vibepit directory in the sandbox.
+	// Hide the project's .vibepit directory in the sandbox behind an empty
+	// read-only directory. Both ends are created here: the mount point so the
+	// runtime doesn't create it in the project as another user, and the
+	// source rather than relying on the runtime to create a missing bind
+	// source, which not every runtime does.
 	{
 		vibepitConfigDir := filepath.Join(cfg.ProjectDir, config.ProjectConfigDirName)
 		fakeConfigDir := filepath.Join(cfg.RuntimeDir, filepath.Base(vibepitConfigDir))
 		if err := os.MkdirAll(vibepitConfigDir, 0700); err != nil {
+			return "", fmt.Errorf("create project config dir: %w", err)
+		}
+		if err := os.MkdirAll(fakeConfigDir, 0700); err != nil {
 			return "", fmt.Errorf("create fake config dir: %w", err)
 		}
 		binds = append(binds, fakeConfigDir+":"+vibepitConfigDir+":ro")

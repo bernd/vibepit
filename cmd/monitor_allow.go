@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 )
@@ -32,6 +33,11 @@ const (
 	hostAllowed
 	hostAllowedTemp
 	hostSaved
+	hostDenied
+	hostRejected
+	// hostHoldEnded is a host whose last request was held and left before
+	// a decision was logged; nothing went through, but nothing was blocked.
+	hostHoldEnded
 )
 
 func (st hostStatus) label() string {
@@ -42,9 +48,36 @@ func (st hostStatus) label() string {
 		return "allowed*"
 	case hostSaved:
 		return "saved"
+	case hostDenied:
+		return "denied"
+	case hostRejected:
+		return "rejected"
+	case hostHoldEnded:
+		return "held"
 	default:
 		return "blocked"
 	}
+}
+
+// faded reports whether the status is drawn dim: it tells of a request that
+// was never decided.
+func (st hostStatus) faded() bool {
+	return st == hostHoldEnded
+}
+
+// style is base in the status's color, dim if faded.
+func (st hostStatus) style(base lipgloss.Style) lipgloss.Style {
+	return base.Foreground(st.color()).Faint(st.faded())
+}
+
+// labelStyle is style for the status label, which stands out unless faded.
+func (st hostStatus) labelStyle(base lipgloss.Style) lipgloss.Style {
+	return st.style(base).Bold(!st.faded())
+}
+
+// blocks reports whether hosts with this status get nothing through.
+func (st hostStatus) blocks() bool {
+	return st == hostBlocked || st == hostDenied || st == hostRejected || st == hostHoldEnded
 }
 
 func (st hostStatus) color() color.Color {
@@ -53,6 +86,12 @@ func (st hostStatus) color() color.Color {
 		return tui.ColorCyan
 	case hostAllowedTemp, hostSaved:
 		return tui.ColorOrange
+	case hostRejected:
+		return tui.ColorRejected
+	case hostDenied:
+		return tui.ColorDenied
+	case hostHoldEnded:
+		return tui.ColorYellow
 	default:
 		return tui.ColorError
 	}
@@ -62,9 +101,21 @@ func (st hostStatus) color() color.Color {
 // allowlist admits the host, so allows made elsewhere count and an allow the
 // proxy lost shows as blocked. CIDR and resolution checks run only after the
 // allowlist passed, so those blocks win over any allow. allowState only labels
-// the allows made from this monitor.
+// the allows made from this monitor. A deny rule wins over everything,
+// including one that blocked the host as an alias of a denied name; a
+// rejection only names a block, since an allow overrides it.
 func (s allowState) hostStatus(h proxy.HostStats) hostStatus {
 	if isBlocked(h) {
+		switch {
+		case h.Denied || h.LastBlockCode == proxy.BlockDenied:
+			return hostDenied
+		// Once allowlisted, a block comes from a later check, such as the
+		// CIDR one, which the rejection doesn't explain.
+		case h.Rejected && !h.Allowlisted:
+			return hostRejected
+		case h.LastAction == proxy.ActionHold:
+			return hostHoldEnded
+		}
 		return hostBlocked
 	}
 	switch s[h.HostKey] {
@@ -77,7 +128,10 @@ func (s allowState) hostStatus(h proxy.HostStats) hostStatus {
 }
 
 func isBlocked(h proxy.HostStats) bool {
-	return h.LastAction == proxy.ActionBlock && (!h.Allowlisted || !proxy.AllowFixes(h.HostKey, h.LastBlockCode))
+	// A hold that ended without a logged decision, because its request
+	// left, didn't let anything through either, and an allow still fixes it.
+	decided := h.LastAction == proxy.ActionBlock || h.LastAction == proxy.ActionHold
+	return h.Denied || decided && (!h.Allowlisted || !proxy.AllowFixes(h.HostKey, h.LastBlockCode))
 }
 
 // entryStatus returns the allow marker for a log line.
@@ -99,6 +153,9 @@ type allowTarget struct {
 
 func (s allowState) forHost(h proxy.HostStats) allowTarget {
 	t := allowTarget{key: h.HostKey, blocked: isBlocked(h), code: h.LastBlockCode, reason: h.LastBlockReason}
+	if h.Denied {
+		t.code, t.reason = proxy.BlockDenied, "target is denied"
+	}
 	if !t.blocked {
 		t.current = s[h.HostKey]
 	}
@@ -190,6 +247,21 @@ func (s *monitorScreen) handleAllowResult(msg allowResultMsg, w *tui.Window) {
 	if msg.status == statusTemp && s.allows[msg.key] == statusSaved {
 		return // a slower temp allow must not undo a save that finished first
 	}
+	if s.isDenied(msg.key) {
+		// The proxy refuses allows of denied targets, so this allow landed
+		// before a deny whose result came back first. The deny wins, but
+		// what the allow left behind is still reported.
+		v := allowValue(msg.key)
+		switch {
+		case msg.err != nil:
+			w.SetFlashFor(flashText("allow %s overridden by deny; saving the allow failed: %v", v, msg.err), allowErrorFlash)
+		case msg.status == statusSaved:
+			w.SetFlashFor(flashText("allow %s overridden by deny; its saved allow entry has no effect", v), allowErrorFlash)
+		default:
+			w.SetFlashFor(flashText("allow %s overridden by deny", v), allowErrorFlash)
+		}
+		return
+	}
 	s.allows[msg.key] = msg.status
 	s.hosts.markAllowlisted(msg.key)
 	s.allowGen++
@@ -209,30 +281,33 @@ func flashText(format string, args ...any) string {
 	return tui.SanitizeText(fmt.Sprintf(format, args...))
 }
 
-// denyResultMsg is returned by the async deny command.
-type denyResultMsg struct {
+// rejectResultMsg is returned by the async reject command (n).
+type rejectResultMsg struct {
 	from *monitorScreen
 	key  proxy.HostKey
 	err  error
 }
 
-// denySelected denies the selected host while the proxy holds requests for
-// it. Anywhere else n does nothing: a deny only ends holds.
-func (s *monitorScreen) denySelected(w *tui.Window) tea.Cmd {
+// rejectSelected rejects the selected host for the session while the proxy
+// holds requests for it. Anywhere else n does nothing: a rejection only
+// ends holds and stops new ones.
+func (s *monitorScreen) rejectSelected(w *tui.Window) tea.Cmd {
 	k, held := s.heldSelection(w.Now())
 	if !held || s.client == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		return denyResultMsg{from: s, key: k, err: s.client.DenyTarget(k.Target())}
+		return rejectResultMsg{from: s, key: k, err: s.client.DenyTarget(k.Target())}
 	}
 }
 
-// handleDenyResult only reports. The hold's end arrives on the feed.
-func (s *monitorScreen) handleDenyResult(msg denyResultMsg, w *tui.Window) {
+// handleRejectResult marks the host; the hold's end arrives on the feed.
+func (s *monitorScreen) handleRejectResult(msg rejectResultMsg, w *tui.Window) {
 	if msg.err != nil {
-		w.SetFlashFor(flashText("deny %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
+		w.SetFlashFor(flashText("reject %s failed: %v", allowValue(msg.key), msg.err), allowErrorFlash)
 		return
 	}
-	w.SetFlash(flashText("denied %s", allowValue(msg.key)))
+	s.endHold(msg.key, proxy.HoldRejected)
+	s.hosts.markRejected(msg.key, &s.held, w.Now())
+	w.SetFlash(flashText("rejected %s", allowValue(msg.key)))
 }

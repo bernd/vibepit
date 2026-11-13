@@ -40,7 +40,9 @@ func newTestProxy(t *testing.T) *testProxy {
 	require.NoError(t, err)
 	tp.dns, err = proxy.NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	tp.api = proxy.NewControlAPI(tp.log, nil, tp.http, tp.dns)
+	rules, err := proxy.NewDenyRules(nil, nil)
+	require.NoError(t, err)
+	tp.api = proxy.NewControlAPI(tp.log, nil, proxy.NewPolicy(tp.http, tp.dns, rules))
 	tp.client = testControlClient(t, tp.api)
 	return tp
 }
@@ -58,7 +60,7 @@ func TestControlClient_Config(t *testing.T) {
 	require.NoError(t, err)
 	dnsAL, err := proxy.NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, httpAL, dnsAL)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), merged, proxy.NewPolicy(httpAL, dnsAL, nil))
 	client := testControlClient(t, api)
 
 	cfg, err := client.Config()
@@ -75,7 +77,7 @@ func TestControlClient_AllowHTTP(t *testing.T) {
 	require.NoError(t, err)
 	dnsAL, err := proxy.NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, allowlist, dnsAL)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewPolicy(allowlist, dnsAL, nil))
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
@@ -102,7 +104,7 @@ func TestControlClient_AllowDNS(t *testing.T) {
 	require.NoError(t, err)
 	httpAL, err := proxy.NewHTTPAllowlist(nil)
 	require.NoError(t, err)
-	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, httpAL, dnsAllowlist)
+	api := proxy.NewControlAPI(proxy.NewLogBuffer(100), nil, proxy.NewPolicy(httpAL, dnsAllowlist, nil))
 	client := testControlClient(t, api)
 
 	t.Run("adds entries and returns them", func(t *testing.T) {
@@ -127,7 +129,7 @@ func TestControlClient_AllowDNS(t *testing.T) {
 
 func TestControlClient_Close(t *testing.T) {
 	log := proxy.NewLogBuffer(100)
-	api := proxy.NewControlAPI(log, nil, nil, nil)
+	api := proxy.NewControlAPI(log, nil, proxy.NewPolicy(nil, nil, nil))
 	client := testControlClient(t, api)
 
 	// Should not panic and should be safe to call multiple times.
@@ -141,7 +143,7 @@ func TestControlClient_ServerError(t *testing.T) {
 	require.NoError(t, err)
 	dnsAL, err := proxy.NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	api := proxy.NewControlAPI(log, nil, allowlist, dnsAL)
+	api := proxy.NewControlAPI(log, nil, proxy.NewPolicy(allowlist, dnsAL, nil))
 	client := testControlClient(t, api)
 
 	t.Run("GET non-existent path returns error", func(t *testing.T) {
@@ -247,14 +249,16 @@ func TestControlClient_Hosts(t *testing.T) {
 	require.NoError(t, err)
 	dnsAL, err := proxy.NewDNSAllowlist(nil)
 	require.NoError(t, err)
-	client := testControlClient(t, proxy.NewControlAPI(log, nil, httpAL, dnsAL))
+	client := testControlClient(t, proxy.NewControlAPI(log, nil, proxy.NewPolicy(httpAL, dnsAL, nil)))
 
-	hosts, err := client.Hosts()
+	snap, err := client.Hosts()
 	require.NoError(t, err)
-	require.Len(t, hosts, 1)
-	assert.Equal(t, proxy.HostKey{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}, hosts[0].HostKey)
-	assert.Equal(t, 1, hosts[0].Blocked)
-	assert.Equal(t, proxy.BlockNotAllowlisted, hosts[0].LastBlockCode)
+	require.Len(t, snap.Hosts, 1)
+	assert.Equal(t, proxy.HostKey{Source: proxy.SourceProxy, Domain: "a.com", Port: "443"}, snap.Hosts[0].HostKey)
+	assert.Equal(t, 1, snap.Hosts[0].Blocked)
+	assert.Equal(t, proxy.BlockNotAllowlisted, snap.Hosts[0].LastBlockCode)
+	assert.True(t, snap.Exact)
+	assert.Equal(t, uint64(1), snap.LastID, "the stats include the one entry")
 }
 
 func TestControlClient_HostsUnsupported(t *testing.T) {

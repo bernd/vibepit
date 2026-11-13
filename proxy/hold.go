@@ -37,7 +37,8 @@ type Holds struct {
 	log     *LogBuffer
 	hub     *EventHub
 	denied  *DenySet
-	allows  func(Target) bool
+	// decide is the policy's Decide; a field so tests can stall it.
+	decide func(Target) Decision
 
 	mu      sync.Mutex
 	held    map[Target]*hold
@@ -46,19 +47,21 @@ type Holds struct {
 
 // WireEvents connects log to a new event hub and hold registry. The hook
 // publishes under the log's lock, which keeps live log events in ID order.
-func WireEvents(log *LogBuffer, timeout time.Duration, denied *DenySet, allows func(Target) bool) (*EventHub, *Holds) {
+func WireEvents(log *LogBuffer, timeout time.Duration, denied *DenySet, policy *Policy) (*EventHub, *Holds) {
 	hub := NewEventHub()
 	log.OnAdd(func(e LogEntry) { hub.Publish(Event{Type: EventLog, Log: e}) })
-	return hub, NewHolds(timeout, log, hub, denied, allows)
+	return hub, NewHolds(timeout, log, hub, denied, policy)
 }
 
-func NewHolds(timeout time.Duration, log *LogBuffer, hub *EventHub, denied *DenySet, allows func(Target) bool) *Holds {
+// NewHolds creates the hold registry. policy decides which targets an
+// allow releases; a denied target is never held or released as allowed.
+func NewHolds(timeout time.Duration, log *LogBuffer, hub *EventHub, denied *DenySet, policy *Policy) *Holds {
 	h := &Holds{
 		timeout: timeout,
 		log:     log,
 		hub:     hub,
 		denied:  denied,
-		allows:  allows,
+		decide:  policy.Decide,
 		held:    make(map[Target]*hold),
 	}
 	hub.OnEmpty(h.endUnwatched)
@@ -67,10 +70,11 @@ func NewHolds(timeout time.Duration, log *LogBuffer, hub *EventHub, denied *Deny
 
 // Wait holds a request for k until the hold ends and returns how it ended,
 // and the ID of the hold's entry, zero when the request wasn't held.
-// HoldNone: not held (timeout 0, nobody watching, denied, AllowFixes false,
-// or over a limit). HoldAllowed without waiting: the allowlist admits the
-// target by the time the registry lock is taken. HoldAbandoned: this
-// request's ctx ended first.
+// HoldNone: not held (timeout 0, nobody watching, denied by a rule,
+// AllowFixes false, or over a limit). HoldRejected without waiting: a user
+// rejected the target this session, so it is never held again.
+// HoldAllowed without waiting: the allowlist admits the target by the time
+// the registry lock is taken. HoldAbandoned: this request's ctx ended first.
 func (h *Holds) Wait(ctx context.Context, k HostKey) (HoldOutcome, uint64) {
 	// Only proxy requests are held; DNS queries are always answered at once.
 	if k.Source != SourceProxy || !AllowFixes(k, BlockNotAllowlisted) {
@@ -82,11 +86,18 @@ func (h *Holds) Wait(ctx context.Context, k HostKey) (HoldOutcome, uint64) {
 	// Allows and denies update their lists before taking this lock to end
 	// holds, so re-checking here means a decision made since the caller's
 	// filter ran is never missed by a hold registered after it.
-	if h.allows(t) {
+	decision := h.decide(t)
+	if decision == Allowed {
 		h.mu.Unlock()
 		return HoldAllowed, 0
 	}
-	if h.timeout <= 0 || h.denied.Denied(t) || !h.hub.Watching() || h.waiting >= maxHeldRequests {
+	// Checked before the timeout and watchers, so the block says why even
+	// with nobody left to ask.
+	if decision != Denied && h.denied.Denied(t) {
+		h.mu.Unlock()
+		return HoldRejected, 0
+	}
+	if h.timeout <= 0 || decision == Denied || !h.hub.Watching() || h.waiting >= maxHeldRequests {
 		h.mu.Unlock()
 		return HoldNone, 0
 	}
@@ -170,7 +181,7 @@ func (h *Holds) EndAllowed() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for t, hd := range h.held {
-		if h.allows(t) {
+		if h.decide(t) == Allowed {
 			h.endLocked(t, hd, HoldAllowed)
 		}
 	}
@@ -218,4 +229,15 @@ func (h *Holds) endLocked(t Target, hd *hold, o HoldOutcome) {
 		HostKey: hd.entry.HostKey(),
 		Outcome: o,
 	}})
+}
+
+// EndDenied settles holds after enforced rules have been published.
+func (h *Holds) EndDenied() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for t, hd := range h.held {
+		if h.decide(t) == Denied {
+			h.endLocked(t, hd, HoldDenied)
+		}
+	}
 }

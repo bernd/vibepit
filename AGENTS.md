@@ -69,6 +69,8 @@ Current root commands are defined in `cmd/root.go` and include:
 - `status` -- show session status including container uptime and SSH address.
 - `allow-http` -- add HTTP(S) allowlist entries at runtime.
 - `allow-dns` -- add DNS allowlist entries at runtime.
+- `deny-http` -- enforce HTTP(S) deny rules and save to project config by default.
+- `deny-dns` -- enforce DNS deny rules and save to project config by default.
 - `proxy` -- internal command used inside the proxy container.
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
@@ -100,6 +102,8 @@ Built with `urfave/cli/v3`.
 - `status` shows session info including container uptime and published ports.
 - `allow-http` / `allow-dns` call the control API and can persist to project
   config.
+- `deny-http` / `deny-dns` add enforced deny rules through the control API and
+  persist them to project config unless `--no-save` is given.
 - `proxy` runs the proxy server inside the proxy container.
 - `vibed` runs the SSH daemon inside the sandbox container (internal).
 - `monitor` provides interactive control.
@@ -120,6 +124,9 @@ Key files:
 - `proxy/http.go` -- HTTP filtering.
 - `proxy/dns.go` -- DNS filtering.
 - `proxy/allowlist.go` -- domain/port matching.
+- `proxy/deny_rules.go` -- enforced deny rules, which win over any allow.
+- `proxy/policy.go` -- the one place allowlists and deny rules combine into
+  a decision; every component asks it.
 - `proxy/cidr.go` -- IP range blocking.
 - `proxy/api.go` -- control API.
 - `proxy/mtls.go` -- cert generation/validation.

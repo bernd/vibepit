@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"net"
-	"strings"
 	"time"
 
 	mdns "github.com/miekg/dns"
@@ -11,11 +10,11 @@ import (
 // DNSServer is a filtering DNS server that checks queries against an allowlist
 // and verifies resolved IPs against a CIDR blocklist.
 type DNSServer struct {
-	allowlist *DNSAllowlist
-	cidr      *CIDRBlocker
-	log       *LogBuffer
-	upstream  string
-	proxyIP   net.IP
+	policy   *Policy
+	cidr     *CIDRBlocker
+	log      *LogBuffer
+	upstream string
+	proxyIP  net.IP
 }
 
 // SetProxyIP sets the IP address that host.vibepit will resolve to.
@@ -23,12 +22,15 @@ func (s *DNSServer) SetProxyIP(ip net.IP) {
 	s.proxyIP = ip
 }
 
-func NewDNSServer(allowlist *DNSAllowlist, cidr *CIDRBlocker, log *LogBuffer, upstream string) *DNSServer {
+// NewDNSServer creates the filtering DNS server, which resolves what policy
+// allows. It's a parameter, not a setter, so no construction path can forget
+// the deny rules in it.
+func NewDNSServer(policy *Policy, cidr *CIDRBlocker, log *LogBuffer, upstream string) *DNSServer {
 	return &DNSServer{
-		allowlist: allowlist,
-		cidr:      cidr,
-		log:       log,
-		upstream:  upstream,
+		policy:   policy,
+		cidr:     cidr,
+		log:      log,
+		upstream: upstream,
 	}
 }
 
@@ -42,8 +44,22 @@ func (s *DNSServer) handler() mdns.Handler {
 			s.handleFailed(w, r)
 			return
 		}
+		// Only the first question is checked, and the whole message goes
+		// upstream, so a second question would skip the allow and deny
+		// checks. Resolvers send one question per query.
+		if len(r.Question) > 1 {
+			_ = w.WriteMsg(new(mdns.Msg).SetRcode(r, mdns.RcodeFormatError))
+			return
+		}
 
-		domain := strings.TrimSuffix(strings.ToLower(r.Question[0].Name), ".")
+		domain := normalizeHost(r.Question[0].Name)
+
+		decision := s.policy.Decide(Target{Source: SourceDNS, Host: domain})
+		if decision == Denied {
+			s.log.Add(LogEntry{Time: time.Now(), Domain: domain, Source: SourceDNS, Action: ActionBlock, Code: BlockDenied, Reason: deniedResult.reason})
+			w.WriteMsg(new(mdns.Msg).SetRcode(r, mdns.RcodeNameError))
+			return
+		}
 
 		// Synthetic response for host.vibepit — resolves to the proxy IP
 		// without upstream forwarding or CIDR validation. Other query types
@@ -73,7 +89,7 @@ func (s *DNSServer) handler() mdns.Handler {
 			return
 		}
 
-		if !s.allowlist.Allows(domain) {
+		if decision != Allowed {
 			s.log.Add(LogEntry{
 				Time:   time.Now(),
 				Domain: domain,
@@ -96,6 +112,13 @@ func (s *DNSServer) handler() mdns.Handler {
 			return
 		}
 
+		// An allowed name that aliases a denied one must not resolve.
+		if alias, denied := s.policy.DeniedAlias(SourceDNS, cnameTargets(resp), ""); denied {
+			res := aliasDeniedResult(alias)
+			s.log.Add(LogEntry{Time: time.Now(), Domain: domain, Source: SourceDNS, Action: ActionBlock, Code: res.code, Reason: res.reason})
+			w.WriteMsg(new(mdns.Msg).SetRcode(r, mdns.RcodeNameError))
+			return
+		}
 		// Reject responses that resolve to blocked IP ranges (e.g. private networks).
 		if s.hasBlockedIP(resp) {
 			s.log.Add(LogEntry{
