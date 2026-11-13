@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,11 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/bernd/vibepit/netpipe"
 	"github.com/bernd/vibepit/session"
 	"github.com/bernd/vibepit/tui"
 	"github.com/charmbracelet/colorprofile"
@@ -119,7 +122,8 @@ func NewServer(cfg Config) (*Server, error) {
 		// which rewrites \n to \r\n and corrupts raw-mode TUIs. charmssh still
 		// provides accept, handshake, auth, idle timeout, and global requests.
 		ChannelHandlers: map[string]charmssh.ChannelHandler{
-			"session": s.handleSessionChannel,
+			"session":      s.handleSessionChannel,
+			"direct-tcpip": handleDirectTCPIP,
 		},
 		RequestHandlers: map[string]charmssh.RequestHandler{
 			sessionCountRequestType: func(_ charmssh.Context, _ *charmssh.Server, _ *gossh.Request) (bool, []byte) {
@@ -141,6 +145,65 @@ func NewServer(cfg Config) (*Server, error) {
 
 	s.server = srv
 	return s, nil
+}
+
+// ForwardHostAllowed reports whether "ssh -L" style forwards may reach host:
+// only services on the sandbox's loopback are allowed. vibed dials from
+// inside the sandbox, so other destinations would let a client reach the
+// session network (the proxy's services) from the sandbox's position, which
+// is not what a port forward is for.
+func ForwardHostAllowed(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// directTCPIPData is the RFC 4254 7.2 "direct-tcpip" channel payload.
+type directTCPIPData struct {
+	DestAddr   string
+	DestPort   uint32
+	OriginAddr string
+	OriginPort uint32
+}
+
+// handleDirectTCPIP replaces charmssh.DirectTCPIPHandler, which closes both
+// directions as soon as either one ends. That drops the response for any
+// client that half-closes after sending its request; netpipe.Join passes
+// EOF on per direction instead.
+func handleDirectTCPIP(_ *charmssh.Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx charmssh.Context) {
+	var d directTCPIPData
+	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
+		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error()) //nolint:errcheck
+		return
+	}
+	if !ForwardHostAllowed(d.DestAddr) {
+		newChan.Reject(gossh.Prohibited, "port forwarding is only allowed to loopback addresses") //nolint:errcheck
+		return
+	}
+
+	var dialer net.Dialer
+	dconn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(d.DestAddr, strconv.FormatUint(uint64(d.DestPort), 10)))
+	if err != nil {
+		newChan.Reject(gossh.ConnectionFailed, err.Error()) //nolint:errcheck
+		return
+	}
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		dconn.Close() //nolint:errcheck
+		return
+	}
+	go gossh.DiscardRequests(reqs)
+
+	// A dropped SSH connection only ends the ch->dconn copy; close dconn too
+	// so the other copy does not wait on an idle service forever.
+	stop := context.AfterFunc(ctx, func() { dconn.Close() }) //nolint:errcheck
+
+	go func() {
+		defer stop()
+		netpipe.Join(ch, dconn)
+	}()
 }
 
 // Serve accepts incoming connections on the listener.
@@ -271,7 +334,7 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 	if len(detached) == 0 {
 		// No detached sessions — create one directly.
 		var err error
-		target, err = mgr.Create(cols, rows, sshEnv)
+		target, err = mgr.CreateWithBanner(cols, rows, sshEnv, sess.forwards.banner(sshEnv))
 		if err != nil {
 			fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
 			finishPTY(nil, 1)
@@ -321,7 +384,7 @@ func (s *Server) handlePTYSession(sess *rawSession, winCols, winRows int, winCh 
 		if result.sessionID == "" {
 			// New session.
 			var err error
-			target, err = mgr.Create(cols, rows, sshEnv)
+			target, err = mgr.CreateWithBanner(cols, rows, sshEnv, sess.forwards.banner(sshEnv))
 			if err != nil {
 				fmt.Fprintf(sess.Stderr(), "create session: %s\n", err) //nolint:errcheck
 				finishPTY(nil, 1)

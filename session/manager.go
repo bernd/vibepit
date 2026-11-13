@@ -64,6 +64,13 @@ func NewManager(limit int) *Manager {
 // The env parameter provides additional environment variables (e.g., from
 // the SSH session) that are merged with the container's environment.
 func (m *Manager) Create(cols, rows uint16, env []string) (*Session, error) {
+	return m.CreateWithBanner(cols, rows, env, nil)
+}
+
+// CreateWithBanner is Create with terminal output shown above the shell's
+// first prompt and kept in the session's screen and scrollback, like a
+// login message. Lines must end in CRLF.
+func (m *Manager) CreateWithBanner(cols, rows uint16, env []string, banner []byte) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -79,7 +86,7 @@ func (m *Manager) Create(cols, rows uint16, env []string) (*Session, error) {
 
 	m.counter++
 	id := fmt.Sprintf("session-%d", m.counter)
-	s, err := newSession(id, cols, rows, env, m)
+	s, err := newSession(id, cols, rows, env, banner, m)
 	if err != nil {
 		return nil, err
 	}

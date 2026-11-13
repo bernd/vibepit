@@ -28,6 +28,8 @@ type rawSession struct {
 
 	term  string
 	winch chan charmssh.Window
+
+	forwards ForwardsRequest // from a ForwardsRequestType request, for the banner
 }
 
 // Environ returns a copy of the environment requested by the client via "env"
@@ -164,6 +166,16 @@ func (s *Server) handleSessionChannel(_ *charmssh.Server, _ *gossh.ServerConn, n
 				continue
 			}
 			sess.env = append(sess.env, p.Name+"="+p.Value)
+			replyReq(req, true)
+
+		case ForwardsRequestType:
+			// Before shell only, for the same ordering reason as env.
+			var p ForwardsRequest
+			if dispatched || gossh.Unmarshal(req.Payload, &p) != nil || !p.valid() {
+				replyReq(req, false)
+				continue
+			}
+			sess.forwards = p
 			replyReq(req, true)
 
 		case "shell", "exec":

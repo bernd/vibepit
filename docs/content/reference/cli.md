@@ -269,6 +269,7 @@ vibepit connect
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--prompt` | bool | [`prompt`](../how-to/configure-presets.md#prompt-by-default) in the global config, else `false` | Show an allow/deny prompt over the session when the proxy blocks a connection. See [Blocked connection prompt](#blocked-connection-prompt). |
+| `-L`, `--forward` | string (repeatable) | | Forward a host port to a port inside the sandbox while connected: `[[BIND:]LOCAL:[HOST:]]REMOTE`. `BIND` defaults to `127.0.0.1`; an empty or `*` `BIND` listens on all interfaces. `HOST` defaults to `localhost` and must be a loopback address in the sandbox. Put IPv6 addresses in brackets, e.g. `[::1]`. |
 
 ### Behavior
 
@@ -277,6 +278,13 @@ vibepit connect
 - Loads the SSH client key from the session credentials directory.
 - Connects to `127.0.0.1` on the published SSH port with public key
   authentication.
+- With `--forward`, listens on each local port before the shell starts and
+  tunnels every connection over the SSH connection to the sandbox, like
+  `ssh -L`. Forwards stop when `connect` exits. The sandbox SSH server refuses
+  forwards to anything other than its own loopback. When `connect` starts a
+  new shell session, a banner above the first prompt lists the forwards. It
+  stays in that session's scrollback. Reattaching to an existing session
+  shows no banner.
 - Requests a PTY, starts a shell, and forwards terminal resize events
   (`SIGWINCH`).
 - When detached sessions exist inside the sandbox, the SSH server presents a
@@ -293,6 +301,12 @@ vibepit connect
 
 # Prompt to allow connections the proxy blocks
 vibepit connect --prompt
+
+# Reach a dev server on sandbox port 3000 at http://127.0.0.1:3000
+vibepit connect -L 3000
+
+# Host port 8080 to sandbox port 3000, plus a second forward
+vibepit connect -L 8080:3000 -L 5432:localhost:5432
 ```
 
 ---

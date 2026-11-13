@@ -52,7 +52,7 @@ type Session struct {
 	cleanupOnce sync.Once
 }
 
-func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Session, error) {
+func newSession(id string, cols, rows uint16, env []string, banner []byte, mgr *Manager) (*Session, error) {
 	shellCmd := []string{"/bin/bash", "--login"}
 	if mgr != nil && len(mgr.Command) > 0 {
 		shellCmd = mgr.Command
@@ -84,8 +84,20 @@ func newSession(id string, cols, rows uint16, env []string, mgr *Manager) (*Sess
 		cleanup:   make(chan struct{}),
 	}
 
-	go s.pump()
+	// drainVTE must run before the banner is written: a sequence the
+	// emulator answers (a status query) blocks the write until its reply
+	// is read.
 	go s.drainVTE()
+
+	// The banner goes into the emulator before pump starts, so it sits
+	// above the shell's first output and is part of every attach replay,
+	// like a login message. It never reaches the PTY: the shell doesn't
+	// see it as input or output.
+	if len(banner) > 0 {
+		s.vte.Write(banner) //nolint:errcheck
+	}
+
+	go s.pump()
 	go s.waitForExit()
 
 	return s, nil

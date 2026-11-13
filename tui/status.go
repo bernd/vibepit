@@ -16,10 +16,17 @@ var (
 )
 
 func writeStatus(w io.Writer, verb string, style lipgloss.Style, format string, args ...any) {
-	padded := fmt.Sprintf("%12s", verb)
-	styled := style.Render(padded)
-	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(w, "%s %s\n", styled, msg)
+	fmt.Fprintln(w, formatStatus(verb, style, format, args...))
+}
+
+func formatStatus(verb string, style lipgloss.Style, format string, args ...any) string {
+	return style.Render(fmt.Sprintf("%12s", verb)) + " " + fmt.Sprintf(format, args...)
+}
+
+// StatusLine returns what Status prints, without the newline, for output
+// that doesn't go to stdout, such as vibed's session banner.
+func StatusLine(verb string, format string, args ...any) string {
+	return formatStatus(verb, statusStyle, format, args...)
 }
 
 // Status prints a right-aligned bold cyan verb followed by a message to stdout.
