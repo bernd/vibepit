@@ -1,5 +1,5 @@
 ---
-description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, deny-http, deny-dns, monitor, update, and self-update.
+description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, deny-http, deny-dns, monitor, and update.
 ---
 
 # CLI Reference
@@ -57,8 +57,8 @@ vibepit run [flags] [project-path]
   a session starts, so `vibepit` warns that it ignores any that are set.
 - On first run in a project, `vibepit` launches an interactive setup flow to
   select network presets. Pass `--reconfigure` to re-run this selector later.
-- Entries passed with `--allow` and `--preset` are merged with any entries
-  saved in the project configuration file.
+- `vibepit` merges entries passed with `--allow` and `--preset` with the
+  entries saved in the project configuration file.
 - With `--prompt`, blocked connections open an allow/deny prompt over the
   session. See [Blocked connection prompt](#blocked-connection-prompt).
 
@@ -76,9 +76,9 @@ To get the prompt in every session without the flag, see
 While a prompt is attached, the proxy holds the agent's HTTP and HTTPS
 request instead of failing it. The prompt shows `held` and "the agent is
 waiting" with the seconds left. If you allow the target in time, the request
-goes through and the agent never sees a failure. How long the proxy waits is
-set by [`hold-timeout`](../how-to/configure-presets.md#hold-blocked-requests)
-(10 seconds by default).
+goes through and the agent never sees a failure.
+[`hold-timeout`](../how-to/configure-presets.md#hold-blocked-requests) sets how
+long the proxy waits (10 seconds by default).
 
 | Key | Action |
 |-----|--------|
@@ -96,13 +96,14 @@ Behavior details:
 - When the time runs out, the agent's request fails, but the prompt stays
   open as a regular blocked prompt. Allowing it then lets the agent's next
   attempt through.
-- Only HTTP and HTTPS requests are held. DNS lookups are blocked right away.
+- The proxy holds only HTTP and HTTPS requests. It blocks DNS lookups right
+  away.
 - When no prompt or monitor is attached, nothing is held and blocked
   requests fail right away. The same happens when `hold-timeout` is `0`, and
   when the last prompt or monitor disconnects, which fails the waiting
   requests at once.
-- The proxy holds at most 32 targets and 64 waiting requests. Requests
-  beyond that are blocked right away.
+- The proxy holds at most 32 targets and 64 waiting requests, and blocks any
+  requests beyond that right away.
 - The agent keeps running while the prompt shows. Its output appears when
   the prompt closes.
 - A target you dismiss asks again on the agent's next attempt. A denied
@@ -114,29 +115,29 @@ Behavior details:
   each other.
 - When several clients are attached to one session, each shows the prompt.
   As soon as one of them allows or denies, the others close their prompts.
-- Targets suppressed with lowercase `n` are held in memory by the proxy and
-  forgotten when the session stops. To allow a suppressed target later, use
+- The proxy keeps targets suppressed with lowercase `n` in memory and forgets
+  them when the session stops. To allow a suppressed target later, use
   [`allow-http`](#allow-http), [`allow-dns`](#allow-dns), or
   [`monitor`](#monitor).
 - Uppercase `N` installs an enforced deny that overrides allows and presets.
-  HTTP targets retain their port; DNS targets are bare domains. If saving fails,
-  the runtime deny remains active and the error reports that it was not saved.
-  The target stays on top with `N` to retry the save; `Esc` skips just that
-  target so the others can still be decided, and `q` dismisses them all.
-  Explicitly denied targets do not prompt or enter the hold queue. Remove saved
-  denies by editing the config and restarting the session.
-- Blocked IPv6 address targets don't open the prompt: allow and deny rules
-  can't hold IPv6 literals, so there is nothing to decide, and the proxy
-  doesn't hold them. Use `block-cidr` to block address ranges.
-- Before the prompt appears, vibepit asks the terminal for a status report
+  An HTTP deny keeps the target's port, and a DNS deny is a bare domain. If
+  saving fails, the deny stays active in the proxy and the error says it was
+  not saved. The target stays on top, and `N` retries the save. `Esc` skips
+  only that target so you can still decide the others, and `q` dismisses them
+  all. Explicitly denied targets never prompt or enter the hold queue. To
+  remove a saved deny, edit the config and restart the session.
+- Blocked IPv6 address targets don't open the prompt. Allow and deny rules
+  can't contain IPv6 literals, so there is nothing to decide, and the proxy
+  doesn't hold these requests. Use `block-cidr` to block address ranges.
+- Before the prompt appears, Vibepit asks the terminal for a status report
   to find the exact point where your typing ends and the prompt's input
-  begins. If the terminal doesn't answer, the prompt is skipped and shown
-  on the next hold or block of that target. After two misses, vibepit instead
-  switches input to the prompt after a short pause in typing.
-- When a prompt can't be shown, or your terminal lacks something prompts
-  rely on, vibepit prints a warning once the session ends.
+  begins. If the terminal doesn't answer, Vibepit skips the prompt and shows
+  it on the next hold or block of that target. After two misses, Vibepit
+  switches input to the prompt after a short pause in typing instead.
+- When Vibepit can't show a prompt, or your terminal lacks a feature prompts
+  need, Vibepit prints a warning once the session ends.
 - When the agent uses the whole screen (for example an editor), or the
-  terminal is resized while the prompt shows, vibepit redraws the screen
+  terminal is resized while the prompt shows, Vibepit redraws the screen
   from its own copy. Lines that scrolled off in the meantime are then
   missing from the terminal's scrollback, and hyperlinks and images are not
   restored.
@@ -200,15 +201,14 @@ vibepit up [flags] [project-path]
   as [`run`](#run).
 - Generates ephemeral SSH keypairs (one for the client, one for the host)
   and stores them in `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`.
-- The sandbox container runs an SSH server on port 2222 (internal). The port is
-  forwarded through the proxy container and published to `127.0.0.1` on a random
-  host port.
+- The sandbox container runs an SSH server on internal port 2222. The proxy
+  container forwards it and publishes it to `127.0.0.1` on a random host port.
 - Waits for the SSH daemon to accept connections before returning.
 - If a session is already running for the same project directory, prints a
-  message and exits without starting a new one. Any flags set are ignored, with
-  a warning.
-- If orphaned containers from a previous session are detected, exits with an
-  error asking you to run `vibepit down` first.
+  message and exits without starting a new one. It warns that it ignores any
+  flags you set.
+- If it finds orphaned containers from a previous session, it exits with an
+  error that asks you to run `vibepit down` first.
 
 ### Examples
 
@@ -246,7 +246,7 @@ vibepit down [project-path]
 - Removes the session network.
 - Deletes session credentials (mTLS and SSH keys) from
   `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`.
-- If some containers cannot be removed, credentials are preserved so you can
+- If it cannot remove some containers, it keeps the credentials so you can
   retry.
 - Also detects orphaned containers (e.g., proxy still running after sandbox
   crashed) and cleans them up.
@@ -296,7 +296,7 @@ vibepit connect
   shows no banner.
 - Requests a PTY, starts a shell, and forwards terminal resize events
   (`SIGWINCH`).
-- When detached sessions exist inside the sandbox, the SSH server presents a
+- When detached sessions exist inside the sandbox, the SSH server shows a
   session selector. You can reattach to a previous session or start a new one.
 - With `--prompt`, blocked connections open an allow/deny prompt over the
   session, as with `run --prompt`. See
@@ -341,8 +341,8 @@ vibepit exec <command...>
 - Loads the SSH client key from the session credentials directory.
 - Connects to `127.0.0.1` on the published SSH port with public key
   authentication.
-- Executes the command on the remote side and returns its exit code. Stdin,
-  stdout, and stderr are forwarded.
+- Runs the command in the sandbox and returns its exit code. It forwards
+  stdin, stdout, and stderr.
 
 ### Examples
 
@@ -402,8 +402,9 @@ in a project) or `No active sessions` (when outside a project).
 
 ## `allow-http`
 
-Add HTTP(S) allowlist entries for a running session. By default, entries are
-also persisted to the project configuration file so they apply on future runs.
+Add HTTP(S) allowlist entries for a running session. By default, the command
+also saves the entries to the project configuration file so they apply on
+future runs.
 
 ```
 vibepit allow-http [flags] <domain:port-pattern>...
@@ -413,19 +414,19 @@ vibepit allow-http [flags] <domain:port-pattern>...
 
 | Argument | Description |
 |----------|-------------|
-| `domain:port-pattern` | One or more domain-and-port patterns to allow. Required. The port is not optional — use `example.com:443` for HTTPS, `example.com:80` for HTTP, or `example.com:*` for any port. |
+| `domain:port-pattern` | One or more domain-and-port patterns to allow. Required. The port is required too. Use `example.com:443` for HTTPS, `example.com:80` for HTTP, or `example.com:*` for any port. |
 
 ### Flags
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--no-save` | bool | `false` | Skip persisting the entries to the project config |
+| `--no-save` | bool | `false` | Don't save the entries to the project config |
 | `--session` | string | | Session ID or project path (skips interactive selection) |
 
 ### Wildcard semantics
 
 `*` matches exactly one DNS label. `**` matches one or more labels. Both can
-appear in any position but at most one `**` per pattern.
+appear in any position, but a pattern can contain at most one `**`.
 
 | Pattern | Matches | Does not match |
 |---|---|---|
@@ -456,8 +457,9 @@ vibepit allow-http --session my-session-id api.example.com:443
 
 ## `allow-dns`
 
-Add DNS allowlist entries for a running session. By default, entries are also
-persisted to the project configuration file so they apply on future runs.
+Add DNS allowlist entries for a running session. By default, the command also
+saves the entries to the project configuration file so they apply on future
+runs.
 
 ```
 vibepit allow-dns [flags] <domain-pattern>...
@@ -473,13 +475,13 @@ vibepit allow-dns [flags] <domain-pattern>...
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--no-save` | bool | `false` | Skip persisting the entries to the project config |
+| `--no-save` | bool | `false` | Don't save the entries to the project config |
 | `--session` | string | | Session ID or project path (skips interactive selection) |
 
 ### Wildcard semantics
 
 `*` matches exactly one DNS label. `**` matches one or more labels. Both can
-appear in any position but at most one `**` per pattern.
+appear in any position, but a pattern can contain at most one `**`.
 
 | Pattern | Matches | Does not match |
 |---|---|---|
@@ -510,38 +512,43 @@ allow, including presets, CLI allows, and `host.vibepit` exceptions.
 vibepit deny-http [flags] <domain:port-pattern>...
 ```
 
-Entries require a port and use the same [wildcard semantics](#wildcard-semantics)
-as `allow-http`. Multiple entries are accepted. With no entries, the command
-shows help. Entries are validated before session discovery.
+Entries need a port and use the same [wildcard semantics](#wildcard-semantics)
+as `allow-http`. You can pass several entries. With no entries, the command
+shows help. The command validates entries before it looks for a session.
 
 ### Flags
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--no-save` | bool | `false` | Enforce rules for the running proxy's lifetime without saving |
+| `--no-save` | bool | `false` | Enforce rules until the proxy stops, without saving them |
 | `--session` | string | | Session ID or project path (skips interactive selection) |
 
 ### Behavior
 
-Rules apply immediately and matching held requests fail, including all targets
-matched by a wildcard. A rule also blocks an allowed host that is an alias
-(CNAME) of a denied one: while HTTP deny rules exist, the proxy looks up the
-alias chain of each allowed host and refuses the request if a name in it is
-denied for that port, or if the lookup fails. By default, rules are also saved to the selected session's
-`.vibepit/network.yaml`. If that file is missing, it is created with the
-deny rules and the presets first-run setup would preselect: `default` plus
-the ones detected in the project. The command reports each applied
-rule and the save destination. A runtime failure returns an error without
-saving. A save failure returns an error stating that the runtime deny remains
-active. An older proxy that does not support enforced denies returns an error.
+Rules apply immediately, and matching held requests fail, including every
+target a wildcard matches. A rule also blocks an allowed host that is an alias
+(CNAME) of a denied one. While HTTP deny rules exist, the proxy looks up the
+alias chain of each allowed host. It refuses the request if a name in the
+chain is denied for that port, or if the lookup fails.
 
-`--no-save` enforces a deny, unlike lowercase `n` prompt suppression. Adding an
-allow cannot override it: `allow-http`, `allow-dns` and the allow keys refuse
-an exact target that a deny rule matches. The whole request is refused, the
-error names every denied entry, and nothing is allowed or saved. A wildcard allow is
-accepted, but the deny still wins for the targets it covers. To remove a saved
-deny, edit the config file and
-restart the session. Established tunnels are not terminated.
+By default, the command also saves the rules to the selected session's
+`.vibepit/network.yaml`. If that file is missing, the command creates it with
+the deny rules and the presets that first-run setup would pre-select, which
+are `default` plus the presets detected in the project. The command reports
+each applied rule and where it saved it.
+
+If the proxy fails to apply a rule, the command returns an error and saves
+nothing. If saving fails, the error says the deny is active in the proxy but
+not saved. An older proxy without support for enforced denies returns an
+error.
+
+`--no-save` still enforces the deny, unlike lowercase `n` in the prompt.
+Adding an allow cannot override it. `allow-http`, `allow-dns`, and the allow
+keys refuse an exact target that a deny rule matches. They refuse the whole
+request, the error names every denied entry, and nothing is allowed or saved.
+A wildcard allow is accepted, but the deny still wins for the targets it
+covers. To remove a saved deny, edit the config file and restart the session.
+Tunnels that are already open stay open.
 
 ```bash
 vibepit deny-http telemetry.example.com:443 '*.tracking.example.com:*'
@@ -560,12 +567,12 @@ vibepit deny-dns [flags] <domain-pattern>...
 
 Entries are domain patterns without ports and use the same wildcard syntax as
 [`allow-dns`](#allow-dns). Multiple entries, validation, session selection,
-persistence, errors, and the `--session` and `--no-save` flags behave as for
+saving, errors, and the `--session` and `--no-save` flags work as for
 [`deny-http`](#deny-http). With no entries, the command shows help.
 
-DNS denies govern the sandbox DNS service, not the HTTP proxy's upstream
-resolution. HTTP denies do not themselves deny DNS. Configure both lists when
-you need both scopes blocked; see [Deny rules](../how-to/configure-presets.md#deny-rules).
+A DNS deny applies to the sandbox DNS service, not to the HTTP proxy's own
+upstream lookups. An HTTP deny does not block DNS. To block a host on both
+paths, add rules to both lists. See [Deny rules](../how-to/configure-presets.md#deny-rules).
 
 ```bash
 vibepit deny-dns telemetry.example.com '**.tracking.example.com'
@@ -578,8 +585,8 @@ vibepit deny-dns --session my-session-id --no-save telemetry.example.com
 
 Aliases: `m`, `tv`
 
-Open an interactive terminal UI for viewing proxy logs and performing admin
-actions on a running session.
+Open a terminal UI that shows proxy logs for a running session and lets you
+allow or deny hosts.
 
 ```
 vibepit monitor [flags]
@@ -593,9 +600,9 @@ vibepit monitor [flags]
 
 ### Behavior
 
-- If `--session` is not provided and multiple sessions are running,
-  `vibepit` presents an interactive session selector.
-- If only one session is running, `vibepit` connects to it directly.
+- If you omit `--session` and several sessions are running, `vibepit` shows a
+  session selector.
+- If only one session is running, `vibepit` connects to it.
 - The logs and held requests update live from the proxy's event stream.
   Host statistics follow the stream too, and a periodic poll adds the
   allowlist and deny status.
@@ -611,13 +618,14 @@ vibepit monitor [flags]
   suppresses prompts for this session. The host then shows "rejected", and
   later requests to it are logged as "rejected this session" until it is
   allowed.
-- On either tab, `N` (`deny+save`) enforces and saves a deny for a selected valid
-  HTTP or DNS target, including allowed hosts and expired holds. Live host
-  status shows "denied", the summary line counts it as "● N denied", and log
-  lines for requests a deny rule blocked are marked `-` instead of `x`; old log
-  entries remain historical. Allow keys cannot override it. Save failures
-  explicitly report that the runtime deny remains active, and `N` then shows
-  `retry save`. On a target that is already denied, `N` is not offered.
+- On either tab, `N` (`deny+save`) enforces and saves a deny for the selected
+  HTTP or DNS target, including allowed hosts and expired holds. The host
+  status shows "denied", and the summary line counts it as "● N denied". Log
+  lines for requests a deny rule blocked are marked `-` instead of `x`, and
+  older log lines stay as they were. The allow keys cannot override the deny.
+  If saving fails, the error says the deny is active in the proxy, and `N`
+  changes to `retry save`. On a target that is already denied, `N` is not
+  available.
 
 ---
 
@@ -653,8 +661,8 @@ exclusive.
 - Verifies the download with SHA-256 checksums and cosign signature bundles
   (when available).
 - Replaces the running binary in place.
-- If vibepit was installed via a package manager (Homebrew, Snap, Nix, etc.),
-  the binary update is skipped with a message to use the package manager instead.
+- If you installed vibepit with a package manager (Homebrew, Snap, Nix, and so
+  on), `update` skips the binary and tells you to use the package manager.
 - Use `--use <version>` to install a specific version regardless of what the
   channel reports as latest.
 - Use `--pre` to check the prerelease channel instead of the stable channel.

@@ -6,9 +6,9 @@ description: Fix common Vibepit problems including container runtime errors, con
 
 ---
 
-## Container Runtime Not Available
+## Container runtime not available
 
-**Symptoms:** Vibepit fails when trying to create containers or networks. You
+**Symptoms:** Vibepit fails when it tries to create containers or networks. You
 see errors referencing the Docker or Podman socket.
 
 **Cause:** The container runtime is not running, or your user does not have
@@ -26,14 +26,14 @@ permission to access its socket.
 
 2. If the command fails, start the Docker or Podman daemon.
 
-3. Run Vibepit with `--debug` for more detail on what socket path it is trying
-   to connect to and where it fails:
+3. Run Vibepit with `--debug` to see which socket path it connects to and where
+   it fails:
 
     ```bash
     vibepit --debug
     ```
 
-4. Confirm your user can access the socket. On Linux, your user typically needs
+4. Confirm your user can access the socket. On Linux, your user usually needs
    to be in the `docker` group:
 
     ```bash
@@ -42,7 +42,8 @@ permission to access its socket.
 
     Log out and back in for the group change to take effect.
 
-5. For rootless Podman, ensure your user session is set up correctly:
+5. For rootless Podman, enable lingering so your user services keep running
+   after you log out:
 
     ```bash
     loginctl enable-linger "$USER"
@@ -58,10 +59,10 @@ permission to access its socket.
 
 ---
 
-## `allow-http`, `allow-dns`, or `monitor` Cannot Connect
+## `allow-http`, `allow-dns`, or `monitor` cannot connect
 
-**Symptoms:** The command exits with a connection error or times out when trying
-to reach the control API.
+**Symptoms:** The command exits with a connection error, or times out while it
+tries to reach the control API.
 
 **Cause:** There is no running session, or you are targeting the wrong one.
 
@@ -83,13 +84,13 @@ to reach the control API.
 
 ---
 
-## DNS Resolution Failures Inside the Sandbox
+## DNS resolution fails inside the sandbox
 
 **Symptoms:** Commands inside the sandbox fail with "could not resolve host" or
 similar DNS errors, even though the domain works on the host.
 
 **Cause:** The domain is not in the DNS allowlist. The sandbox DNS server only
-resolves domains that have been explicitly allowed.
+resolves allowed domains.
 
 **Fix:**
 
@@ -99,15 +100,14 @@ resolves domains that have been explicitly allowed.
     vibepit allow-dns example.com
     ```
 
-2. Check whether the domain is covered by a preset you have not enabled. For
-   example, enabling the `vcs-github` preset adds several GitHub-related
-   domains:
+2. Check whether a preset you have not enabled covers the domain. For example,
+   the `vcs-github` preset adds several GitHub domains:
 
     ```bash
     vibepit run -p vcs-github
     ```
 
-3. You can also add domains interactively through the monitor TUI:
+3. You can also allow domains from the monitor:
 
     ```bash
     vibepit monitor
@@ -115,14 +115,14 @@ resolves domains that have been explicitly allowed.
 
 ---
 
-## HTTP Requests Failing Inside the Sandbox
+## HTTP requests fail inside the sandbox
 
 **Symptoms:** HTTP or HTTPS requests from inside the sandbox return a proxy
 error or are refused, even though DNS resolves correctly.
 
-**Cause:** The domain and port combination is not in the HTTP allowlist. Note
-that `example.com` and `*.example.com` are separate entries — allowing
-`example.com` does not automatically allow `api.example.com`.
+**Cause:** The domain and port combination is not in the HTTP allowlist.
+`example.com` and `*.example.com` are separate entries, so allowing
+`example.com` does not allow `api.example.com`.
 
 **Fix:**
 
@@ -144,18 +144,18 @@ that `example.com` and `*.example.com` are separate entries — allowing
     vibepit allow-http "**.example.com:443"
     ```
 
-4. Double-check your existing rules. A common mistake is allowing the apex
-   domain when the request targets a subdomain, or vice versa.
+4. Check your existing rules. A common mistake is allowing the apex domain
+   when the request goes to a subdomain, or the other way around.
 
 ---
 
-## Session Will Not Start
+## Session will not start
 
 **Symptoms:** `vibepit run` fails with errors about port conflicts, network
 creation failures, or references to stale resources.
 
-**Cause:** A previous session may not have cleaned up properly, leaving behind
-Docker networks or containers that conflict with the new session.
+**Cause:** A previous session did not clean up and left Docker networks or
+containers that conflict with the new session.
 
 **Fix:**
 
@@ -173,7 +173,7 @@ Docker networks or containers that conflict with the new session.
     docker network rm <network-name>
     ```
 
-3. If a specific container is stuck, remove it manually:
+3. If a container is stuck, remove it:
 
     ```bash
     docker rm -f <container-id>
@@ -181,7 +181,7 @@ Docker networks or containers that conflict with the new session.
 
 ---
 
-## Config File Parse Errors
+## Config file parse errors
 
 **Symptoms:** Vibepit exits with a configuration error on startup, referencing
 YAML parse failures or unexpected values.
@@ -191,8 +191,7 @@ typically incorrect indentation or a misplaced key.
 
 **Fix:**
 
-1. Check the file for obvious YAML issues — indentation must use spaces, not
-   tabs.
+1. Check the file for YAML mistakes. Indentation must use spaces, not tabs.
 
 2. Re-run interactive setup to regenerate a valid config:
 
@@ -200,18 +199,18 @@ typically incorrect indentation or a misplaced key.
     vibepit run --reconfigure
     ```
 
-    This walks you through the configuration options and writes a clean file.
+    The selector walks you through the options and writes a new file.
 
 ---
 
-## Sandbox Image Not Found
+## Sandbox image not found
 
 **Symptoms:** `vibepit run` or `vibepit update` fails with an image pull error
 referencing a tag like `r1-uid-1234-gid-1234`.
 
-**Cause:** Vibepit builds sandbox images for specific UID/GID combinations to
-match file ownership between the host and the container. Pre-built images are
-published for these combinations:
+**Cause:** Vibepit builds sandbox images for specific UID/GID combinations so
+file ownership matches between the host and the container. Pre-built images
+exist for these combinations:
 
 | Tag | Platform |
 |-----|----------|
@@ -248,7 +247,7 @@ If your user has a different UID or GID, no pre-built image exists.
 
 ## Still stuck?
 
-If none of the above resolves your problem, open an issue on
+If none of the above fixes your problem, open an issue on
 [GitHub](https://github.com/bernd/vibepit/issues). Include the output of
 `vibepit --debug` and your container runtime version (`docker --version` or
 `podman --version`).

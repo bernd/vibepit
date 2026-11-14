@@ -9,8 +9,8 @@ hide:
 ## Start a sandbox and connect
 
 `vibepit up` starts the proxy and sandbox containers in the background.
-`vibepit connect` opens a shell inside the sandbox. Requests to allowlisted
-hosts go through; everything else is blocked by the proxy. The session keeps
+`vibepit connect` opens a shell inside the sandbox. The proxy forwards
+requests to allowlisted hosts and blocks everything else. The session keeps
 running after you disconnect.
 
 <div class="vp-cast" data-cast="../../assets/casts/start.cast" data-autoplay="true" data-loop="true"></div>

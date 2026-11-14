@@ -24,13 +24,12 @@ consistent between the host and the container.
 | `/tmp` | tmpfs | Yes | No (cleared on container stop) |
 | `/` (everything else) | Container image | No (read-only) | No |
 
-The project's `.vibepit` configuration directory is hidden inside the sandbox
-to prevent the agent from reading or modifying its own allowlist rules.
+Vibepit hides the project's `.vibepit` configuration directory inside the
+sandbox, so the agent cannot read or change its own allowlist rules.
 
 ## Environment variables
 
-The following environment variables are set automatically inside the sandbox
-container:
+Vibepit sets these environment variables inside the sandbox container:
 
 ### Proxy variables
 
@@ -43,10 +42,9 @@ container:
 | `NO_PROXY` | `localhost,127.0.0.1` |
 | `no_proxy` | `localhost,127.0.0.1` |
 
-Both uppercase and lowercase variants are provided for compatibility with
-different tools and libraries. Tools that respect these variables (curl, pip,
-npm, and most language package managers) route traffic through the filtering
-proxy automatically.
+Vibepit sets both uppercase and lowercase variants because tools differ in
+which one they read. Tools that honor these variables (curl, pip, npm, and most
+language package managers) send their traffic through the filtering proxy.
 
 ### Other variables
 
@@ -60,10 +58,9 @@ proxy automatically.
 
 ## DNS
 
-DNS is configured through the container runtime's DNS settings to use the
-proxy's DNS server. All DNS queries from the sandbox are resolved by the proxy,
-which filters them against the DNS allowlist. Only allowlisted domains receive
-valid responses; all other queries return `NXDOMAIN`.
+The container runtime's DNS settings point the sandbox at the proxy's DNS
+server. The proxy checks every query against the DNS allowlist. Allowlisted
+domains get a real answer, and all other queries return `NXDOMAIN`.
 
 ## Hostname
 
@@ -83,5 +80,5 @@ reaping.
 | Security options | `no-new-privileges` |
 | Memory limit | Unlimited unless set with `--memory` or the `memory` config key ([details](../how-to/configure-presets.md#limit-sandbox-memory)) |
 
-For a full description of these controls, see the
+For what each control does, see the
 [Security Model](../explanations/security-model.md).

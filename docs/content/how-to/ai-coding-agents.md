@@ -5,31 +5,31 @@ description: Configure Vibepit for Claude Code, OpenAI Codex, GitHub Copilot, an
 # Use with AI Coding Agents
 
 Vibepit works with any AI coding agent that runs in a terminal. The sandbox
-provides network isolation by default, and you control which domains each agent
-can reach through presets and allowlist entries.
+starts with no network access, and you choose which domains each agent can
+reach through presets and allowlist entries.
 
 ## Choosing a session mode
 
-Vibepit offers two ways to run a sandbox:
+Vibepit has two ways to run a sandbox:
 
-- **`vibepit run`** (default) — attaches your terminal directly. The session
-  ends when you exit. Best for quick, interactive use.
-- **`vibepit up` + `vibepit connect`** — runs the sandbox in the background with an
-  SSH server. Sessions persist across disconnects and you can reconnect with
-  `vibepit connect`. Stop with `vibepit down`. Best for long-running agents or
-  agents that connect via SSH.
+- **`vibepit run`** (default) attaches your terminal directly. The session
+  ends when you exit. Use it for short interactive work.
+- **`vibepit up` + `vibepit connect`** runs the sandbox in the background with
+  an SSH server. Sessions persist across disconnects, and you reconnect with
+  `vibepit connect`. Stop it with `vibepit down`. Use it for long-running
+  agents or agents that connect over SSH.
 
 Both modes use the same network isolation, allowlist rules, and container
-hardening. The examples below use `vibepit run`, but you can substitute
-`vibepit up` followed by `vibepit connect` for daemon mode.
+hardening. The examples below use `vibepit run`. For daemon mode, run
+`vibepit up` and then `vibepit connect` instead.
 
 ## Discovery workflow
 
-Every agent has its own set of backend services, and those services change over
-time. Rather than maintaining a static domain list, use the monitor to discover
-exactly what your agent needs:
+Each agent talks to its own set of backend services, and that set changes over
+time. Instead of maintaining a fixed domain list, use the monitor to find the
+domains your agent needs:
 
-1. Start a session with the `default` preset (included automatically on first
+1. Start a session with the `default` preset (selected automatically on first
    run):
 
     ```bash
@@ -45,29 +45,29 @@ exactly what your agent needs:
     ```
 
 4. Look for blocked hosts. The monitor's `HOSTS` tab lists every host the
-   agent contacted, with the most recently active at the top and a status of
-   `blocked` or `allowed`.
+   agent contacted, most recently active first, with a status of `blocked` or
+   `allowed`.
 
-5. Allow blocked domains directly from the monitor by navigating to a blocked
-   host and pressing **`a`** (session only) or **`A`** (session + save to
-   project config).
+5. Allow a blocked host from the monitor by selecting it and pressing **`a`**
+   (this session only) or **`A`** (this session, and save to the project
+   config).
 
-6. Alternatively, allow domains from the command line:
+6. Or allow domains from the command line:
 
     ```bash
     vibepit allow-http api.example.com:443
     ```
 
-7. Repeat until your agent operates without blocked requests.
+7. Repeat until the agent runs without blocked requests.
 
-This iterative approach means you always grant the minimum access your agent
-actually needs, regardless of how its backend services evolve.
+You end up allowing only the domains the agent requested, and you can repeat
+the workflow when its backend changes.
 
 ## Agent-specific notes
 
-The `default` preset (pre-selected on first run) bundles presets for several
-common agents. In most cases, no extra configuration is needed beyond the
-discovery workflow above.
+The `default` preset (pre-selected on first run) includes presets for several
+common agents. For these agents, the discovery workflow above is usually all
+the configuration you need.
 
 | Agent | Included preset | Covers |
 |---|---|---|
@@ -75,12 +75,12 @@ discovery workflow above.
 | OpenAI Codex | `openai` | OpenAI API domains |
 | GitHub Copilot | `vcs-github` | Core GitHub domains |
 
-If you use **MCP servers** that fetch remote resources (common with Claude
-Code), enable the `mcp` preset via `vibepit run --reconfigure` and then use the
-discovery workflow to allow any remaining domains your servers need.
+If you use MCP servers that fetch remote resources, enable the `mcp` preset
+with `vibepit run --reconfigure`, then use the discovery workflow to allow any
+other domains your servers need.
 
-For any agent not listed here, the discovery workflow works the same way — start
-a session, run the monitor, and allow what gets blocked. Save entries to your
+For agents not listed here, the discovery workflow is the same. Start a
+session, run the monitor, and allow what gets blocked. Save entries to your
 project config so they persist across sessions.
 
 For full details on allowlist management and the monitor interface, see

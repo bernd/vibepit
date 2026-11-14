@@ -5,27 +5,25 @@ description: Install language runtimes and development tools inside the Vibepit 
 # Install Development Tools
 
 The sandbox image ships with common utilities (git, curl, jq, ripgrep, python3,
-vim, and others) but does not include language runtimes like Node.js, Go, or
-Ruby. You can install additional tools with Homebrew, and they persist across
-sessions.
+vim, and others) but has no language runtimes like Node.js, Go, or Ruby. You can
+install more tools with Homebrew, and they persist across sessions.
 
 ## Install Homebrew
 
 The sandbox includes a `brew` wrapper that installs Homebrew on first use. Run
-any `brew` command inside the sandbox to trigger the installation:
+any `brew` command inside the sandbox to start the installation:
 
 ```bash title="Inside the sandbox"
 brew --version
 ```
 
-Homebrew is installed into a dedicated persistent volume at
-`/home/linuxbrew/.linuxbrew`, so it only needs to install once. Subsequent
-sessions reuse the existing installation.
+The wrapper installs Homebrew into a persistent volume at
+`/home/linuxbrew/.linuxbrew`, so later sessions reuse it.
 
 !!! note
-    The `homebrew` and `vcs-github` presets are included in the `default`
-    preset. If you have `default` enabled (pre-selected on first run), no
-    additional network configuration is needed.
+    The `default` preset includes the `homebrew` and `vcs-github` presets. If
+    you have `default` enabled (it is pre-selected on first run), you don't need
+    to change the network configuration.
 
 ## Install language runtimes
 
@@ -45,30 +43,30 @@ brew install ruby
 brew install rust
 ```
 
-Installed packages persist in the linuxbrew volume and are available in future
-sessions without reinstalling.
+Installed packages stay in the linuxbrew volume, so future sessions can use
+them without reinstalling.
 
 ## Network access for package managers
 
-After installing a language runtime, its package manager (npm, pip, cargo, etc.)
-needs network access to download dependencies. Enable the matching preset for
-your ecosystem:
+After you install a language runtime, its package manager (npm, pip, cargo,
+and so on) needs network access to download dependencies. Enable the matching
+preset for your ecosystem:
 
 ```bash title="On the host"
 vibepit run --reconfigure
 ```
 
-Select the relevant preset in the interactive selector (e.g., `pkg-node` for
-npm, `pkg-go` for Go modules). See the
-[Network Presets](../reference/presets.md) reference for the full list of
-available presets.
+Select the preset in the interactive selector, for example `pkg-node` for npm or
+`pkg-go` for Go modules. The [Network Presets](../reference/presets.md)
+reference lists every preset.
 
 ## What persists between sessions
 
-Homebrew and all installed packages live in the persistent linuxbrew volume
-(`vibepit-linuxbrew`, mounted at `/home/linuxbrew`), while shell state and dotfiles
-live in the persistent home volume (`vibepit-home`, mounted at `/home/code`).
-Your project directory is bind-mounted from the host and is always up to date.
+Homebrew and its packages live in the linuxbrew volume (`vibepit-linuxbrew`,
+mounted at `/home/linuxbrew`). Shell state and dotfiles live in the home volume
+(`vibepit-home`, mounted at `/home/code`). Your project directory is a bind
+mount from the host, so changes on either side are visible on the other
+immediately.
 
 For the full list of mounts and what persists, see the
 [Sandbox Environment](../reference/sandbox.md) reference.

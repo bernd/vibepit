@@ -4,14 +4,14 @@ description: Full catalog of Vibepit network presets with allowed domains for pa
 
 # Network Presets
 
-Presets bundle commonly needed domain allowlists so you do not have to add
-domains one by one. During first run, Vibepit presents an interactive selector
-where you choose which presets to activate. You can re-run this selector at any
-time with `vibepit run --reconfigure`. Some package-manager presets are
-auto-detected from project files and pre-selected automatically.
+A preset is a named list of allowed domains, so you don't have to add domains
+one by one. On the first run, Vibepit shows a selector where you choose which
+presets to enable. Run `vibepit run --reconfigure` to open the selector again.
+Vibepit detects some package-manager presets from project files and pre-selects
+them.
 
-Each preset entry below lists its name, description, auto-detection trigger (if
-any), and the full set of allowed domains. Domain patterns use `*` to match
+Each preset below lists its name, a description, the files that trigger
+detection (if any), and every allowed domain. Domain patterns use `*` to match
 exactly one DNS label and `**` to match one or more labels. For example,
 `**.amazonaws.com:443` matches `s3.us-east-1.amazonaws.com` while
 `*.gcr.io:443` matches only a single subdomain like `us.gcr.io`.
@@ -20,8 +20,8 @@ exactly one DNS label and `**` to match one or more labels. For example,
 
 ## Defaults
 
-The `default` meta-preset is pre-selected on first run and includes the
-following presets:
+The `default` meta-preset is pre-selected on first run and includes these
+presets:
 
 - [`anthropic`](#anthropic)
 - [`cdn-github`](#cdn-github)
@@ -31,9 +31,9 @@ following presets:
 - [`openai`](#openai)
 - [`vcs-github`](#vcs-github)
 
-You can deselect `default` in the preset selector if you want full control over
-which domains are allowed. When `default` is selected, you do not need to
-enable the included presets individually.
+To choose every allowed domain yourself, deselect `default` in the preset
+selector. While `default` is selected, you don't need to enable the included
+presets one by one.
 
 ---
 
@@ -74,7 +74,7 @@ GitHub Copilot services.
 
 ### `amp`
 
-Amp Endpoints.
+Amp endpoints.
 
 ```
 ampcode.com:443
@@ -82,7 +82,7 @@ ampcode.com:443
 
 ### `aws-bedrock`
 
-AWS Bedrock Endpoints.
+AWS Bedrock endpoints.
 
 ```
 bedrock.*.amazonaws.com:443
@@ -301,7 +301,7 @@ Model Context Protocol.
 
 ---
 
-## Package Managers
+## Package managers
 
 ### `cdn-github`
 
@@ -324,7 +324,7 @@ formulae.brew.sh:443
 
 JavaScript/Node.js.
 
-Auto-detected when your project contains: `package.json`, `yarn.lock`,
+Detected when your project contains: `package.json`, `yarn.lock`,
 `pnpm-lock.yaml`, `bun.lockb`.
 
 ```
@@ -342,7 +342,7 @@ nodejs.org:443
 
 Python.
 
-Auto-detected when your project contains: `pyproject.toml`,
+Detected when your project contains: `pyproject.toml`,
 `requirements.txt`, `setup.py`, `Pipfile`, `poetry.lock`.
 
 ```
@@ -360,7 +360,7 @@ www.pypa.io:443
 
 Ruby.
 
-Auto-detected when your project contains: `Gemfile`, `*.gemspec`.
+Detected when your project contains: `Gemfile`, `*.gemspec`.
 
 ```
 rubygems.org:443
@@ -381,7 +381,7 @@ get.rvm.io:443
 
 Rust.
 
-Auto-detected when your project contains: `Cargo.toml`.
+Detected when your project contains: `Cargo.toml`.
 
 ```
 crates.io:443
@@ -397,7 +397,7 @@ www.rust-lang.org:443
 
 Go.
 
-Auto-detected when your project contains: `go.mod`.
+Detected when your project contains: `go.mod`.
 
 ```
 proxy.golang.org:443
@@ -414,7 +414,7 @@ vuln.go.dev:443
 
 JVM (Maven, Gradle, Kotlin, Spring).
 
-Auto-detected when your project contains: `pom.xml`, `build.gradle`,
+Detected when your project contains: `pom.xml`, `build.gradle`,
 `build.gradle.kts`, `build.sbt`.
 
 ```
@@ -438,7 +438,7 @@ repo.spring.io:443
 
 Other languages (PHP, .NET, Dart, Elixir, Perl, CocoaPods, Haskell, Swift).
 
-Auto-detected when your project contains: `composer.json`, `*.csproj`, `*.sln`,
+Detected when your project contains: `composer.json`, `*.csproj`, `*.sln`,
 `pubspec.yaml`, `mix.exs`, `Podfile`, `Package.swift`, `*.cabal`, `stack.yaml`.
 
 ```

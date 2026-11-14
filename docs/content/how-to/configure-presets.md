@@ -5,15 +5,15 @@ description: Manage network presets, allowlist entries, and host port access in 
 # Configure Network Presets
 
 Vibepit filters all network traffic from the sandbox container through a proxy.
-Only domains you explicitly allow — via presets or individual entries — are
-reachable, unless a matching deny rule blocks them. Configuration lives in YAML
-files at the project and global level.
+Only domains you allow, through presets or individual entries, are reachable,
+and a matching deny rule blocks even those. Configuration lives in YAML files at
+the project and global level.
 
 ## The project config file
 
-Project network configuration is stored in `.vibepit/network.yaml` at your
-project root. The `.vibepit` directory is hidden inside the sandbox, so the
-agent cannot read or modify its own allowlist rules. A typical file looks like
+Project network configuration lives in `.vibepit/network.yaml` at your
+project root. Vibepit hides the `.vibepit` directory inside the sandbox, so the
+agent cannot read or change its own allowlist rules. A typical file looks like
 this:
 
 ```yaml
@@ -28,29 +28,29 @@ allow-dns:
   - internal.corp.example.com
 ```
 
-- **`presets`** — named bundles of domains for common ecosystems (e.g.,
-  `pkg-go` covers Go module proxies and the Go playground).
-- **`allow-http`** — individual `domain:port` entries the HTTP proxy allows.
-- **`allow-dns`** — domains the sandbox DNS service may resolve.
-- **`deny-http`** — `domain:port` patterns blocked by the HTTP proxy.
-- **`deny-dns`** — domain patterns blocked by the sandbox DNS service.
+- **`presets`**: named bundles of domains for common ecosystems. For example,
+  `pkg-go` covers Go module proxies and the Go playground.
+- **`allow-http`**: individual `domain:port` entries the HTTP proxy allows.
+- **`allow-dns`**: domains the sandbox DNS service may resolve.
+- **`deny-http`**: `domain:port` patterns the HTTP proxy blocks.
+- **`deny-dns`**: domain patterns the sandbox DNS service blocks.
 
 ## First-run preset selector
 
 The first time you run `vibepit` in a project that has no
 `.vibepit/network.yaml`, an interactive preset selector appears. It:
 
-1. Scans project files to auto-detect relevant presets (for example, a
+1. Scans project files to detect matching presets (for example, a
    `go.mod` file triggers the `pkg-go` preset).
 2. Pre-selects the `default` preset and any detected presets.
-3. Lets you toggle additional presets before confirming.
+3. Lets you toggle other presets before you confirm.
 
 After you confirm, the selector writes `.vibepit/network.yaml` with your
 choices.
 
 ## Reconfigure presets
 
-To re-run the interactive preset selector at any time:
+To run the preset selector again:
 
 ```bash
 vibepit run --reconfigure
@@ -62,14 +62,14 @@ Or use the short flag:
 vibepit run -r
 ```
 
-The selector opens with your current presets pre-checked. After you confirm,
-the file is rewritten with the new preset selection. Existing `allow-http`,
-`allow-dns`, `deny-http`, and `deny-dns` entries are preserved.
+The selector opens with your current presets checked. After you confirm, it
+rewrites the file with the new presets and keeps the existing `allow-http`,
+`allow-dns`, `deny-http`, and `deny-dns` entries.
 
 ## Manual entries
 
-You can add `allow-http` and `allow-dns` entries directly to the config file.
-These entries use the same wildcard syntax as the CLI commands:
+You can add `allow-http` and `allow-dns` entries to the config file by hand.
+They use the same wildcard syntax as the CLI commands:
 
 ```yaml
 allow-http:
@@ -100,43 +100,43 @@ deny-dns:
   - '**.tracking.example.com'
 ```
 
-Global and project deny lists are merged and deduplicated. Rules use the same
-syntax as their corresponding allow lists and are validated before containers
-start. A matching deny overrides every allow, including presets, CLI allows,
-and the special `host.vibepit` allowance. Explicitly denied requests fail
-without entering the hold queue or opening a prompt.
+Vibepit merges the global and project deny lists and removes duplicates. Rules
+use the same syntax as the matching allow lists, and Vibepit validates them
+before it starts any container. A matching deny overrides every allow,
+including presets, CLI allows, and the special `host.vibepit` allowance.
+Explicitly denied requests fail right away and never wait in the hold queue or
+open a prompt.
 
-Denies also follow aliases: an allowed name whose CNAME chain includes a
-denied name is refused, for DNS queries against `deny-dns` and for proxied
-requests against `deny-http`. With HTTP deny rules configured, the proxy makes
+Denies also follow aliases. If an allowed name has a denied name in its CNAME
+chain, Vibepit refuses it. DNS queries are checked against `deny-dns`, and
+proxied requests against `deny-http`. With HTTP deny rules configured, the proxy makes
 one extra DNS query per allowed request to see the chain, and refuses the
 request if that query fails.
 
-The two protocols are independent: an HTTP deny does not deny DNS resolution,
-and a DNS deny governs the sandbox DNS service, not the HTTP proxy's own
-upstream resolution. Add both rules when you want both scopes blocked.
+The two protocols are independent. An HTTP deny does not block DNS resolution,
+and a DNS deny applies to the sandbox DNS service, not to the HTTP proxy's own
+upstream lookups. Add both rules to block a host on both paths.
 
 Use [`deny-http` or `deny-dns`](allowlist-and-monitor.md#deny-domains) to apply
 rules to a running proxy and save them, or press `N` in the prompt or monitor.
-Saved rules preserve unrelated YAML keys and comments; missing project config
-files are created. Manual edits take effect after restarting the session.
-To remove a saved deny, edit the file that contains it and restart; adding an
-allow cannot override it. Existing established tunnels are not terminated;
-denies govern new requests.
+Saving a rule keeps unrelated YAML keys and comments, and creates the project
+config file if it is missing. Manual edits take effect after you restart the
+session. To remove a saved deny, edit the file that contains it and restart.
+Adding an allow cannot override it. A deny applies to new requests and does
+not close tunnels that are already open.
 
 ## Allow host ports
 
-By default, the sandbox cannot reach services running on your host machine —
-private IP ranges are blocked by the CIDR blocklist. The `allow-host-ports`
-setting creates a controlled exception for specific ports.
+By default, the sandbox cannot reach services running on your host machine,
+because the CIDR blocklist covers private IP ranges. The `allow-host-ports`
+setting makes an exception for the ports you list.
 
 Inside the sandbox, the hostname `host.vibepit` resolves to your host machine.
-Requests to `host.vibepit` on a listed port bypass the CIDR blocklist and are
-forwarded to the corresponding port on the host. Requests to unlisted ports are
-blocked.
+The proxy forwards requests to `host.vibepit` on a listed port to the same port
+on the host, skipping the CIDR blocklist. It blocks requests to unlisted ports.
 
-This is useful when your project depends on a local service — for example, a
-database or a development API server:
+Use this when your project depends on a local service, such as a database or a
+development API server:
 
 ```yaml
 allow-host-ports:
@@ -147,8 +147,8 @@ allow-host-ports:
 With this configuration, `curl http://host.vibepit:3000` works inside the
 sandbox, but `curl http://host.vibepit:8080` is blocked.
 
-`allow-host-ports` is a project config setting only — it is not available in the
-global config or via CLI flags.
+`allow-host-ports` is a project config setting only. The global config and CLI
+flags don't support it.
 
 ## Hold blocked requests
 
@@ -162,12 +162,12 @@ hold-timeout: 15s
 ```
 
 The value is a Go duration such as `10s` or `1m`. Use `0` to turn holding
-off, so blocked requests fail right away as without a prompt.
+off, so blocked requests fail right away, as they do without a prompt.
 `hold-timeout` works in both the global and the project config, and the
 project value overrides the global one.
 
-Only HTTP and HTTPS requests are held, never DNS lookups. Without an attached
-prompt or monitor nothing is held. See the
+The proxy holds only HTTP and HTTPS requests, never DNS lookups. Without an
+attached prompt or monitor, it holds nothing. See the
 [blocked connection prompt](../reference/cli.md#blocked-connection-prompt)
 for what you see while a request waits.
 
@@ -182,26 +182,25 @@ the [global config](#global-config):
 prompt: true
 ```
 
-The value must be `true` or `false`. The flag overrides it: `--prompt=false`
+The value must be `true` or `false`. The flag overrides it, so `--prompt=false`
 turns the prompt off for one session.
 
-`prompt` is a global config setting only. Whether to prompt is your own
-preference, so in a project config, which is usually shared with the
-repository, it has no effect.
+`prompt` is a global config setting only. Whether to prompt is a personal
+preference, and project configs are usually committed to the repository, so
+Vibepit ignores `prompt` in a project config.
 
 With the prompt on by default, every session
 [holds blocked requests](#hold-blocked-requests) for up to `hold-timeout`
 instead of failing them right away.
 
-If vibepit can't set up a prompt that only the config asks for, it prints a
+If Vibepit can't set up a prompt that only the config asks for, it prints a
 warning and starts the session without it. With `--prompt` the command
 stops with an error instead.
 
 ## Limit sandbox memory
 
-The `memory` setting caps the memory available to the sandbox container,
-equivalent to `docker run --memory`. Values use the same format, such as
-`512m` or `16g`:
+The `memory` setting caps the memory available to the sandbox container, like
+`docker run --memory`. Values use the same format, such as `512m` or `16g`:
 
 ```yaml
 memory: 16g
@@ -210,27 +209,27 @@ memory: 16g
 `memory` works in both the global and the project config. The `--memory` CLI
 flag overrides both, and the project value overrides the global one. If none is
 set, the container has no memory limit. Set `memory: 0` (or `--memory 0`) to
-lift a limit that a lower-precedence config imposes. The smallest accepted
-limit is `6m`; a bare number is interpreted as bytes.
+remove a limit set by a lower-precedence config. The smallest accepted limit is
+`6m`, and Vibepit reads a bare number as bytes.
 
-The limit is applied when the sandbox container is created. Running
-`vibepit run --memory` against a session that is already running attaches to
-the existing container and warns that the flag was ignored; use `vibepit down`
+Vibepit applies the limit when it creates the sandbox container. If you run
+`vibepit run --memory` while a session is already running, Vibepit attaches to
+the existing container and warns that it ignored the flag. Run `vibepit down`
 first to apply a new limit.
 
-A few things count toward the limit or change how it behaves:
+Some things count toward the limit or change how it behaves:
 
 - `/tmp` in the sandbox is a tmpfs, so files written there use container
   memory. Large temporary files can push the sandbox into the limit.
 - Like `docker run --memory`, swap is not limited separately. If the host has
   swap enabled, the container can use up to the same amount again in swap.
 - Rootless Docker and rootless Podman can only enforce memory limits on hosts
-  with cgroup v2. On cgroup v1 the limit is ignored, and vibepit warns at
-  startup that the runtime did not apply it.
+  with cgroup v2. On cgroup v1 the runtime ignores the limit, and Vibepit warns
+  at startup that it was not applied.
 
 ## Global config
 
-Global settings apply to every project. The global config file is located at:
+Global settings apply to every project. The global config file is:
 
 ```
 $XDG_CONFIG_HOME/vibepit/config.yaml
@@ -266,8 +265,8 @@ prompt: true
 
 ## Where each setting comes from
 
-Each configuration key has a specific source. Settings are not merged
-uniformly — each key follows its own rules:
+Vibepit does not merge all settings the same way. Each key follows its own
+rules:
 
 | Key | Source |
 |---|---|
@@ -277,7 +276,7 @@ uniformly — each key follows its own rules:
 | `deny-http` | Global config + project config, deduplicated; overrides matching HTTP allows. |
 | `deny-dns` | Global config + project config, deduplicated; overrides matching DNS allows. |
 | `block-cidr` | Global config only. Adds custom ranges to the default IP blocklist. |
-| `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges — see the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
+| `allow-cidr` | Global config only. Overrides the blocklist for the listed ranges. See the [security model](../explanations/security-model.md#cidr-blocking) for the risks. |
 | `allow-host-ports` | Project config only. |
 | `hold-timeout` | Project config, else global config, else `10s`. |
 | `prompt` | CLI flag, else global config, else `false`. Not read from the project config. |

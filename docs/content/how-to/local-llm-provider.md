@@ -4,36 +4,35 @@ description: Run LLM providers on your local LAN when you're using private IP ad
 
 # Run with a Local LLM Provider
 
-Use Vibepit with an LLM provider like Ollama, LM Studio, or llama.cpp
-on your LAN accessible from inside the sandbox while blocking all other access to your
-local network.
+This guide lets the sandbox reach an LLM provider such as Ollama, LM Studio, or
+llama.cpp on your LAN, while the proxy keeps blocking the rest of your local
+network.
 
-## Allow access to the LLM provider in you local network
+## Allow access to the LLM provider on your local network
 
-If you have your LLM provider (e.g. Ollama) running on a machine named `llm-server` on your LAN,
-you have to configure Vibepit using the following options to make it work.
+The examples below assume your LLM provider (for example Ollama) runs on a
+machine named `llm-server` on your LAN.
 
-By default, Vibepit blocks access to RFC 1918 private IP ranges and other
-reserved ranges to prevent the sandbox from reaching services on your local
-network. You should relax this only for the specific range where your LLM
-provider runs, while keeping everything else blocked.
+By default, Vibepit blocks RFC 1918 private IP ranges and other reserved ranges
+so the sandbox cannot reach services on your local network. Open only the range
+where your LLM provider runs and keep everything else blocked.
 
-Add your IP subnet or only single IPs to the `allow-cidr` list in your global config
+Add your subnet, or single IPs, to the `allow-cidr` list in your global config
 (`~/.config/vibepit/config.yaml`):
 
 ```yaml
-# Prevent default CIDR blocker from preventing access to the local network.
+# Exempt these ranges from the default CIDR blocklist.
 allow-cidr:
   - 192.168.1.0/24 # for the full subnet
   - 192.168.1.2/32 # for a single IP
 
-# Allow proxy server to forward requests to the local LLM provider API
+# Let the proxy forward requests to the local LLM provider API.
 allow-http:
   - llm-server:8000
 ```
 
-This allows the sandbox to reach any IP in `192.168.1.0/24` or only a single host while the default
-`block-cidr` rules continue to protect all other private ranges.
+The sandbox can now reach the listed addresses, and the default `block-cidr`
+rules still block all other private ranges.
 
 !!! note
 
@@ -42,36 +41,36 @@ This allows the sandbox to reach any IP in `192.168.1.0/24` or only a single hos
 
 ## Configure the upstream DNS resolver
 
-If your LAN uses a local DNS server (e.g. Pi-hole, AdGuard Home, or a
-corporate DNS), you can point Vibepit's DNS proxy at it by adding
-`upstream-dns` to your global config:
+If your LAN uses a local DNS server (for example Pi-hole, AdGuard Home, or a
+corporate DNS), add `upstream-dns` to your global config to point Vibepit's DNS
+proxy at it:
 
 ```yaml
 upstream-dns: 192.168.1.1:53
 ```
 
-This routes all DNS queries through your LAN resolver after the allowlist
-check, letting you resolve internal hostnames alongside public domains.
+The proxy sends every DNS query that passes the allowlist to your LAN resolver,
+so internal hostnames resolve along with public domains.
 
+## Use extra-hosts instead of changing the resolver
 
-## Don't want to change upstream DNS resolver?
-
-In this case, you can add the hosts you want to resolve using `extra-hosts`
+If you don't want to change the upstream resolver, add the hosts you need with
+`extra-hosts`:
 
 ```yaml
 extra-hosts:
   - llm-server:192.168.1.2
 ```
 
-## Example: Configure OpenCode
+## Example: configure OpenCode
 
-Extend your `~/.config/opencode/opencode.json` config file with the following `provider` section.
+Add the following `provider` section to `~/.config/opencode/opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "llm-server:11434": {
+    "llm-server": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "http://llm-server:8000/v1"

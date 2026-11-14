@@ -4,31 +4,31 @@ description: Defense-in-depth controls in Vibepit including container hardening,
 
 # Security Model
 
-Vibepit applies defense-in-depth controls to reduce risk when you run AI coding agents. No single layer is sufficient on its own; each control limits the blast radius if another fails. This page explains what each control does and why it exists.
+Vibepit layers several independent controls around an AI coding agent. No single layer is enough on its own. Each one limits the damage if another fails. This page explains what each control does and why it exists.
 
 For a catalog of specific threats and mitigations, see the [Threat Model](threat-model.md). For how the components fit together at runtime, see the [Architecture](architecture.md).
 
 ## Default-deny network posture
 
-A Vibepit session starts with no network access. DNS resolution, HTTP/HTTPS requests, and direct IP connections all fail unless you explicitly allowlist them. This forces you to declare every external dependency up front, making the agent's network surface auditable and reproducible.
+A Vibepit session starts with no network access. DNS resolution, HTTP/HTTPS requests, and direct IP connections all fail until you allowlist them. You declare every external dependency up front, so the list of hosts the agent can reach is written down in your config and the same in every session.
 
 ## Container hardening
 
-The sandbox container runs with several kernel-level restrictions:
+The sandbox container runs with these kernel-level restrictions:
 
-**Read-only root filesystem.** The container's root filesystem is mounted read-only (`ReadonlyRootfs: true`). This prevents the agent from persisting modifications to system binaries, libraries, or configuration files. A writable `/tmp` (mounted as tmpfs) is available for transient scratch data, and the home directory is a persistent volume, but the OS layer itself cannot be altered.
+**Read-only root filesystem.** Vibepit mounts the container's root filesystem read-only (`ReadonlyRootfs: true`), so the agent cannot change system binaries, libraries, or configuration files. A writable `/tmp` (tmpfs) holds scratch data, and the home directory is a persistent volume, but the OS layer stays unchanged.
 
-**All Linux capabilities dropped.** The container starts with every Linux capability removed (`CapDrop: ["ALL"]`). Capabilities like `CAP_NET_RAW`, `CAP_SYS_ADMIN`, and `CAP_DAC_OVERRIDE` are unavailable, which prevents raw socket creation, filesystem namespace manipulation, and permission bypass.
+**All Linux capabilities dropped.** The container starts with every Linux capability removed (`CapDrop: ["ALL"]`). Without `CAP_NET_RAW`, `CAP_SYS_ADMIN`, and `CAP_DAC_OVERRIDE`, a process cannot open raw sockets, manipulate filesystem namespaces, or bypass file permissions.
 
-**`no-new-privileges`.** The `no-new-privileges` security option prevents processes inside the container from gaining additional privileges through setuid or setgid binaries. Even if such a binary exists on a mounted volume, executing it will not escalate privileges.
+**`no-new-privileges`.** This security option stops processes inside the container from gaining privileges through setuid or setgid binaries. Even if such a binary exists on a mounted volume, running it does not raise privileges.
 
-**Non-root `code` user.** The sandbox container runs as the unprivileged `code` user. If an attacker escapes the process sandbox but remains inside the container, they operate without root privileges, limiting what they can access on the host kernel.
+**Non-root `code` user.** The sandbox container runs as the unprivileged `code` user. An attacker who escapes the process sandbox but stays inside the container has no root privileges, which limits what they can do to the host kernel.
 
-**Init process.** The container runs with an init process (`Init: true`) as PID 1. This ensures proper signal forwarding to child processes and reaps zombie processes, preventing resource leaks during long-running agent sessions.
+**Init process.** The container runs an init process (`Init: true`) as PID 1. It forwards signals to child processes and reaps zombie processes, so long agent sessions don't accumulate dead processes.
 
 ## Network isolation
 
-Each session creates an internal Docker bridge network (`Internal: true`). Containers on an internal network have no default route to the host or the internet. The only path to the outside is through the proxy container, which is dual-homed: it connects to both the internal session network and the default bridge network. All DNS and HTTP/HTTPS traffic from the sandbox routes through this proxy, where it is subject to allowlist filtering.
+Each session creates an internal Docker bridge network (`Internal: true`). Containers on an internal network have no default route to the host or the internet. The only way out is the proxy container, which connects to both the internal session network and the default bridge network. All DNS and HTTP/HTTPS traffic from the sandbox goes through this proxy, which applies the allowlist.
 
 ## CIDR blocking
 
@@ -45,76 +45,76 @@ Even if a domain resolves and passes the allowlist, the proxy blocks connections
 | `fe80::/10` | IPv6 link-local addresses |
 | `::1/128` | IPv6 loopback |
 
-These blocks apply by default regardless of allowlist rules, preventing an allowlisted domain from being used to reach internal services via DNS rebinding or other IP-level attacks. The `CIDRBlocker` accepts additional custom ranges via `block-cidr` if your environment requires broader restrictions.
+These blocks apply by default, whatever the allowlist says. An allowlisted domain therefore cannot reach internal services through DNS rebinding or other IP-level attacks. To block more ranges, add them with `block-cidr`.
 
-If you deliberately need to reach an otherwise-blocked range, `allow-cidr` punches an explicit exception: any IP within an `allow-cidr` range is permitted even if it falls inside a blocked range.
+To reach a range that is otherwise blocked, add it to `allow-cidr`. The proxy permits any IP inside an `allow-cidr` range, even if a blocked range also contains it.
 
 ## DNS filtering
 
-The proxy runs a DNS server on port 53, configured as the sole resolver for sandbox containers. Only domains that match an allowlist rule receive a valid response; all other queries are refused.
+The proxy runs a DNS server on port 53, and it is the only resolver the sandbox containers use. Only domains that match an allowlist rule get a valid response. The proxy refuses all other queries.
 
 Allowlist rules support two forms:
 
 - **Exact match**: `example.com` matches only `example.com`.
 - **Wildcard**: `*.example.com` matches exactly one subdomain label (such as `api.example.com`) but does **not** match the apex domain `example.com` or deeper subdomains like `a.b.example.com`. Use `**.example.com` to match one or more subdomain levels.
 
-You can add DNS rules at startup via configuration or at runtime using the `allow-dns` command. Rules are additive and applied atomically using lock-free concurrency, so updates do not block in-flight queries.
+You can add DNS rules at startup through configuration or at runtime with the `allow-dns` command. Rules only add access. The proxy swaps in the new rule set atomically without locks, so an update never blocks a query in progress.
 
 ## HTTP/HTTPS filtering
 
-The proxy filters all HTTP and HTTPS traffic using a `domain:port` allowlist. HTTPS connections use the `CONNECT` method, so the proxy sees the target hostname and port without terminating TLS.
+The proxy filters all HTTP and HTTPS traffic against a `domain:port` allowlist. HTTPS connections use the `CONNECT` method, so the proxy sees the target hostname and port without terminating TLS.
 
-Each rule specifies a domain pattern and a port pattern:
+Each rule has a domain pattern and a port pattern:
 
-- **Domain matching** follows the same exact and wildcard semantics as DNS filtering.
+- **Domain matching** uses the same exact and wildcard rules as DNS filtering.
 - **Port patterns** accept an exact port number or `*` for any port.
 
-A request must match both the domain and port components of at least one rule to be allowed. Rules are purely additive: you can add them at startup or at runtime with the `allow-http` command, but you cannot remove them during a session.
+A request must match both the domain and the port of at least one rule. Rules only add access. You can add them at startup or at runtime with the `allow-http` command, but you cannot remove them during a session.
 
 ## mTLS control API
 
-The proxy exposes a control API for runtime administration (adding allowlist entries, streaming logs). This API is secured with mutual TLS (mTLS) to prevent the sandbox container or other processes from issuing unauthorized control commands.
+The proxy exposes a control API for runtime administration, such as adding allowlist entries and streaming logs. Mutual TLS (mTLS) protects this API, so neither the sandbox container nor any other process without the client certificate can send control commands.
 
 Each session generates ephemeral Ed25519 key pairs:
 
 1. An ephemeral CA signs a server certificate and a client certificate.
-2. The CA private key is discarded immediately after signing. No additional certificates can be issued for the session.
-3. The server certificate's Subject Alternative Name (SAN) is restricted to `127.0.0.1`, so it is only reachable from the host.
-4. TLS 1.3 is enforced as the minimum version.
-5. The server requires and verifies client certificates against the ephemeral CA (`RequireAndVerifyClientCert`).
+2. Vibepit discards the CA private key right after signing. Nobody can issue more certificates for the session.
+3. The server certificate's Subject Alternative Name (SAN) is `127.0.0.1`, so it is only reachable from the host.
+4. The minimum TLS version is 1.3.
+5. The server requires client certificates and verifies them against the ephemeral CA (`RequireAndVerifyClientCert`).
 
-Because the CA key is discarded after signing, an attacker who compromises the proxy at runtime cannot mint new client certificates. Server credentials are passed to the proxy container via environment variables and never touch disk. Client credentials (CA cert, client cert, client key) are written to `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/` with `0600` permissions so that CLI subcommands can authenticate from separate processes. These files are deleted when the session ends.
+Because the CA key is gone after signing, an attacker who compromises the proxy at runtime cannot mint new client certificates. Vibepit passes server credentials to the proxy container through environment variables, and they never touch disk. It writes client credentials (CA cert, client cert, client key) to `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/` with `0600` permissions, so CLI subcommands running as separate processes can authenticate. Vibepit deletes these files when the session ends.
 
 ## SSH authentication
 
-In daemon mode (`vibepit up`), the sandbox container runs an SSH server for remote access. SSH authentication uses ephemeral Ed25519 keypairs generated per session:
+In daemon mode (`vibepit up`), the sandbox container runs an SSH server. SSH authentication uses ephemeral Ed25519 keypairs generated for each session:
 
-1. Two keypairs are generated at session startup: a **client keypair** and a **host keypair**.
-2. The client private key and host public key remain on the host in `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/` with `0600` permissions (private keys) and `0644` permissions (public keys).
-3. The host private key is bind-mounted read-only into the sandbox container. The client public key is passed via environment variable.
-4. Only public key authentication is accepted — no passwords.
-5. The SSH server verifies the connecting client's key against the single authorized public key.
-6. The SSH client (`vibepit connect`) verifies the server's host key against the stored public key, preventing MITM attacks.
+1. At session startup, Vibepit generates two keypairs, a **client keypair** and a **host keypair**.
+2. The client private key and host public key stay on the host in `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`, with `0600` permissions on private keys and `0644` on public keys.
+3. Vibepit bind-mounts the host private key read-only into the sandbox container and passes the client public key in an environment variable.
+4. The server accepts only public key authentication. Passwords don't work.
+5. The SSH server checks the connecting client's key against the single authorized public key.
+6. The SSH client (`vibepit connect`) checks the server's host key against the stored public key, which prevents MITM attacks.
 
-All SSH credentials are deleted when the session ends (`vibepit down`). Because keys are never reused across sessions, a compromised key cannot grant access to another.
+`vibepit down` deletes all SSH credentials. Because keys are never reused across sessions, a leaked key cannot open another session.
 
 ## SSH network access
 
-The SSH port is not directly accessible from the host. It is forwarded through the proxy container, which publishes it to `127.0.0.1` on a random port. This means SSH is only reachable from the local machine.
+The host cannot reach the SSH port directly. The proxy container forwards it and publishes it on a random port bound to `127.0.0.1`, so only the local machine can connect.
 
 ## Proxy image
 
-The proxy container runs on `gcr.io/distroless/base-debian13`. Distroless images contain no shell, no package manager, and no OS-level utilities. This minimizes the attack surface of the proxy itself: even if an attacker achieves code execution inside the proxy container, there are no tools available to escalate or pivot.
+The proxy container runs on `gcr.io/distroless/base-debian13`. Distroless images contain no shell, no package manager, and no OS-level utilities. This keeps the proxy's attack surface small. An attacker who gets code execution inside the proxy container finds no tools to escalate or pivot with.
 
 ## What this is not
 
 Vibepit is not VM-level isolation. The sandbox container shares the host kernel, which means:
 
 - **Container escapes** through kernel vulnerabilities can grant host access.
-- **Runtime bugs** in Docker or Podman can weaken isolation guarantees.
-- **Host misconfiguration** (such as mounting the Docker socket into the container) can bypass all controls.
+- **Runtime bugs** in Docker or Podman can weaken isolation.
+- **Host misconfiguration**, such as mounting the Docker socket into the container, can bypass all controls.
 
-Treat Vibepit as defense in depth: multiple independent controls that collectively reduce risk. It is not absolute containment. For workloads that require stronger isolation guarantees, consider running Vibepit inside a VM.
+Vibepit is defense in depth, a set of independent controls that each reduce risk. It is not absolute containment. For workloads that need stronger isolation, run Vibepit inside a VM.
 
 ### Container runtimes and VM boundaries
 
@@ -123,6 +123,6 @@ Some container runtimes run containers inside a lightweight Linux VM:
 - **Docker Desktop** (macOS, Windows, and Linux) runs a VM using the platform's hypervisor (Apple Virtualization framework, Hyper-V/WSL2, or KVM).
 - **Podman Machine** (macOS, Windows) runs a Fedora CoreOS VM.
 
-When a VM is present, a container escape lands in the VM guest, not directly on your host. This adds a boundary that does not exist when using **Docker Engine** on Linux or **Podman** on Linux (including Podman Desktop), where containers run natively and share the host kernel.
+With a VM, a container escape lands in the VM guest, not directly on your host. That boundary does not exist with **Docker Engine** or **Podman** on Linux (including Podman Desktop), where containers run natively and share the host kernel.
 
-However, these VMs are designed for developer convenience, not as security boundaries. File sharing, socket forwarding, and networking features bridge the VM boundary in various ways, and the project directory is bind-mounted through it. Vibepit does not control or harden this VM layer, so you should not treat it as a guaranteed security control — but it does reduce the practical risk of a container escape reaching your host.
+These VMs are built for developer convenience, not as security boundaries. File sharing, socket forwarding, and networking features cross the VM boundary, and the project directory is bind-mounted through it. Vibepit does not control or harden the VM, so don't count on it as a security control. It does make it less likely that a container escape reaches your host.

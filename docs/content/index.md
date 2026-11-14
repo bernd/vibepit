@@ -7,7 +7,7 @@ hide:
 
 <section class="vp-landing">
   <div class="vp-landing__copy">
-    <p class="vp-landing__eyebrow">Secure Agent Sandbox</p>
+    <p class="vp-landing__eyebrow">Secure agent sandbox</p>
     <h1>Run AI coding agents in isolated containers</h1>
     <p class="vp-landing__lead">
       Prompt injection, rogue skills, and compromised dependencies can turn
@@ -16,8 +16,8 @@ hide:
       only: no cloud, no accounts.
     </p>
     <div class="vp-landing__actions">
-      <a class="md-button md-button--primary" href="tutorials/first-sandbox/">Get Started</a>
-      <a class="md-button" href="tutorials/demo/">Watch Demo</a>
+      <a class="md-button md-button--primary" href="tutorials/first-sandbox/">Get started</a>
+      <a class="md-button" href="tutorials/demo/">Watch demo</a>
       <a class="md-button" href="reference/cli/">CLI Reference</a>
       <a class="md-button" href="https://github.com/bernd/vibepit">GitHub</a>
     </div>
@@ -36,20 +36,20 @@ mv vibepit "$HOME/.local/bin/"</code></pre>
 
 <section class="vp-cards vp-cards--features">
   <article class="vp-card">
-    <h3>Container Isolation</h3>
+    <h3>Container isolation</h3>
     <p>Each session runs in a hardened container with a read-only root filesystem and dropped capabilities.</p>
   </article>
   <article class="vp-card">
-    <h3>Filtered Networking</h3>
-    <p>HTTP, HTTPS, and DNS traffic is filtered through an allowlist proxy with optional network presets.</p>
+    <h3>Filtered networking</h3>
+    <p>A proxy checks HTTP, HTTPS, and DNS traffic against an allowlist built from network presets and your own entries.</p>
   </article>
   <article class="vp-card">
-    <h3>Runtime Control</h3>
+    <h3>Runtime control</h3>
     <p>Manage allowlists and inspect live traffic with CLI commands or the interactive monitor UI.</p>
   </article>
 </section>
 
-<h2 class="vp-home-section-title">Start Here</h2>
+<h2 class="vp-home-section-title">Start here</h2>
 
 <section class="vp-cards vp-cards--guides">
   <article class="vp-card">
@@ -74,6 +74,6 @@ mv vibepit "$HOME/.local/bin/"</code></pre>
   </article>
   <article class="vp-card">
     <h3><a href="explanations/security-model/">Security Model</a></h3>
-    <p>Understand assumptions, boundaries, and defense-in-depth controls.</p>
+    <p>What each control does, what it assumes, and where it stops.</p>
   </article>
 </section>
