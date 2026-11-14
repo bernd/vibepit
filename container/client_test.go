@@ -545,6 +545,7 @@ func TestRemoveAfterFailedCreate(t *testing.T) {
 	tests := []struct {
 		name          string
 		createErr     error
+		createStatus  int
 		sessionID     string
 		notFoundPolls int    // 404s before the container appears; -1: never
 		inspect       string // JSON body once found
@@ -563,7 +564,9 @@ func TestRemoveAfterFailedCreate(t *testing.T) {
 		{name: "no session ID", createErr: interrupted, inspect: ours},
 		{name: "connection dropped", createErr: errors.New("error during connect: EOF"), sessionID: "s1", inspect: ours, wantInspect: true, wantRemoved: true},
 		{name: "daemon refused the create", createErr: cerrdefs.ErrConflict.WithMessage("name in use"), sessionID: "s1", inspect: ours},
-		{name: "daemon failed the create", createErr: cerrdefs.ErrInternal.WithMessage("boom"), sessionID: "s1", inspect: ours},
+		{name: "internal error leaves creation uncertain", createErr: cerrdefs.ErrInternal.WithMessage("boom"), sessionID: "s1", inspect: ours, wantInspect: true, wantRemoved: true},
+		{name: "bad gateway after creation", createStatus: http.StatusBadGateway, sessionID: "s1", inspect: ours, wantInspect: true, wantRemoved: true},
+		{name: "gateway timeout after creation", createStatus: http.StatusGatewayTimeout, sessionID: "s1", inspect: ours, wantInspect: true, wantRemoved: true},
 		{name: "transient lookup error is retried", createErr: interrupted, sessionID: "s1", inspectStatus: http.StatusInternalServerError, failPolls: 2, inspect: ours, wantInspect: true, wantRemoved: true},
 		{name: "lookup keeps failing", createErr: interrupted, sessionID: "s1", inspectStatus: http.StatusInternalServerError, failPolls: -1, wantInspect: true, wantErr: "could not check whether container vibepit-proxy-s1 was left behind"},
 		{name: "remove fails", createErr: interrupted, sessionID: "s1", inspect: ours, removeFails: true, wantInspect: true, wantRemoved: true, wantErr: "remove container vibepit-proxy-s1"},
@@ -577,6 +580,10 @@ func TestRemoveAfterFailedCreate(t *testing.T) {
 				mu.Lock()
 				defer mu.Unlock()
 				switch {
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/containers/create"):
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tt.createStatus)
+					_, _ = w.Write([]byte(`{"message":"boom"}`))
 				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/vibepit-proxy-s1/json"):
 					inspected = true
 					polls++
@@ -604,6 +611,11 @@ func TestRemoveAfterFailedCreate(t *testing.T) {
 					http.NotFound(w, r)
 				}
 			})
+			if tt.createStatus != 0 {
+				_, err := cli.ContainerCreate(context.Background(), dockerclient.ContainerCreateOptions{Config: &container.Config{Image: "img"}, Name: "vibepit-proxy-s1"})
+				require.Error(t, err)
+				tt.createErr = fmt.Errorf("create proxy container: %w", err)
+			}
 			// A cancelled context is the typical cause, so cleanup must not use it.
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
@@ -631,9 +643,11 @@ func TestDaemonAnswered(t *testing.T) {
 		{name: "conflict", status: http.StatusConflict, want: true},
 		{name: "bad request", status: http.StatusBadRequest, want: true},
 		{name: "image not found", status: http.StatusNotFound, want: true},
-		{name: "internal error", status: http.StatusInternalServerError, want: true},
+		{name: "internal error, indistinguishable from a gateway error", status: http.StatusInternalServerError},
+		{name: "not implemented", status: http.StatusNotImplemented, want: true},
 		{name: "unavailable, maybe from a proxy", status: http.StatusServiceUnavailable},
-		{name: "bad gateway, unclassified", status: http.StatusBadGateway},
+		{name: "bad gateway, maybe from a proxy", status: http.StatusBadGateway},
+		{name: "gateway timeout, maybe from a proxy", status: http.StatusGatewayTimeout},
 		{name: "cancelled in flight", want: false},
 	}
 	for _, tt := range tests {

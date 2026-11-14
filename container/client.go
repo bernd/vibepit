@@ -711,16 +711,17 @@ func (c *Client) removeAfterFailedCreate(ctx context.Context, name, sessionID st
 // container. Any other error, such as a cancellation, a timeout or a dropped
 // connection, leaves open whether the container was created.
 //
-// The client classifies HTTP error responses into the categories below. 503
-// and the statuses it leaves unclassified (e.g. 502 and 504) are not counted:
-// a proxy in front of the daemon may return them after the daemon created
-// the container.
+// The client classifies HTTP error responses into the categories below.
+// Unavailable and internal errors are not counted: a proxy may return 502,
+// 503 or 504 after the daemon created the container. Moby classifies 500,
+// 502 and 504 alike as internal errors without exposing the original status,
+// so even a 500 must leave open whether cleanup is needed.
 func daemonAnswered(err error) bool {
 	for _, is := range []func(error) bool{
 		cerrdefs.IsInvalidArgument, cerrdefs.IsNotFound, cerrdefs.IsAlreadyExists,
 		cerrdefs.IsPermissionDenied, cerrdefs.IsResourceExhausted, cerrdefs.IsFailedPrecondition,
 		cerrdefs.IsConflict, cerrdefs.IsNotModified, cerrdefs.IsAborted, cerrdefs.IsOutOfRange,
-		cerrdefs.IsNotImplemented, cerrdefs.IsInternal, cerrdefs.IsDataLoss,
+		cerrdefs.IsNotImplemented, cerrdefs.IsDataLoss,
 		cerrdefs.IsUnauthorized,
 	} {
 		if is(err) {
