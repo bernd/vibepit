@@ -118,6 +118,7 @@ RUN install -d -o root -g root -m 0755 /etc/vibepit \
   && install -d -o root -g root -m 0755 /etc/vibepit/sshd \
   && install -d -o root -g root -m 0755 /opt/vibepit
 COPY config/bashrc /etc/vibepit/bashrc
+COPY config/shell-integration.bash /etc/vibepit/shell-integration.bash
 COPY config/gitconfig /etc/gitconfig
 COPY config/tmux.conf /etc/vibepit/tmux.conf
 COPY lib.sh /etc/vibepit/lib.sh

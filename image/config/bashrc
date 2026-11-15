@@ -22,3 +22,6 @@ paths+=("$HOME/go/bin")
 for path in "${paths[@]}"; do
 	export PATH="$path:$PATH"
 done
+
+# shellcheck source=/dev/null
+. /etc/vibepit/shell-integration.bash
