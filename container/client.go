@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -364,6 +365,17 @@ func (c *Client) FindRunningSession(ctx context.Context, projectDir string) (*Ru
 // proxy) matching the given project directory. This is useful for cleanup when
 // the sandbox may have crashed but the proxy is still running.
 func (c *Client) FindAnySessionContainer(ctx context.Context, projectDir string) (string, error) {
+	ids, err := c.ProjectSessionIDs(ctx, projectDir)
+	if err != nil || len(ids) == 0 {
+		return "", err
+	}
+	return ids[0], nil
+}
+
+// ProjectSessionIDs returns the IDs of all sessions that have a container,
+// running or not, for the given project directory. Failed cleanups can leave
+// several sessions behind, and down must find all of them.
+func (c *Client) ProjectSessionIDs(ctx context.Context, projectDir string) ([]string, error) {
 	list, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{
 		All: true,
 		Filters: make(dockerclient.Filters).Add("label",
@@ -372,12 +384,16 @@ func (c *Client) FindAnySessionContainer(ctx context.Context, projectDir string)
 		),
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if containers := list.Items; len(containers) > 0 {
-		return containers[0].Labels[LabelSessionID], nil
+	var ids []string
+	for _, ctr := range list.Items {
+		id := ctr.Labels[LabelSessionID]
+		if id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
 	}
-	return "", nil
+	return ids, nil
 }
 
 // SessionContainer describes a container belonging to a session.
@@ -656,6 +672,11 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 	ctx, cancel := cleanupContext(ctx)
 	defer cancel()
 	_, err := c.docker.NetworkRemove(ctx, networkID, dockerclient.NetworkRemoveOptions{})
+	if cerrdefs.IsNotFound(err) {
+		// Already gone, e.g. removed by an earlier cleanup that could not
+		// remove the containers.
+		return nil
+	}
 	return err
 }
 

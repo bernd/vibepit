@@ -708,3 +708,50 @@ func TestCreateSandboxContainerCreatesFakeConfigDir(t *testing.T) {
 	assert.Empty(t, entries)
 	assert.Contains(t, body.HostConfig.Binds, fake+":"+real+":ro")
 }
+
+func TestProjectSessionIDs(t *testing.T) {
+	var query string
+	cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"Id":"a1","Labels":{"vibepit.session-id":"s1"}},
+			{"Id":"a2","Labels":{"vibepit.session-id":"s2"}},
+			{"Id":"a3","Labels":{"vibepit.session-id":"s1"}},
+			{"Id":"a4","Labels":{"vibepit.session-id":""}}
+		]`))
+	})
+	ids, err := (&Client{docker: cli}).ProjectSessionIDs(context.Background(), "/project")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"s1", "s2"}, ids)
+	assert.Contains(t, query, "all=1", "stopped containers must be listed too")
+}
+
+func TestRemoveNetwork(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr bool
+	}{
+		{name: "removed", status: http.StatusNoContent},
+		{name: "already gone", status: http.StatusNotFound},
+		{name: "in use", status: http.StatusForbidden, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				if tt.status != http.StatusNoContent {
+					_, _ = w.Write([]byte(`{"message":"boom"}`))
+				}
+			})
+			err := (&Client{docker: cli}).RemoveNetwork(context.Background(), "net1")
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

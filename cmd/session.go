@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/config"
@@ -191,5 +192,17 @@ func WriteSSHCredentials(sessionID string, clientPriv, clientPub, hostPriv, host
 // CleanupSessionCredentials removes the entire session directory and its
 // contents. Safe to call if the directory does not exist.
 func CleanupSessionCredentials(sessionID string) error {
+	// Session IDs can come from container labels, which anyone with access
+	// to the runtime can set. An ID like "", "." or "../.." would remove the
+	// credentials of every session or directories outside them.
+	if !validSessionID(sessionID) {
+		return fmt.Errorf("refusing to remove credentials of invalid session ID %q", sessionID)
+	}
 	return os.RemoveAll(sessionDir(sessionID))
+}
+
+// validSessionID reports whether id names a single directory entry below the
+// session base directory.
+func validSessionID(id string) bool {
+	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, `/\`+"\x00")
 }

@@ -241,15 +241,19 @@ vibepit down [project-path]
 
 ### Behavior
 
-- Finds the running session for the project directory.
-- Stops and removes all containers belonging to the session (sandbox and proxy).
-- Removes the session network.
-- Deletes session credentials (mTLS and SSH keys) from
+- Finds every session for the project directory, running or not. This
+  includes orphaned containers left by earlier failed cleanups (e.g., a
+  stopped proxy whose sandbox is gone).
+- For each session, stops and removes all its containers (sandbox and proxy),
+  then removes the session network, if it still exists.
+- Deletes each session's credentials (mTLS and SSH keys) from
   `$XDG_STATE_HOME/vibepit/sessions/<sessionID>/`.
-- If it cannot remove some containers, it keeps the credentials so you can
-  retry.
-- Also detects orphaned containers (e.g., proxy still running after sandbox
-  crashed) and cleans them up.
+- If it cannot remove a container of a session, it leaves that session's
+  network alone, since the container still uses it.
+- If it cannot remove a container of a session, it keeps that session's
+  credentials so you can retry.
+- If it cannot remove a container or the network of a session, it continues
+  with the other sessions and exits with an error.
 
 ### Examples
 

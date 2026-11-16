@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,4 +127,45 @@ func TestCleanupSessionCredentials(t *testing.T) {
 
 	_, err = os.Stat(dir)
 	assert.True(t, os.IsNotExist(err))
+}
+
+func TestCleanupSessionCredentialsRejectsInvalidIDs(t *testing.T) {
+	origStateHome, origRuntimeDir := xdg.StateHome, xdg.RuntimeDir
+	xdg.StateHome, xdg.RuntimeDir = t.TempDir(), t.TempDir()
+	t.Cleanup(func() { xdg.StateHome, xdg.RuntimeDir = origStateHome, origRuntimeDir })
+
+	// Something that must survive: another session's credentials and a file
+	// next to the sessions directory.
+	other := filepath.Join(sessionBaseDir(), "other")
+	require.NoError(t, os.MkdirAll(other, 0o700))
+	outside := filepath.Join(xdg.StateHome, "keep")
+	require.NoError(t, os.WriteFile(outside, nil, 0o600))
+
+	tests := []struct {
+		id    string
+		valid bool
+	}{
+		{id: "d7fk6l9vl3elh5nbtqn0", valid: true},
+		{id: ""},
+		{id: "."},
+		{id: ".."},
+		{id: "../.."},
+		{id: "a/b"},
+		{id: `a\b`},
+		{id: "/abs"},
+		{id: "a\x00b"},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%q", tt.id), func(t *testing.T) {
+			assert.Equal(t, tt.valid, validSessionID(tt.id))
+			err := CleanupSessionCredentials(tt.id)
+			if tt.valid {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, "invalid session ID")
+			}
+			assert.DirExists(t, other)
+			assert.FileExists(t, outside)
+		})
+	}
 }
