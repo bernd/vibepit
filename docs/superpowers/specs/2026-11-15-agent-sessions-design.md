@@ -73,21 +73,34 @@ survive container restarts. `<project>` is derived from the project directory
 (for example a hash of its path). The `vibepit-home` volume is shared by every
 sandbox on the host, including concurrently running ones for other projects,
 so the store must be scoped per project: vibed lists, restores, and allocates
-IDs only within its own project directory, and holds a lock file there so two
-sandboxes for the same project never supervise or resume the same agent
-session. A summary state file in `/tmp`, like `ctr.SessionStatePath`, is
+IDs only within its own project directory, and holds an advisory `flock` on a
+lock file there so two sandboxes for the same project never supervise or
+resume the same agent session. The kernel drops the lock when vibed dies, so a
+crashed container leaves no stale lock. A vibed that cannot take the lock
+reports the agent service as unavailable (`hello` capabilities and every
+operation answer `error: store locked by another sandbox`) rather than
+reading a store it does not own. A summary state file in `/tmp`, like `ctr.SessionStatePath`, is
 written for diagnostics. `vibepit status` runs on the host and cannot read it
 directly; showing agent sessions there needs a read over SSH (`list` or an
 exec of `cat`). On vibed start, sessions found in its project's store are
 listed as `exited` and can be resumed. A restored session's `seq` continues
-from the last entry in its log, so a client's `since` stays valid across
-vibed and container restarts.
+from the highest `seq` ever assigned, which `meta.json` records next to the
+log, so a client's `since` stays valid across vibed and container restarts.
+A truncated last line, left by a crash mid-write, is dropped on restore. `seq`
+starts at 1, so `since: 0` always means "nothing seen". `seq` never goes
+backwards: when the log is rewritten (compaction, or an ACP `session/load`
+replay replacing it), the new entries get fresh `seq`s above the old maximum,
+and an attach whose `since` refers to entries no longer in the log gets a
+full replay (`"replay":"full"`).
 
 ### Wire protocol
 
 The SSH client opens a session channel and requests subsystem
 `vibepit-agent`. vibed handles this in the `handleSessionChannel` request loop,
-before dispatch, alongside the existing `env` and forwards requests. Every line
+before dispatch, alongside the existing `env` and forwards requests. Accepting
+the subsystem counts as dispatch, like `shell` and `exec`: later `pty-req`,
+`env`, `shell`, `exec`, or `subsystem` requests on that channel are rejected,
+and a subsystem request after dispatch is rejected too. Every line
 is an envelope object. **One channel carries one operation.** `list`, `create`,
 `kill`, and `restart` reply and close. `attach` and `watch` keep the channel
 open. `watch` sends `sessions` once, then a `sessions` envelope whenever a
@@ -101,7 +114,7 @@ version and capabilities (see "Binaries and version skew" in
 ```jsonc
 {"op":"list"}
 {"op":"create","driver":"claude"|"codex"|"acp","options":{...}}
-{"op":"attach","session":"a1","since":4182}   // since: last seq seen, 0 for full replay
+{"op":"attach","session":"a1","since":4182}   // since: last seq seen (seqs start at 1), 0 for full replay
 {"op":"restart","session":"a1"}
 {"op":"kill","session":"a1"}
 {"op":"watch"}                                // streams state changes of all sessions
@@ -124,6 +137,8 @@ Server envelopes:
  "client":"c7","init":{...cached handshake result...},"state":{...}}
 {"op":"frame","seq":4183,"dir":"out","frame":{...native frame from the agent...}}
 {"op":"frame","seq":4184,"dir":"in","by":"c3","frame":{...native frame a client sent...}}
+{"op":"frame","seq":4185,"dir":"out","for":"c3","frame":{...response to c3's request...}}
+{"op":"frame","seq":4186,"stream":"stderr","raw":"…"}
 {"op":"state","state":{...}}
 {"op":"resolved","request":"…","by":"c3","outcome":"allowed"|"denied"|"answered"|"cancelled"}
 {"op":"exited","code":0}
@@ -160,6 +175,10 @@ After `attach`, a broker-mode channel sends `welcome`, then replays from
 `{"op":"detach"}`. A passthrough-mode channel sends `welcome` and then switches
 to a raw byte stream spliced to the agent's socket; vibed flushes any bytes it
 had already buffered. The client speaks the agent's own protocol from then on.
+No envelope reaches a spliced channel after `welcome`, so a passthrough client
+gets `state` and `resolved` only from Codex itself (`thread/status/changed`,
+`serverRequest/resolved`), and other observers of the session get vibed's
+view of them through `watch`.
 
 ## Broker mode (claude, acp)
 
@@ -177,7 +196,12 @@ any number of UIs.
   `error: lagging`, and the client reattaches with `since`. Replay is read
   from the log file under the channel's own flow control and never goes
   through the bounded queue, so a large replay cannot cause another `lagging`
-  and a reattach loop. Agent stdout is never blocked by a client.
+  and a reattach loop. A replaying client is not yet subscribed to live
+  frames: it keeps reading the log until it reaches the newest `seq`, then,
+  under the log's lock, joins the live fan-out at exactly the next `seq`.
+  Frames that arrive during replay are therefore read from the log, never
+  queued, and none is skipped or sent twice. Agent stdout is never blocked by
+  a client.
 - **Compaction**: the driver marks lines the log may drop once superseded,
   such as streaming deltas of a completed message. Replay of a compacted range
   sends the final frames only. If `since` falls inside a compacted range, the
@@ -188,8 +212,14 @@ any number of UIs.
 - **Session lifecycle is vibed's**: clients cannot create, load, or resume
   agent sessions through `send`. That would bypass the vibed session model.
 - **Request IDs**: vibed rewrites the ID of each client request to
-  `"<client>:<original raw JSON>"` and restores the exact original when routing
-  the response to that client only.
+  `"<client>:<original raw JSON>"`. The response is logged and fanned out to
+  every client like any other stdout line, as a `frame` with `for` naming the
+  requesting client and the ID restored to the exact original. The requesting
+  client matches it to its pending request; other clients use it as an
+  observation (an ACP `session/prompt` response is how they learn the turn
+  ended and why) and never as an answer to a request of their own. Replay
+  delivers logged responses the same way, so a client that reclaimed its ID
+  receives the responses it missed.
 - **Agent requests** (approvals, questions) become pending entries in `state`,
   and `welcome` carries them. Resolution follows the multi-client rules
   below. Entries are also cleared when the agent cancels them or the turn
@@ -197,7 +227,8 @@ any number of UIs.
 - **Turn policy** is per driver (see below), enforced by vibed because
   several clients can write.
 - **Stderr** goes to the log as a diagnostic stream and to clients as
-  `frame` records with a `stream` field, mirroring the experiment's debug tab.
+  `frame` records with a `stream` field (see the server envelopes), mirroring
+  the experiment's debug tab.
 
 ### Multiple clients
 
@@ -269,8 +300,10 @@ type Frame struct {
   --permission-prompt-tool stdio`, plus `--permission-mode default` or
   `--dangerously-skip-permissions`, plus `--resume <ref>` when resuming. The
   `create` handler passes the command to `$SHELL -c` prefixed with `exec`, as
-  the experiment does, so login PATH setup applies and the supervised process
-  is `claude` itself rather than the shell. Every option value placed in the
+  the experiment does through vibed's exec handler, so `claude` gets the same
+  environment and PATH as `vibepit exec` (a non-login `-c` shell; anything
+  the claude installer needs must be on that PATH), and the supervised
+  process is `claude` itself rather than the shell. Every option value placed in the
   command string (such as the `resume` reference) is validated against the
   driver's expected format and shell-quoted; an allowlist of option names does
   not stop injection through their values.
@@ -329,7 +362,11 @@ tracks which configuration request is unacknowledged, for the turn policy.
   history is never logged twice. Agents advertising neither are
   `resumable: false`.
 - **Superseded**: none initially. ACP updates are chunks without a final
-  aggregate frame.
+  aggregate frame, so an ACP log grows by one line per chunk and a full
+  replay resends every chunk. Until a driver-side aggregation exists, vibed
+  coalesces consecutive `agent_message_chunk` and `agent_thought_chunk`
+  updates of one message into a single logged frame once the message is
+  followed by any other update, and replays the coalesced form.
 
 ## Passthrough mode (codex)
 
@@ -360,10 +397,13 @@ nothing.
   answer wins; and `serverRequest/resolved` reaches every subscriber. vibed
   still tracks presence: it knows each spliced channel and its `hello` label,
   and lists it in `state.clients`. vibed's observer connection is not listed.
-  The `outcome` of a `resolved` comes from the `item/completed` status that
+  The `outcome` of a resolution comes from the `item/completed` status that
   follows (`completed` or `failed` means the work ran and maps to `allowed`;
   `declined` maps to `denied`), or `cancelled` when the request was cleared by
-  turn end or interrupt.
+  turn end or interrupt. vibed does not read spliced traffic, so it cannot
+  name the answering client: the resolution reaches `watch` and `state`
+  without `by`, and spliced clients learn it from Codex's own
+  `serverRequest/resolved`.
 - **Model and effort**: fields on `turn/start`. Mid-turn input uses
   `turn/steer`.
 - **Codex's own sandbox**: inside vibepit the container is the boundary.
@@ -375,7 +415,7 @@ nothing.
 ## Host-side client
 
 Package `agentclient` (root module) provides `List`, `Create`, `Attach`,
-`Restart`, and `Kill` over an `*ssh.Client`. `Attach` returns either a broker
+`Restart`, `Kill`, and `Watch` over an `*ssh.Client`. `Attach` returns either a broker
 stream (send, receive envelopes) or a passthrough `net.Conn`. The desktop backend
 uses it in place of its own process handling. A later
 `vibepit agent list|kill` CLI uses it too.

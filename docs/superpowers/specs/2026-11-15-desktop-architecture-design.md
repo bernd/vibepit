@@ -122,19 +122,37 @@ misbehaving.
 Bubble Tea session selector whenever detached sessions exist
 (`handlePTYSession`). A graphical client needs to pick sessions itself.
 Add an `env` request `VIBEPIT_SESSION=new|<id>` before `shell`: `new` always
-creates a session, and an ID attaches to that session or fails. An attach by
-ID takes over the writer role: after sleep or a network change, vibed still
-counts the old, silently dead connection as the writer until keepalives time
-out, and a plain attach would leave the reconnected desktop read-only. Without
-the env request, today's behavior is unchanged. `vibepit connect` can adopt the
+creates a session, and an ID attaches to that session or fails. Without the
+env request, today's behavior is unchanged. `vibepit connect` can adopt the
 same mechanism for a host-side picker later.
 
-The takeover also applies when the old writer is alive, for example someone
-typing in `vibepit connect` when the desktop attaches. So the old writer is
-told instead of silently losing input:
+An older vibed accepts any `env` request and passes it into the shell's
+environment, so it would silently ignore `VIBEPIT_SESSION` and show the
+Bubble Tea selector in the desktop's terminal. The desktop therefore sends
+`VIBEPIT_SESSION` only after `vibepit-terminal` `hello` advertised it, and
+treats a missing subsystem as "session picking unavailable". vibed consumes
+the `VIBEPIT_*` control variables and does not pass them to the shell.
+
+Taking over the writer role is tied to who held it. Each PTY attach gets a
+writer token, returned in the `vibepit-terminal` view of the session. An
+attach by ID with `VIBEPIT_RECLAIM=<token>` takes over only if that token
+still holds the writer role: after sleep or a network change, vibed still
+counts the old, silently dead connection as the writer until keepalives time
+out, and a plain attach would leave the reconnected desktop read-only. The
+connection supervisor reattaches with the token it held, so an automatic
+reconnect never takes input from another client that became the writer in
+the meantime. `VIBEPIT_TAKEOVER=1` takes over unconditionally; it is sent
+only on an explicit user action ("Take back input", or opening a session
+that another client is typing in).
+
+An explicit takeover can hit a live writer, for example someone typing in
+`vibepit connect` when the desktop attaches. So the old writer is told
+instead of silently losing input:
 
 - An attach may name itself with an `env` request `VIBEPIT_CLIENT=<label>`
-  (for example `desktop`). Without it, the label is "another client".
+  (for example `desktop`). Without it, the label is "another client". vibed
+  limits the label to a short run of printable characters before writing it
+  into any terminal stream, so a label cannot carry escape sequences.
 - vibed writes a one-line notice into the old writer's output stream only,
   such as `[vibepit] Input taken over by desktop. Reattach to take it back.`
   It never goes into the PTY, the scrollback emulator, or other clients'
@@ -144,7 +162,8 @@ told instead of silently losing input:
   input loss is worse.
 - `vibepit-terminal watch` emits a writer change (session, new writer
   label), so the desktop shows the same message as a banner with a "Take back
-  input" action. That action reattaches by ID and takes over in turn.
+  input" action. That action reattaches by ID with `VIBEPIT_TAKEOVER=1` and
+  takes over in turn.
 - Keystrokes from a client that is no longer the writer stay rejected, as
   today; the notice tells the user why.
 
@@ -203,7 +222,8 @@ in TypeScript.
   running.
 - **Connection supervisor**: owns `host.Conn` per sandbox and its
   reconnection. When the connection returns after sleep or a network change,
-  it reattaches open terminals (by session ID; vibed replays scrollback),
+  it reattaches open terminals (by session ID and writer token; vibed replays
+  scrollback),
   agent sessions (by `since`), and network watches (fresh `/events`
   subscription plus reset). The frontend sees connection states (`connecting`,
   `connected`, `reconnecting`, `lost`) instead of errors.
@@ -213,6 +233,11 @@ in TypeScript.
   - proxy holds, from `/events`;
   - agent pending requests and finished turns, from `vibepit-agent watch`;
   - exited terminal sessions, from `vibepit-terminal watch`.
+
+  Summaries from the sandbox (agent request summaries, OSC 7501 text) are
+  untrusted. Attention shows them as plain text, labelled with their source
+  sandbox and feature, so an agent cannot dress an item up as a network
+  approval.
 
   It drives the tray, badges, and native notifications under today's rules:
   notifications focus a window and never approve, and they are withdrawn on
@@ -736,6 +761,10 @@ consequences:
   architecture, on macOS the Linux arm64 binary that the CLI release already
   embeds (`embed/`).
   Attach-only operation needs no binary.
+  Known limitation, accepted for now: Intel Macs run amd64 Linux VMs, so
+  lifecycle from the desktop does not work there, as with the CLI today.
+  Fixing it means also embedding a Linux amd64 binary in the release
+  pipeline.
 - **The desktop must work with older sandboxes.** The `hello` versioning on
   every subsystem covers this. A missing subsystem (an old vibed rejects it as
   an unknown subsystem) means "feature unavailable for this sandbox; restart
