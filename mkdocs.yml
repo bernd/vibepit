@@ -69,6 +69,7 @@ nav:
       - CLI: reference/cli.md
       - Network Presets: reference/presets.md
       - Sandbox Environment: reference/sandbox.md
+      - Files and Directories: reference/files.md
   - Explanations:
       - Architecture: explanations/architecture.md
       - Security Model: explanations/security-model.md

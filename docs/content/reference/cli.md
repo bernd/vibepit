@@ -1,5 +1,5 @@
 ---
-description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, deny-http, deny-dns, monitor, and update.
+description: Complete reference for vibepit commands, flags, and arguments including run, up, down, connect, exec, status, allow-http, allow-dns, deny-http, deny-dns, monitor, update, and paths.
 ---
 
 # CLI Reference
@@ -698,3 +698,49 @@ vibepit update --use 0.2.0
 vibepit update --check --pre
 ```
 
+---
+
+## `paths`
+
+Show where Vibepit keeps its files.
+
+```
+vibepit paths [flags] [name]
+```
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `name` | Print only this path: `global-config`, `project-config`, `sessions`, or `cache`. |
+
+### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--project` | string | current directory | Project directory to resolve the project config for |
+
+### Behavior
+
+- Without an argument, lists each path with a label. Paths that don't exist
+  yet are marked `(not found)`. Paths Vibepit can't read show the error, such
+  as `(permission denied)`.
+- With a name, prints only that path with no label or color, so scripts can
+  use it.
+- Resolves the project config for `--project`, or the current working
+  directory, the same way [`run`](#run) finds the project root: the root of
+  the Git repository that contains the directory, or the directory itself.
+- [Files and Directories](files.md) describes each path and its defaults.
+
+### Examples
+
+```bash
+# List all paths
+vibepit paths
+
+# Edit the global config
+$EDITOR "$(vibepit paths global-config)"
+
+# Show the project config path for another project
+vibepit paths --project ~/src/my-project project-config
+```

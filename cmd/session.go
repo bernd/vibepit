@@ -23,7 +23,7 @@ const (
 )
 
 func sessionBaseDir() string {
-	return filepath.Join(xdg.StateHome, config.RuntimeDirName, "sessions")
+	return filepath.Join(config.StateDir(), "sessions")
 }
 
 // legacySessionBaseDir returns the pre-migration credential path

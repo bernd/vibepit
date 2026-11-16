@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/adrg/xdg"
+	"github.com/bernd/vibepit/config"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -31,7 +31,11 @@ var anonymousRegistryOpts = []ociremote.Option{
 // that doesn't require a live TUF round trip.
 var fetchTrustedRoot = cosignlib.TrustedRoot
 
-var cacheFile = filepath.Join(xdg.CacheHome, "vibepit", "verified-image-digests")
+// cacheFile returns the file listing image digests that already passed
+// verification.
+func cacheFile() string {
+	return filepath.Join(config.CacheDir(), "verified-image-digests")
+}
 
 // VerifyImage verifies the cosign signature for a container image using
 // the Sigstore public-good infrastructure. It checks that the image was
@@ -115,7 +119,7 @@ func VerifyProxyImage(ctx context.Context, imageRef string) error {
 }
 
 func isDigestVerified(digestRef string) bool {
-	f, err := os.Open(cacheFile)
+	f, err := os.Open(cacheFile())
 	if err != nil {
 		return false
 	}
@@ -131,10 +135,11 @@ func isDigestVerified(digestRef string) bool {
 }
 
 func cacheVerifiedDigest(digestRef string) {
-	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o700); err != nil {
+	path := cacheFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
-	f, err := os.OpenFile(cacheFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/proxy"
 	units "github.com/docker/go-units"
 	"github.com/knadh/koanf/parsers/yaml"
@@ -284,17 +283,4 @@ func FindProjectRoot(path string) (string, error) {
 		}
 	}
 	return abs, nil
-}
-
-func DefaultGlobalPath() string {
-	configHome := xdg.ConfigHome
-	if configHome == "" {
-		home, _ := os.UserHomeDir()
-		configHome = filepath.Join(home, ".cache")
-	}
-	return filepath.Join(configHome, ConfigDirName, "config.yaml")
-}
-
-func DefaultProjectPath(projectRoot string) string {
-	return filepath.Join(projectRoot, ProjectConfigDirName, "network.yaml")
 }
