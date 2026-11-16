@@ -77,21 +77,25 @@ IDs only within its own project directory, and holds an advisory `flock` on a
 lock file there so two sandboxes for the same project never supervise or
 resume the same agent session. The kernel drops the lock when vibed dies, so a
 crashed container leaves no stale lock. A vibed that cannot take the lock
-reports the agent service as unavailable (`hello` capabilities and every
-operation answer `error: store locked by another sandbox`) rather than
-reading a store it does not own. A summary state file in `/tmp`, like `ctr.SessionStatePath`, is
-written for diagnostics. `vibepit status` runs on the host and cannot read it
-directly; showing agent sessions there needs a read over SSH (`list` or an
-exec of `cat`). On vibed start, sessions found in its project's store are
-listed as `exited` and can be resumed. A restored session's `seq` continues
-from the highest `seq` ever assigned, which `meta.json` records next to the
-log, so a client's `since` stays valid across vibed and container restarts.
-A truncated last line, left by a crash mid-write, is dropped on restore. `seq`
-starts at 1, so `since: 0` always means "nothing seen". `seq` never goes
-backwards: when the log is rewritten (compaction, or an ACP `session/load`
-replay replacing it), the new entries get fresh `seq`s above the old maximum,
-and an attach whose `since` refers to entries no longer in the log gets a
-full replay (`"replay":"full"`).
+reports the agent service as unavailable rather than reading a store it does
+not own: `hello` still answers with its versions, so the desktop's version
+check passes, but its capabilities mark the service unavailable, and every
+other operation answers `error: store locked by another sandbox`. It tries the lock again on every new
+channel, so the service becomes available once the other sandbox stops.
+vibed sends no notice when that happens; a client that saw the service
+unavailable opens a new channel later to check again. Whenever vibed takes
+the lock, at start or later, it restores the sessions in the store as
+described below.
+
+Each session directory holds `meta.json` (driver, creation options, agent
+reference) and, for broker sessions, the log `log.jsonl`. Neither stores
+log positions or client IDs; "Log positions" and "Client identity" explain
+why none survive a restart. A summary state file in `/tmp`, like
+`ctr.SessionStatePath`, is written for diagnostics. `vibepit status` runs on
+the host and cannot read it directly; showing agent sessions there needs a
+read over SSH (`list` or an exec of `cat`). When vibed takes the lock,
+sessions found in its project's store are listed as `exited` and can be
+resumed.
 
 ### Wire protocol
 
@@ -100,21 +104,24 @@ The SSH client opens a session channel and requests subsystem
 before dispatch, alongside the existing `env` and forwards requests. Accepting
 the subsystem counts as dispatch, like `shell` and `exec`: later `pty-req`,
 `env`, `shell`, `exec`, or `subsystem` requests on that channel are rejected,
-and a subsystem request after dispatch is rejected too. Every line
+and so is a subsystem request after `shell` or `exec`. Every line
 is an envelope object. **One channel carries one operation.** `list`, `create`,
 `kill`, and `restart` reply and close. `attach` and `watch` keep the channel
 open. `watch` sends `sessions` once, then a `sessions` envelope whenever a
-session is created, exits, or changes `state` (status, pending requests, turn
-end). The desktop's attention center depends on it.
+session is created, exits, is killed (it leaves the list), or changes `state`
+(status, pending requests, turn end). It also forwards every session's
+`resolved` envelopes, with a `session` field. The desktop's attention center depends on it.
 
-Every channel starts with `{"op":"hello","version":N}`. vibed answers with its
-version and capabilities (see "Binaries and version skew" in
+Every channel starts with `{"op":"hello","version":N}`, plus `client` and
+`label` on a channel that will attach (see "Client identity"). vibed answers
+with its protocol version, the vibepit release version, and capabilities
+(see "Binaries and version skew" in
 `2026-11-15-desktop-architecture-design.md`). Client operations:
 
 ```jsonc
 {"op":"list"}
 {"op":"create","driver":"claude"|"codex"|"acp","options":{...}}
-{"op":"attach","session":"a1","since":4182}   // since: last seq seen (seqs start at 1), 0 for full replay
+{"op":"attach","session":"a1","epoch":"Zq4…","since":4182} // position from the last attach; omit both for a full replay
 {"op":"restart","session":"a1"}
 {"op":"kill","session":"a1"}
 {"op":"watch"}                                // streams state changes of all sessions
@@ -133,35 +140,61 @@ version and capabilities (see "Binaries and version skew" in
 Server envelopes:
 
 ```jsonc
-{"op":"welcome","session":"a1","driver":"claude","mode":"broker","seq":4182,
- "client":"c7","init":{...cached handshake result...},"state":{...}}
+{"op":"welcome","session":"a1","driver":"claude","mode":"broker",
+ "epoch":"Zq4…","seq":4190,"replay":"since"|"full",
+ "init":{...cached handshake result...},"state":{...}}
 {"op":"frame","seq":4183,"dir":"out","frame":{...native frame from the agent...}}
-{"op":"frame","seq":4184,"dir":"in","by":"c3","frame":{...native frame a client sent...}}
-{"op":"frame","seq":4185,"dir":"out","for":"c3","frame":{...response to c3's request...}}
+{"op":"frame","seq":4184,"dir":"in","by":"<client ID>","frame":{...native frame a client sent...}}
+{"op":"frame","seq":4185,"dir":"out","for":"<client ID>","frame":{...response to that client's request...}}
 {"op":"frame","seq":4186,"stream":"stderr","raw":"…"}
 {"op":"state","state":{...}}
-{"op":"resolved","request":"…","by":"c3","outcome":"allowed"|"denied"|"answered"|"cancelled"}
+{"op":"resolved","request":"…","by":"<client ID>","outcome":"allowed"|"denied"|"answered"|"cancelled"}
 {"op":"exited","code":0}
 {"op":"error","message":"…"}
 {"op":"sessions","sessions":[{"id":"a1","driver":"codex","state":{...}}]}
 ```
 
-The client's `hello` carries a display label (`{"op":"hello","version":N,
-"label":"desktop"}`). `welcome` returns the ID vibed assigned to this
-attachment (`client`). A reattaching client passes its previous ID
-(`"client":"c7"` in `hello`) to reclaim it. Otherwise responses to requests it
-sent before the disconnect, which are routed by client ID, would reach no one,
-and a settings change it started would stay unacknowledged.
+### Client identity
 
-Two live channels never share an ID. If the reclaimed ID is still attached,
-vibed closes the older channel with `error: superseded` before the new one
-receives `welcome`. The newest claim wins rather than being refused, because
-the usual holder is the same client's dead connection: after sleep or a
-network change, vibed still counts it as attached until keepalives time out.
-Refusing would block exactly the reconnect that reclaiming exists for. All
-clients authenticate with the same session key, so this transfers no
-privilege. An ID vibed never assigned in this session is ignored, and the
-client gets a fresh one.
+The client generates the ID of each attachment itself: 16 random bytes,
+base64url-encoded without padding (22 characters from `[A-Za-z0-9_-]`), sent
+in `hello` as `{"op":"hello","version":N,"client":"<id>","label":"desktop"}`.
+It creates one ID per attached view, keeps it across its own reconnects, and
+never uses an ID it received from vibed or another client. `attach` without a
+well-formed ID is rejected; `list`, `create`, `kill`, `restart`, and `watch`
+need none. Request IDs inside the frames a client sends must stay unique for
+its client ID within an epoch, across its reconnects too (for example, a
+request counter that does not reset on reconnect): a full replay delivers
+the logged responses to its earlier requests again, and one must never match
+a newer pending request.
+
+- **Not a secret.** All clients authenticate with the same session key, and
+  approvals are not a security boundary, so the ID appears in `by`, `for`,
+  and `state.clients`. The rule against reusing a received ID prevents
+  accidents, not attacks.
+- **Never reused.** A random ID does not collide, including across vibed
+  restarts, so vibed keeps no ID counter, and a `for` in a replayed entry
+  names the client that sent the request and nobody else.
+- **The newest attachment wins.** Attaching with an ID that is already
+  attached replaces the older attachment: vibed closes the older channel
+  with `error: superseded` before the new one receives `welcome`. The new
+  attachment receives the responses addressed to the ID, including logged
+  ones on replay, so a request or settings change sent before a disconnect
+  is still answered. Refusing instead would block the usual case: the older
+  attachment is the same client's dead connection, which vibed counts as
+  attached after sleep or a network change until keepalives time out. This
+  holds in broker mode only: in passthrough mode Codex routes responses by
+  connection, so responses to requests sent on the replaced channel are lost
+  (see "Passthrough mode").
+
+The terminal service uses the same identity model for its writer role (see
+"Terminal service change" in the desktop architecture spec).
+
+vibed limits the label to a short run of printable characters before it
+appears in `state.clients`, so a label shown in a terminal cannot carry
+escape sequences.
+
+### Session state
 
 `state` is the only normalized structure:
 `{status, busy, pending:[{id, kind, summary}], model, resumable, agentRef,
@@ -170,15 +203,19 @@ clients:[{id, label, attachedAt}]}`. `list`, notifications, and
 is presence information for UIs ("also attached: vibepit CLI"). It is
 advisory and grants nothing.
 
-After `attach`, a broker-mode channel sends `welcome`, then replays from
-`since`, then live `frame`s. A client writes `{"op":"send","frame":{...}}` and
+After `attach`, a broker-mode channel sends `welcome`, then the replay (see
+"Log positions"), then live `frame`s. A client writes `{"op":"send","frame":{...}}` and
 `{"op":"detach"}`. A passthrough-mode channel sends `welcome` and then switches
 to a raw byte stream spliced to the agent's socket; vibed flushes any bytes it
 had already buffered. The client speaks the agent's own protocol from then on.
 No envelope reaches a spliced channel after `welcome`, so a passthrough client
 gets `state` and `resolved` only from Codex itself (`thread/status/changed`,
 `serverRequest/resolved`), and other observers of the session get vibed's
-view of them through `watch`.
+view of them through `watch`. Where a broker channel would get
+`error: superseded` or `exited`, vibed closes the spliced channel instead.
+
+In `welcome`, `seq` is the newest entry in the log when vibed accepted the
+attach (0 for an empty log); the replay runs at least up to it.
 
 ## Broker mode (claude, acp)
 
@@ -186,27 +223,43 @@ vibed owns the agent's stdio. It is the agent's only client and multiplexes
 any number of UIs.
 
 - **Log**: every stdout line (`dir: "out"`) and every frame vibed forwards to
-  the agent's stdin on a client's behalf (`dir: "in"`, with `by`) gets a
-  monotonic `seq`. vibed appends it to the log file and fans it out. Inbound
+  the agent's stdin on a client's behalf (`dir: "in"`, with `by`) gets the
+  next `seq` (see "Log positions"). vibed appends it to the log file, then
+  fans it out. Inbound
   frames are logged in their original form, before ID rewriting. Logging
   inbound frames is what lets every client show prompts sent from another
   client: Claude's stream-json output does not echo stdin input, and ACP sends
   `user_message_chunk` only when replaying history. Each client has a bounded
   queue for live frames. Overflow disconnects that client with
-  `error: lagging`, and the client reattaches with `since`. Replay is read
-  from the log file under the channel's own flow control and never goes
+  `error: lagging`, and the client reattaches from its position. Replay is
+  read from the log file under the channel's own flow control and never goes
   through the bounded queue, so a large replay cannot cause another `lagging`
   and a reattach loop. A replaying client is not yet subscribed to live
-  frames: it keeps reading the log until it reaches the newest `seq`, then,
-  under the log's lock, joins the live fan-out at exactly the next `seq`.
-  Frames that arrive during replay are therefore read from the log, never
-  queued, and none is skipped or sent twice. Agent stdout is never blocked by
-  a client.
-- **Compaction**: the driver marks lines the log may drop once superseded,
-  such as streaming deltas of a completed message. Replay of a compacted range
-  sends the final frames only. If `since` falls inside a compacted range, the
-  client receives a full replay, and `welcome` says so (`"replay":"full"`) so
-  the client discards its view first instead of showing frames twice.
+  frames: it keeps reading the log by `seq` until it reaches the newest
+  entry, then, under the log's lock, reads the remaining tail into memory and
+  joins the live fan-out at exactly the next `seq`. It sends that tail after
+  releasing the lock, so a slow channel never holds the lock the agent's
+  output needs. Frames that arrive during replay are therefore read from the
+  log, never queued, and none is skipped or sent twice. Agent stdout is never
+  blocked by a client.
+- **Compaction** keeps streaming fragments from making replays large. A
+  driver uses one or both of two forms:
+  - **Dropping** (`Superseded`) removes a line from the log file when a
+    later line repeats its content in full, such as Claude's `stream_event`
+    deltas once the message's `assistant` frame has arrived. Survivors keep
+    their `seq`. Replay from any `since` stays correct: a client that saw
+    some of the dropped lines receives the later line, as a live client
+    does. Dropping rewrites the log file atomically (a new file, then a
+    rename), and replay reads by `seq` from the current file, so a rename
+    during a replay skips nothing.
+  - **Merging** (`Coalesce`) never changes the log file. It applies only
+    while vibed sends a replay: each complete run of consecutive lines that
+    lies entirely above `since`, such as the chunks of a finished ACP
+    message, goes out as one line with the `seq` of the run's last line. A
+    run that `since` falls inside, or that is still growing, goes out line
+    by line from `since` on, because the client already holds its start or
+    live lines will continue it. Since log entries never change, a position
+    can never point into a rewritten range.
 - **Handshake**: vibed runs it at process start and caches the result for
   `welcome`. It rejects client attempts to repeat it.
 - **Session lifecycle is vibed's**: clients cannot create, load, or resume
@@ -218,7 +271,7 @@ any number of UIs.
   client matches it to its pending request; other clients use it as an
   observation (an ACP `session/prompt` response is how they learn the turn
   ended and why) and never as an answer to a request of their own. Replay
-  delivers logged responses the same way, so a client that reclaimed its ID
+  delivers logged responses the same way, so a client that reattached with its ID
   receives the responses it missed.
 - **Agent requests** (approvals, questions) become pending entries in `state`,
   and `welcome` carries them. Resolution follows the multi-client rules
@@ -229,6 +282,41 @@ any number of UIs.
 - **Stderr** goes to the log as a diagnostic stream and to clients as
   `frame` records with a `stream` field (see the server envelopes), mirroring
   the experiment's debug tab.
+
+### Log positions
+
+A client's position in a broker session is the pair `(epoch, seq)` of the
+last entry it received. It sends the pair with `attach`.
+
+- **`seq`** numbers log entries, starting at 1, so `since: 0` means "nothing
+  seen". Within an epoch it only grows, and an entry keeps its `seq` for as
+  long as it stays in the log.
+- **`epoch`** is a random ID vibed picks whenever it opens a log for
+  writing or starts an agent process for it: when it creates a session,
+  when it restores a session after taking the store lock, when `restart`
+  starts a new agent process, and when an ACP `session/load` replaces the
+  log (the new log's `seq` starts at 1 again). It lives only in vibed's
+  memory and in `welcome`. `exited` is not logged, so a client that was
+  detached while the agent exited and restarted learns it only from the
+  new epoch.
+- **Replay.** If the epoch matches and `since` is a position vibed can
+  serve, vibed replays every entry with a higher `seq`, and `welcome` says
+  `"replay":"since"`. Otherwise it replays the whole log with
+  `"replay":"full"`, and the client discards its view first. A full replay
+  happens when the epoch differs and when `since` is above the newest
+  `seq`.
+- **Crashes.** vibed appends an entry to the log before fanning it out, so
+  no client sees an entry that is not in the log, but it does not fsync. A
+  crash can lose the end of the log or leave a partial last line, which
+  restore drops. Restore continues `seq` from the last complete line, so a
+  lost entry's `seq` may be assigned again. That misleads nobody: restore
+  starts a new epoch, so no client holds a position in it yet. Positions are
+  therefore never promised across a vibed or container restart; a client
+  pays one full replay after one.
+- **Pending requests.** A new epoch, like `exited`, means the agent process
+  that received earlier requests is gone. A client that sees either fails
+  every request it still awaits, because their responses will never arrive.
+  Within one epoch it keeps them, even through a full replay.
 
 ### Multiple clients
 
@@ -280,7 +368,13 @@ type BrokerDriver interface {
 	// Outcome derives the resolved outcome from a client's answer to an
 	// agent request ("allowed", "denied", "answered", or "cancelled").
 	Outcome(request, answer []byte) string
+	// Superseded reports a line that a later line repeats in full, so the
+	// log may drop it.
 	Superseded(line []byte, ctx CompactionContext) bool
+	// Coalesce merges a complete run of consecutive lines into one line
+	// for a replay, or reports false when the run cannot be merged. The
+	// log file keeps the original lines.
+	Coalesce(run [][]byte) (merged []byte, ok bool)
 	Shutdown(rw LineRW, p *os.Process) error
 }
 
@@ -320,8 +414,8 @@ type Frame struct {
   it. Prompts and configuration changes are rejected while a turn runs or a
   configuration change is unacknowledged.
 - **Reference**: `session_id` from `system/init`.
-- **Superseded**: `stream_event` lines of a message whose `assistant` frame
-  has arrived.
+- **Compaction**: `Superseded` drops `stream_event` lines of a message whose
+  `assistant` frame has arrived. Nothing is coalesced.
 
 The process and protocol handling in `experiments/desktop/backend/agent.go`
 moves here. The model and effort handshake in `agent_config.go` (validation,
@@ -358,15 +452,14 @@ tracks which configuration request is unacknowledged, for the turn policy.
   The spec requires this from the client, and vibed is the client.
 - **Resume**: prefer `session/resume` when the log is intact. Use
   `session/load` when the log is lost, or when it is intact but the agent
-  supports only `session/load`. Its replay replaces the log in both cases, so
-  history is never logged twice. Agents advertising neither are
-  `resumable: false`.
-- **Superseded**: none initially. ACP updates are chunks without a final
-  aggregate frame, so an ACP log grows by one line per chunk and a full
-  replay resends every chunk. Until a driver-side aggregation exists, vibed
-  coalesces consecutive `agent_message_chunk` and `agent_thought_chunk`
-  updates of one message into a single logged frame once the message is
-  followed by any other update, and replays the coalesced form.
+  supports only `session/load`. Its replay replaces the log in both cases,
+  with a new epoch, so history is never logged twice. Agents advertising
+  neither are `resumable: false`.
+- **Compaction**: nothing is dropped, because ACP updates are chunks
+  without a final aggregate frame. The log keeps one line per chunk, and
+  without merging a full replay would resend every chunk. `Coalesce` merges
+  consecutive `agent_message_chunk` or `agent_thought_chunk` updates of one
+  message into one chunk once the message is followed by any other update.
 
 ## Passthrough mode (codex)
 
@@ -395,15 +488,15 @@ nothing.
   task 0 spike checks that app-server matches them. Specifically: user input
   from one connection reaches the others as `userMessage` items; the first
   answer wins; and `serverRequest/resolved` reaches every subscriber. vibed
-  still tracks presence: it knows each spliced channel and its `hello` label,
+  still tracks presence: it knows each spliced channel and its `hello` client ID and label,
   and lists it in `state.clients`. vibed's observer connection is not listed.
   The `outcome` of a resolution comes from the `item/completed` status that
   follows (`completed` or `failed` means the work ran and maps to `allowed`;
   `declined` maps to `denied`), or `cancelled` when the request was cleared by
   turn end or interrupt. vibed does not read spliced traffic, so it cannot
   name the answering client: the resolution reaches `watch` and `state`
-  without `by`, and spliced clients learn it from Codex's own
-  `serverRequest/resolved`.
+  without `by` (as a `resolved` envelope on `watch`), and spliced clients
+  learn it from Codex's own `serverRequest/resolved`.
 - **Model and effort**: fields on `turn/start`. Mid-turn input uses
   `turn/steer`.
 - **Codex's own sandbox**: inside vibepit the container is the boundary.

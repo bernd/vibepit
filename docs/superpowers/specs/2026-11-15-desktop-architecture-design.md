@@ -126,35 +126,58 @@ creates a session, and an ID attaches to that session or fails. Without the
 env request, today's behavior is unchanged. `vibepit connect` can adopt the
 same mechanism for a host-side picker later.
 
+vibed consumes the control variables `VIBEPIT_SESSION`, `VIBEPIT_CLIENT`,
+`VIBEPIT_LABEL`, and `VIBEPIT_TAKEOVER` and does not pass them to the shell.
+Other `VIBEPIT_*` variables, such as `VIBEPIT_SHELL_INTEGRATION`, still
+reach the shell.
+
 An older vibed accepts any `env` request and passes it into the shell's
 environment, so it would silently ignore `VIBEPIT_SESSION` and show the
-Bubble Tea selector in the desktop's terminal. The desktop therefore sends
-`VIBEPIT_SESSION` only after `vibepit-terminal` `hello` advertised it, and
-treats a missing subsystem as "session picking unavailable". vibed consumes
-the `VIBEPIT_*` control variables and does not pass them to the shell.
+Bubble Tea selector where the desktop expected a chosen session. The
+desktop never meets one: it refuses to connect to a sandbox whose vibed
+predates `vibepit-terminal` (see "Binaries and version skew").
 
-Taking over the writer role is tied to who held it. Each PTY attach gets a
-writer token, returned in the `vibepit-terminal` view of the session. An
-attach by ID with `VIBEPIT_RECLAIM=<token>` takes over only if that token
-still holds the writer role: after sleep or a network change, vibed still
-counts the old, silently dead connection as the writer until keepalives time
-out, and a plain attach would leave the reconnected desktop read-only. The
-connection supervisor reattaches with the token it held, so an automatic
-reconnect never takes input from another client that became the writer in
-the meantime. `VIBEPIT_TAKEOVER=1` takes over unconditionally; it is sent
-only on an explicit user action ("Take back input", or opening a session
-that another client is typing in).
+**Writer role.** A PTY session keeps one writer, as today: the first client
+to attach becomes the writer, later ones are read-only, and when the writer
+detaches, the most recently attached remaining client is promoted.
+Clients identify themselves as in the agent service ("Client identity" in
+the agent-sessions spec): an attach sends `VIBEPIT_CLIENT=<id>`, a random ID
+the client generated for this terminal view and keeps across its own
+reconnects. Two rules decide who writes:
 
-An explicit takeover can hit a live writer, for example someone typing in
-`vibepit connect` when the desktop attaches. So the old writer is told
-instead of silently losing input:
+- **The same ID replaces.** An attach whose ID is already attached to the
+  session replaces that attachment: vibed swaps the new channel in for the
+  older one in a single step, then closes the older channel, and the new one
+  inherits its role, writer or not. The swap is not a detach followed by an
+  attach, so it never triggers promotion of another client. After sleep or a network
+  change, vibed still counts the old, silently dead connection as attached
+  until keepalives time out, so the reconnecting desktop gets its input back
+  without a takeover. If another client became the writer in the meantime,
+  by promotion or takeover, the old attachment no longer holds the role, and
+  neither does its replacement. An automatic reconnect therefore never takes
+  input from another client.
+- **Takeover is explicit.** `VIBEPIT_TAKEOVER=1` makes the attach the writer
+  unconditionally (`session.TakeOver`). The desktop sends it only on a user
+  action: "Take back input", or opening a session that another client is
+  typing in.
 
-- An attach may name itself with an `env` request `VIBEPIT_CLIENT=<label>`
+An attach without `VIBEPIT_CLIENT`, such as today's `vibepit connect`,
+behaves as it does now and is never replaced.
+
+A takeover can hit a live writer, for example someone typing in
+`vibepit connect` when the desktop takes over. So the old writer is told
+instead of silently losing input (a replacement by the same ID tells no one;
+it is the same client):
+
+- An attach may name itself with an `env` request `VIBEPIT_LABEL=<label>`
   (for example `desktop`). Without it, the label is "another client". vibed
   limits the label to a short run of printable characters before writing it
-  into any terminal stream, so a label cannot carry escape sequences.
+  into any terminal stream or `watch` event, so a label cannot carry escape
+  sequences.
 - vibed writes a one-line notice into the old writer's output stream only,
-  such as `[vibepit] Input taken over by desktop. Reattach to take it back.`
+  such as `[vibepit] Input taken over by desktop.` It does not promise that
+  a plain reattach takes input back: only a takeover does, and
+  `vibepit connect` has no takeover yet.
   It never goes into the PTY, the scrollback emulator, or other clients'
   streams. It is vibed-generated output, so it gets the same CRLF handling
   as the session selector. In an alt-screen program the notice can disturb
@@ -162,14 +185,14 @@ instead of silently losing input:
   input loss is worse.
 - `vibepit-terminal watch` emits a writer change (session, new writer
   label), so the desktop shows the same message as a banner with a "Take back
-  input" action. That action reattaches by ID with `VIBEPIT_TAKEOVER=1` and
-  takes over in turn.
+  input" action. That action reattaches by session ID, with its own client
+  ID and `VIBEPIT_TAKEOVER=1`, and takes over in turn.
 - Keystrokes from a client that is no longer the writer stay rejected, as
   today; the notice tells the user why.
 
 **Watch.** `watch` in both control subsystems streams list changes and state
-changes: a session created, attached, detached, or exited; agent status; agent
-pending requests. This is the sandbox half of the attention center.
+changes: a session created, attached, detached, exited, or killed; terminal
+writer changes; agent status; agent pending requests and their resolutions. This is the sandbox half of the attention center.
 
 **Later: port discovery.** vibed reports listening sockets (from
 `/proc/net/tcp*`) through a `vibepit-ports` subsystem, so the desktop can offer
@@ -222,11 +245,13 @@ in TypeScript.
   running.
 - **Connection supervisor**: owns `host.Conn` per sandbox and its
   reconnection. When the connection returns after sleep or a network change,
-  it reattaches open terminals (by session ID and writer token; vibed replays
+  it reattaches open terminals (by session ID and client ID; vibed replays
   scrollback),
-  agent sessions (by `since`), and network watches (fresh `/events`
-  subscription plus reset). The frontend sees connection states (`connecting`,
-  `connected`, `reconnecting`, `lost`) instead of errors.
+  agent sessions (by client ID and log position), and network watches (fresh `/events`
+  subscription plus reset). Before features attach, every connect checks
+  the sandbox's versions (see "Binaries and version skew"). The frontend
+  sees connection states (`connecting`, `connected`, `reconnecting`, `lost`,
+  and `unsupported` for a sandbox that is too old) instead of errors.
 - **Attention center**: one list per sandbox of items needing the user. Each
   item has a source, kind, summary, deadline, and a resolve or withdraw
   signal. Sources:
@@ -350,9 +375,9 @@ type Instance interface {
 preferences, and the bridge topics and streams scoped to its window. Each
 feature reattaches its own resources in `Connected`:
 
-- **terminal**: reattaches sessions by ID;
-- **agents**: broker sessions reattach with `since`, Codex sessions with
-  `thread/resume`;
+- **terminal**: reattaches sessions by session ID and client ID;
+- **agents**: broker sessions reattach with their client ID and log
+  position, Codex sessions with their client ID and `thread/resume`;
 - **network**: opens a fresh `/events` subscription and resets its view.
 
 ### App services
@@ -765,11 +790,28 @@ consequences:
   lifecycle from the desktop does not work there, as with the CLI today.
   Fixing it means also embedding a Linux amd64 binary in the release
   pipeline.
-- **The desktop must work with older sandboxes.** The `hello` versioning on
-  every subsystem covers this. A missing subsystem (an old vibed rejects it as
-  an unknown subsystem) means "feature unavailable for this sandbox; restart
-  it with a newer vibepit", shown per feature rather than as a failed
-  connection.
+- **The desktop refuses sandboxes older than it supports.** On every
+  connect, before any feature attaches, the connection supervisor checks the
+  `hello` answers of `vibepit-terminal` and `vibepit-agent`, using the `watch`
+  channels it opens on both for the attention center rather than separate
+  probe channels. If a subsystem is
+  missing (an old vibed rejects it as an unknown subsystem) or answers with
+  a version below the desktop's minimum for it, the connection fails with an
+  error naming both versions: "This sandbox runs vibepit <version>; the
+  desktop needs <minimum> or newer. Restart it with `vibepit down` and
+  `vibepit up`." The
+  `hello` answer therefore carries the vibepit release version as well as
+  the protocol version, and the desktop records, next to each subsystem's
+  minimum protocol version, the vibepit release that introduced it, which
+  is the `<minimum>` it names. Supporting older sandboxes feature by feature would
+  mean a degraded mode for every feature (a terminal without session
+  picking, an agent view without vibed) that would be written once and
+  rarely tested.
+- **Above the minimum, capabilities decide.** A sandbox newer than the
+  minimum but older than the desktop may lack an operation added later.
+  `hello` capabilities cover that, and the desktop hides what the sandbox
+  does not offer. The desktop raises a minimum only when it drops support
+  for a protocol version, not with every release.
 
 ## Modules and packaging
 
@@ -787,7 +829,7 @@ consequences:
 | Experiment code | Destination |
 |---|---|
 | `backend/service.go` discovery, credentials, dial | `host` (Discovery, Credentials, Connect) |
-| `backend/service.go` terminal open, write, resize | `terminalclient`; reattach by session ID |
+| `backend/service.go` terminal open, write, resize | `terminalclient`; reattach by session ID and client ID |
 | `backend/service.go` network watch and decisions | Host control client plus the desktop attention center |
 | `backend/agent.go` process and protocol handling | vibed claude driver (agent-sessions spec) |
 | `backend/workspaces.go` notices and summaries | Attention center fed by `watch` and `/events` |
@@ -828,7 +870,7 @@ UI design spec with:
    - terminal tabs, find, send selection to an agent, and OSC 7501 status from
      an agent running in the terminal;
    - investigating a blocked host in the network monitor and saving a rule;
-   - an older sandbox with features unavailable.
+   - connecting to a sandbox older than the desktop supports.
 3. **A boundary check table**: each UI element and interaction mapped to its
    feature, data source (vibed subsystem, proxy, host), protocol message, and
    package. An element needing two features, data no boundary provides, or
@@ -865,8 +907,10 @@ Questions the design is expected to settle:
 1. **Host library extraction**, including `host/network` (the monitor's
    decision logic): no behavior change; CLI tests prove parity. This unblocks
    everything else.
-2. **Terminal service additions** (`VIBEPIT_SESSION`, `vibepit-terminal`
-   with `hello`, `list`, `watch`) and **stream relay spike**.
+2. **Terminal service additions** (`VIBEPIT_SESSION`; client IDs with
+   `VIBEPIT_CLIENT` and `VIBEPIT_TAKEOVER`; `VIBEPIT_LABEL` labels;
+   `vibepit-terminal` with `hello`, `list`, `watch`) and **stream relay
+   spike**.
 3. **Agent sessions**, following the agent-sessions plan. Its task 0 spikes
    can run in parallel with steps 1 and 2.
 4. **Desktop restructuring** into the internal structure above: the `app`
@@ -891,8 +935,9 @@ Questions the design is expected to settle:
 4. **The desktop bundles the `vibepit` binary**, built from the same commit as
    its host library. Sandboxes the desktop starts mount this binary, keeping
    vibed and the proxy at the desktop's protocol versions. Sandboxes started
-   by a separately installed CLI are still attachable, with `hello`
-   versioning covering the skew.
+   by a separately installed CLI are attachable when they meet the
+   desktop's minimum versions; older ones are refused (see "Binaries and
+   version skew").
 5. **One agents feature** with driver plugins, not one feature per agent.
 6. **Attention is a separate core component**, not part of workspace.
 7. **Generated bindings** (`wails3 generate bindings`), committed and checked

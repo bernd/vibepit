@@ -21,7 +21,7 @@
 
 ## Review Focus
 
-- A client that disconnects mid-turn and reattaches with `since` sees every frame exactly once and the same pending requests (tasks 2, 3).
+- A client that disconnects mid-turn and reattaches from its log position sees every frame exactly once and the same pending requests (tasks 2, 3).
 - Two clients answering one approval: exactly one response reaches the agent, and both see `resolved` with the winning client and outcome (tasks 2, 4, 5).
 - A prompt sent by one client appears in every other client's stream and in replay, as an inbound frame in its original form (task 2).
 - An answer racing the agent's cancel is never forwarded, and `resolved` reports `cancelled` (tasks 2, 4, 5).
@@ -46,10 +46,10 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 - `NewManager(cfg ManagerConfig) (*Manager, error)`, where the config holds the limit, store root, state file path, and driver registry.
 - `(*Manager).Create(ctx, driver string, opts CreateOptions) (*Session, error)`, plus `.Get(id)`, `.List() []Info`, `.Restart(ctx, id)`, `.Kill(id)`, and `.Close()`.
 - `State{Status, Busy, Pending []Pending, Model, Resumable, AgentRef, Clients []ClientInfo}` (clients are filled in by task 2).
-- Store layout `<root>/<project>/<id>/meta.json` and `log.jsonl`, scoped per project with a `flock`ed lock file because the home volume is shared by all sandboxes; a vibed that cannot take the lock reports the agent service unavailable. Restoring on start marks sessions `exited`, drops a truncated last log line, and continues `seq` from the maximum recorded in `meta.json`.
+- Store layout `<root>/<project>/<id>/meta.json` (driver, options, agent reference) and `log.jsonl`, scoped per project with a `flock`ed lock file because the home volume is shared by all sandboxes; a vibed that cannot take the lock reports the agent service unavailable and retries the lock on every new channel. Restoring on start marks sessions `exited`, drops a partial last log line, and gives each restored log a new epoch (restore also runs when the lock is taken after start), with `seq` continuing from the last complete line. No log position or client ID is stored.
 - Process start with `setsid`. Shutdown is the driver's orderly path, then a process-group kill after a grace period.
 
-- [ ] Write table-driven tests against a fake driver, using a helper process re-executed from the test binary: limits, list, kill, exited retention, restore after manager restart, and state-file contents.
+- [ ] Write table-driven tests against a fake driver, using a helper process re-executed from the test binary: limits, list, kill, exited retention, restore after manager restart (partial last line dropped, a new epoch, `seq` continuing from the last complete line), a second manager on the same project store reporting the service unavailable until the first releases the lock, and state-file contents.
 - [ ] Implement the manager and store.
 
 ## Task 2: Broker engine
@@ -58,13 +58,13 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 
 **Interfaces:**
 - The `BrokerDriver` and `Frame` types from the spec.
-- `(*Session).Attach(label, reclaim string, since uint64) (*Client, Welcome, error)`, plus `(*Client).Send(frame json.RawMessage) error`, `.Recv() (Envelope, error)`, and `.Detach()`. The label comes from the client's `hello` and appears in `state.clients`. A `reclaim` ID still attached closes the older channel with `error: superseded`; an unknown ID yields a fresh one.
+- `(*Session).Attach(client, label string, pos Position) (*Client, Welcome, error)` with `Position{Epoch string; Since uint64}`, plus `(*Client).Send(frame json.RawMessage) error`, `.Recv() (Envelope, error)`, and `.Detach()`. The client ID and label come from the client's `hello` and appear in `state.clients`. Attaching with an ID that is still attached closes the older channel with `error: superseded`, and the new attachment receives the responses addressed to that ID.
 - Multi-client rules from the spec's "Multiple clients" section: turn and settings serialization via `CheckSend`, first answer wins, cancel wins over a late answer, interrupt always allowed.
 - Bounded per-client queues; overflow sends `error: lagging` and closes the client.
-- The log assigns seqs (starting at 1, never reused, the maximum kept in `meta.json`), compacts superseded lines, and replays from `since` (full replay when `since` refers to entries no longer in the log). A replaying client joins the live fan-out only after catching up with the log, under the log's lock.
+- The log assigns `seq`s from 1 within an epoch, drops `Superseded` lines from the file (rewritten atomically, survivors keep their `seq`), and replays from a position: every entry above `since` when the epoch matches, otherwise a full replay with `replay: full` (epoch mismatch, or `since` above the newest entry). `Coalesce` merges complete runs that lie entirely above `since`, at replay time only; the file keeps every line. A replaying client joins the live fan-out only after catching up with the log, under the log's lock.
 - Client request responses are fanned out to every client with `for` naming the requester and the original ID restored.
 
-- [ ] Test against a fake line-protocol driver: replay correctness and exactly-once delivery across reattach, including frames the agent writes while a long replay is in progress; responses delivered to every client with `for`, and to a reclaiming client on replay; inbound frames logged with `dir` and `by`, before ID rewriting; first-response-wins for agent requests, with `resolved` broadcast carrying `by` and `outcome`; a late answer after an agent cancel; presence in `state.clients` on attach and detach; reclaiming an ID routes pending responses to the new channel and supersedes a still-attached old channel; ID rewrite round-trip for numeric and string IDs; lagging client eviction without blocking the agent; stderr capture.
+- [ ] Test against a fake line-protocol driver: replay correctness and exactly-once delivery across reattach, including frames the agent writes while a long replay is in progress and a dropping rename during a replay; full replay on an epoch mismatch (including after `restart`) and on `since` above the newest entry; replay-time merging of complete runs above `since`, with a run that `since` falls inside, or that is still growing, sent line by line; replay from inside a dropped range delivering the superseding line; responses delivered to every client with `for`, and on replay to a client that reattached with the same ID; inbound frames logged with `dir` and `by`, before ID rewriting; first-response-wins for agent requests, with `resolved` broadcast carrying `by` and `outcome`; a late answer after an agent cancel; presence in `state.clients` on attach and detach; reattaching with the same client ID routes pending responses to the new channel and supersedes a still-attached old channel; ID rewrite round-trip for numeric and string IDs; lagging client eviction without blocking the agent; stderr capture.
 - [ ] Implement.
 
 ## Task 3: Subsystem and wire protocol in vibed
@@ -76,9 +76,9 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 - The `handleSessionChannel` loop accepts `subsystem` with payload `vibepit-agent` before dispatch, marks the channel dispatched (later `pty-req`, `env`, `shell`, `exec`, and `subsystem` requests are rejected), and starts `handleAgentChannel`. It rejects other subsystems as before.
 - Envelope types shared by server and client in `agentsession/wire.go`.
 - `agentclient.List`, `Create`, `Attach`, `Restart`, `Kill`, and `Watch`, each taking an `*ssh.Client`.
-- The `watch` operation: `sessions` once, then on every create, exit, and `state` change of any session in the project.
+- The `watch` operation: `sessions` once, then on every create, exit, kill, and `state` change of any session in the project, plus every session's `resolved` envelopes.
 
-- [ ] Add an in-process sshd test, modeled on `cmd/connect_test.go`: create, attach, receive frames, disconnect the SSH connection mid-stream, reconnect, attach with `since`, then kill and list. A `watch` channel sees the create, the state changes, and the exit. Requests after the subsystem on the same channel are rejected.
+- [ ] Add an in-process sshd test, modeled on `cmd/connect_test.go`: create, attach, receive frames, disconnect the SSH connection mid-stream, reconnect, attach with the same client ID and the last `(epoch, since)` position, then kill and list. A `watch` channel sees the create, the state changes, a `resolved` envelope with its `session`, the exit, and the kill. Requests after the subsystem on the same channel are rejected, and so is `attach` without a well-formed client ID.
 - [ ] Wire `agentsession.NewManager` into `cmd/vibed.go` next to the PTY session manager.
 - [ ] Implement.
 
@@ -93,8 +93,8 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 
 **Files:** Create `agentsession/acp/driver.go`, `agentsession/acp/agents.go` (the known-agent command table), with tests.
 
-- [ ] Test the handshake (no fs or terminal capabilities); chunk coalescing in the log; the choice between `session/new`, `session/resume`, and `session/load`; rejected client methods; generic agent-request classification, including an unknown vendor method; `Outcome` from the selected option's kind, cancellation, and a vendor request answered with a result; prompt turn start and end; cancel answering pending permissions; and the `authenticate` pass-through window.
-- [ ] Implement, with a `session/load` replay replacing the log (with fresh seqs above the old maximum) when the log was lost.
+- [ ] Test the handshake (no fs or terminal capabilities); `Coalesce` of message and thought chunks; the choice between `session/new`, `session/resume`, and `session/load`; rejected client methods; generic agent-request classification, including an unknown vendor method; `Outcome` from the selected option's kind, cancellation, and a vendor request answered with a result; prompt turn start and end; cancel answering pending permissions; and the `authenticate` pass-through window.
+- [ ] Implement, with a `session/load` replay replacing the log under a new epoch, `seq` starting at 1.
 
 ## Task 6: codex driver (passthrough)
 
