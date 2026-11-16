@@ -235,6 +235,11 @@ Global settings apply to every project. The global config file is:
 $XDG_CONFIG_HOME/vibepit/config.yaml
 ```
 
+That is `~/.config/vibepit/config.yaml` on Linux and
+`~/Library/Application Support/vibepit/config.yaml` on macOS, unless you set
+`XDG_CONFIG_HOME`. Run `vibepit paths global-config` to print the path on
+your machine. See [Files and Directories](../reference/files.md).
+
 It supports the following keys:
 
 ```yaml

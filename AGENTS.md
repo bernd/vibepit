@@ -75,6 +75,7 @@ Current root commands are defined in `cmd/root.go` and include:
 - `vibed` -- internal SSH daemon (runs inside sandbox container, hidden).
 - `monitor` -- interactive TUI for logs and allowlist/admin actions.
 - `update` -- update binary and pull latest runtime images.
+- `paths` -- show where vibepit keeps its config, session, and cache files.
 
 When docs and behavior differ, treat `cmd/root.go` and command files under
 `cmd/` as the source of truth.
@@ -108,6 +109,8 @@ Built with `urfave/cli/v3`.
 - `vibed` runs the SSH daemon inside the sandbox container (internal).
 - `monitor` provides interactive control.
 - `update` refreshes local runtime images.
+- `paths` prints the resolved config, session, and cache paths, or one of
+  them by name for scripts.
 
 ### Proxy (`proxy/`)
 

@@ -56,6 +56,7 @@ func RootCommand() *cli.Command {
 			VibedCommand(),
 			MonitorCommand(),
 			UpdateCommand(),
+			PathsCommand(),
 		},
 	}
 }

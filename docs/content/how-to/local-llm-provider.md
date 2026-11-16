@@ -18,7 +18,7 @@ so the sandbox cannot reach services on your local network. Open only the range
 where your LLM provider runs and keep everything else blocked.
 
 Add your subnet, or single IPs, to the `allow-cidr` list in your global config
-(`~/.config/vibepit/config.yaml`):
+(run `vibepit paths global-config` to see where it is):
 
 ```yaml
 # Exempt these ranges from the default CIDR blocklist.

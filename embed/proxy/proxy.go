@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/adrg/xdg"
 	"github.com/bernd/vibepit/config"
 )
 
@@ -28,16 +27,7 @@ func CachedProxyBinary() (string, error) {
 		return "", fmt.Errorf("no embedded Linux binary found")
 	}
 
-	cacheDir := xdg.CacheHome
-	if cacheDir == "" {
-		userCacheDir, err := os.UserCacheDir()
-		if err != nil {
-			return "", fmt.Errorf("cache dir: %w", err)
-		}
-		cacheDir = userCacheDir
-	}
-
-	return cachedBinary(data, filepath.Join(cacheDir, config.CacheDirName, "bin"))
+	return cachedBinary(data, filepath.Join(config.CacheDir(), "bin"))
 }
 
 // cachedBinary writes data to dir/<name> where name is derived from a content
