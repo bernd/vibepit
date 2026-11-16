@@ -45,8 +45,8 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 **Interfaces:**
 - `NewManager(cfg ManagerConfig) (*Manager, error)`, where the config holds the limit, store root, state file path, and driver registry.
 - `(*Manager).Create(ctx, driver string, opts CreateOptions) (*Session, error)`, plus `.Get(id)`, `.List() []Info`, `.Restart(ctx, id)`, `.Kill(id)`, and `.Close()`.
-- `State{Status, Busy, Pending []Pending, Model, Resumable, AgentRef}`.
-- Store layout `<root>/<id>/meta.json` and `log.jsonl`. Restoring on start marks sessions `exited`.
+- `State{Status, Busy, Pending []Pending, Model, Resumable, AgentRef, Clients []ClientInfo}` (clients are filled in by task 2).
+- Store layout `<root>/<project>/<id>/meta.json` and `log.jsonl`, scoped per project with a lock file because the home volume is shared by all sandboxes. Restoring on start marks sessions `exited` and continues `seq` from the log.
 - Process start with `setsid`. Shutdown is the driver's orderly path, then a process-group kill after a grace period.
 
 - [ ] Write table-driven tests against a fake driver, using a helper process re-executed from the test binary: limits, list, kill, exited retention, restore after manager restart, and state-file contents.
@@ -58,12 +58,12 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 
 **Interfaces:**
 - The `BrokerDriver` and `Frame` types from the spec.
-- `(*Session).Attach(label string, since uint64) (*Client, Welcome, error)`, plus `(*Client).Send(frame json.RawMessage) error`, `.Recv() (Envelope, error)`, and `.Detach()`. The label comes from the client's `hello` and appears in `state.clients`.
+- `(*Session).Attach(label, reclaim string, since uint64) (*Client, Welcome, error)`, plus `(*Client).Send(frame json.RawMessage) error`, `.Recv() (Envelope, error)`, and `.Detach()`. The label comes from the client's `hello` and appears in `state.clients`. A `reclaim` ID still attached closes the older channel with `error: superseded`; an unknown ID yields a fresh one.
 - Multi-client rules from the spec's "Multiple clients" section: turn and settings serialization via `CheckSend`, first answer wins, cancel wins over a late answer, interrupt always allowed.
 - Bounded per-client queues; overflow sends `error: lagging` and closes the client.
 - The log assigns seqs, compacts superseded lines, and replays from `since` (full replay when `since` falls inside a compacted range).
 
-- [ ] Test against a fake line-protocol driver: replay correctness and exactly-once delivery across reattach; inbound frames logged with `dir` and `by`, before ID rewriting; first-response-wins for agent requests, with `resolved` broadcast carrying `by` and `outcome`; a late answer after an agent cancel; presence in `state.clients` on attach and detach; ID rewrite round-trip for numeric and string IDs; lagging client eviction without blocking the agent; stderr capture.
+- [ ] Test against a fake line-protocol driver: replay correctness and exactly-once delivery across reattach; inbound frames logged with `dir` and `by`, before ID rewriting; first-response-wins for agent requests, with `resolved` broadcast carrying `by` and `outcome`; a late answer after an agent cancel; presence in `state.clients` on attach and detach; reclaiming an ID routes pending responses to the new channel and supersedes a still-attached old channel; ID rewrite round-trip for numeric and string IDs; lagging client eviction without blocking the agent; stderr capture.
 - [ ] Implement.
 
 ## Task 3: Subsystem and wire protocol in vibed
@@ -82,10 +82,10 @@ Record findings in the spec's "Risks to resolve first" section and adjust tasks 
 
 ## Task 4: claude driver
 
-**Files:** Create `agentsession/claude/driver.go`, with tests and synthetic fixtures under `agentsession/claude/testdata/`. Source the logic from `experiments/desktop/backend/agent.go` and `agent_config.go`.
+**Files:** Create `agentsession/claude/driver.go`, with tests and synthetic fixtures under `agentsession/claude/testdata/`. Source the process and protocol logic from `experiments/desktop/backend/agent.go`; the `agent_config.go` handshake moves to `@vibepit/agent-ui` in task 7.
 
 - [ ] Test with recorded synthetic frames: classification (`can_use_tool`, `control_cancel_request`, `control_response`, `result`); `Outcome` for allow and deny; turn and config policy in `CheckSend`; reference from `system/init`; superseded `stream_event` lines; resume argv.
-- [ ] Implement, including `$SHELL -c` command execution and orderly shutdown by closing stdin.
+- [ ] Implement, including `$SHELL -c 'exec …'` command execution with validated, shell-quoted option values, and orderly shutdown by closing stdin.
 
 ## Task 5: acp driver
 
@@ -119,6 +119,6 @@ Driver UIs go into `packages/agent-ui` (`@vibepit/agent-ui`; see "Agent UI packa
 
 **Files:** Modify `cmd/status.go`, `AGENTS.md` (architecture section), and `docs/content/` (a reference page for agent sessions).
 
-- [ ] Show agent sessions in `vibepit status` from the vibed agent state file.
+- [ ] Show agent sessions in `vibepit status` by reading them over SSH (`list`), since the vibed state file lives inside the sandbox.
 - [ ] Document the subsystem, drivers, persistence, and the threat-model statement.
 - [ ] Run `make test`, `make test-integration`, and `make test-bats`.

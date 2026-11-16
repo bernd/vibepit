@@ -122,9 +122,31 @@ misbehaving.
 Bubble Tea session selector whenever detached sessions exist
 (`handlePTYSession`). A graphical client needs to pick sessions itself.
 Add an `env` request `VIBEPIT_SESSION=new|<id>` before `shell`: `new` always
-creates a session, and an ID attaches to that session or fails. Without it,
-today's behavior is unchanged. `vibepit connect` can adopt the same mechanism
-for a host-side picker later.
+creates a session, and an ID attaches to that session or fails. An attach by
+ID takes over the writer role: after sleep or a network change, vibed still
+counts the old, silently dead connection as the writer until keepalives time
+out, and a plain attach would leave the reconnected desktop read-only. Without
+the env request, today's behavior is unchanged. `vibepit connect` can adopt the
+same mechanism for a host-side picker later.
+
+The takeover also applies when the old writer is alive, for example someone
+typing in `vibepit connect` when the desktop attaches. So the old writer is
+told instead of silently losing input:
+
+- An attach may name itself with an `env` request `VIBEPIT_CLIENT=<label>`
+  (for example `desktop`). Without it, the label is "another client".
+- vibed writes a one-line notice into the old writer's output stream only,
+  such as `[vibepit] Input taken over by desktop. Reattach to take it back.`
+  It never goes into the PTY, the scrollback emulator, or other clients'
+  streams. It is vibed-generated output, so it gets the same CRLF handling
+  as the session selector. In an alt-screen program the notice can disturb
+  the display until the next redraw. That is accepted, because silent
+  input loss is worse.
+- `vibepit-terminal watch` emits a writer change (session, new writer
+  label), so the desktop shows the same message as a banner with a "Take back
+  input" action. That action reattaches by ID and takes over in turn.
+- Keystrokes from a client that is no longer the writer stay rejected, as
+  today; the notice tells the user why.
 
 **Watch.** `watch` in both control subsystems streams list changes and state
 changes: a session created, attached, detached, or exited; agent status; agent
@@ -234,15 +256,24 @@ not the reverse. The browser preview stays demo-only.
 
 ## Desktop internal structure
 
-The desktop module is split into three layers plus a composition root. Features
-are vertical slices: one Go package and one frontend folder each, meeting
-through generated bindings. Everything runs in one process. Durable state lives
-in vibed and the proxy, so a host daemon would add nothing.
+The desktop module is split into three layers plus a composition root. The top
+layer holds vertical slices of two kinds, each one Go package and one frontend
+folder meeting through generated bindings:
+
+- **workspace features**, with one instance per sandbox window: terminal,
+  agents, network, and later ports;
+- **app services**, with one instance per application and no workspace:
+  sandboxes (discovery, the sandbox picker, opening and focusing windows, and
+  later up and down).
+
+Everything runs in one process. Durable state lives in vibed and the proxy, so
+a host daemon would add nothing.
 
 ```
-┌ Features ───────────────────────────────────────────────────────────────────┐
-│ sandboxes   terminal   agents (drivers: claude | codex | acp)   network     │
-│ later: ports                                                                │
+┌ Workspace features (per window) ────────────────────────────────────────────┐
+│ terminal   agents (drivers: claude | codex | acp)   network   later: ports  │
+├ App services (per application) ─────────────────────────────────────────────┤
+│ sandboxes                                                                   │
 └──────┬─────────────┬───────────────────────────────┬────────────────────────┘
        │ uses        │ puts items into                │ uses
 ┌ Workspace core ────▼────────────────────────────────▼────────────────────────┐
@@ -259,8 +290,10 @@ in vibed and the proxy, so a host daemon would add nothing.
 
 ### Dependency rules
 
-- Features depend on the workspace core and on host-port interfaces only.
-  They never import each other, the shell, or a concrete host adapter.
+- Workspace features and app services depend on the workspace core and on
+  host-port interfaces only. They never import each other (a feature never
+  imports an app service, and the reverse), the shell, or a concrete host
+  adapter.
 - The core depends on host-port and platform-port interfaces only.
 - Adapters implement ports and import no feature and no core package except
   the port definitions.
@@ -295,9 +328,35 @@ feature reattaches its own resources in `Connected`:
 - **terminal**: reattaches sessions by ID;
 - **agents**: broker sessions reattach with `since`, Codex sessions with
   `thread/resume`;
-- **network**: opens a fresh `/events` subscription and resets its view;
-- **sandboxes**: has no workspace-scoped resources, and also serves the
-  window-less sandbox picker.
+- **network**: opens a fresh `/events` subscription and resets its view.
+
+### App services
+
+Some functionality has no workspace: the sandbox picker exists before any
+sandbox window is open, and the tray menu lists sandboxes across windows. App
+services run once per application, outside the per-window lifecycle:
+
+```go
+type AppService interface {
+	Name() string
+	Start(ctx context.Context, app *core.App) error
+	Stop() error
+}
+```
+
+`core.App` provides host ports (sandbox discovery, and lifecycle once it
+exists), the workspace registry (open a window for a sandbox, or focus its
+existing window), the attention sink, and preferences.
+
+- **sandboxes** is the only app service for now. It keeps the sandbox list
+  current from the container runtime, serves the picker and the tray menu's
+  sandbox entries, and opens or focuses workspace windows through the
+  registry. Up, down, and graphical setup are added here (delivery step 5).
+- **Window kinds**: a workspace window shows one sandbox. The picker window
+  has no workspace and may call only app services.
+- **Attention is not an app service.** It is a core component (below) because
+  workspace features and app services both put items into it. It is
+  application-scoped in the same way.
 
 ### Agents feature
 
@@ -607,12 +666,16 @@ notifications through platform ports, so it is testable without Wails.
 
 ### Bridge and bindings
 
-- **Calls**: each feature registers its own Wails service (`TerminalService`,
-  `AgentService`, `NetworkService`, `SandboxService`), plus core services for
-  workspace and attention. Methods take `context.Context`. The bridge resolves
-  the workspace from the calling window (`ctx.Value(application.WindowKey)`)
-  so the frontend never passes workspace IDs and cannot address another
-  window's workspace.
+- **Calls**: each workspace feature registers its own Wails service
+  (`TerminalService`, `AgentService`, `NetworkService`), each app service its
+  own (`SandboxService`), plus core services for workspace and attention.
+  Methods take `context.Context`. For workspace feature services, the bridge
+  resolves the workspace from the calling window
+  (`ctx.Value(application.WindowKey)`), so the frontend never passes
+  workspace IDs and cannot address another window's workspace. A call from a
+  window without a workspace (the picker) to a workspace feature service is
+  rejected. App service methods resolve no workspace and are callable from
+  every window.
 - **Bindings** are generated with `wails3 generate bindings` into
   `frontend/src/bindings/` and committed. CI regenerates them and fails on
   any difference. Feature contracts are typed on both sides; hand-written
@@ -697,7 +760,7 @@ consequences:
 | `backend/service.go` discovery, credentials, dial | `host` (Discovery, Credentials, Connect) |
 | `backend/service.go` terminal open, write, resize | `terminalclient`; reattach by session ID |
 | `backend/service.go` network watch and decisions | Host control client plus the desktop attention center |
-| `backend/agent.go`, `agent_config.go` protocol handling | vibed claude driver (agent-sessions spec) |
+| `backend/agent.go` process and protocol handling | vibed claude driver (agent-sessions spec) |
 | `backend/workspaces.go` notices and summaries | Attention center fed by `watch` and `/events` |
 | `backend/stream_log.go` | Diagnostics recorder |
 | Network panel in `App.svelte` | Network feature (held requests, log, hosts, rules) |

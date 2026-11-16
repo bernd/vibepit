@@ -68,10 +68,20 @@ reference, a status, and a log.
 ### Persistence
 
 The session metadata and log live under
-`~/.local/state/vibed/agents/<id>/` in the home volume, so they survive
-container restarts. A summary state file in `/tmp`, like
-`ctr.SessionStatePath`, serves `vibepit status`. On vibed start, sessions found
-in the home volume are listed as `exited` and can be resumed.
+`~/.local/state/vibed/agents/<project>/<id>/` in the home volume, so they
+survive container restarts. `<project>` is derived from the project directory
+(for example a hash of its path). The `vibepit-home` volume is shared by every
+sandbox on the host, including concurrently running ones for other projects,
+so the store must be scoped per project: vibed lists, restores, and allocates
+IDs only within its own project directory, and holds a lock file there so two
+sandboxes for the same project never supervise or resume the same agent
+session. A summary state file in `/tmp`, like `ctr.SessionStatePath`, is
+written for diagnostics. `vibepit status` runs on the host and cannot read it
+directly; showing agent sessions there needs a read over SSH (`list` or an
+exec of `cat`). On vibed start, sessions found in its project's store are
+listed as `exited` and can be resumed. A restored session's `seq` continues
+from the last entry in its log, so a client's `since` stays valid across
+vibed and container restarts.
 
 ### Wire protocol
 
@@ -79,7 +89,10 @@ The SSH client opens a session channel and requests subsystem
 `vibepit-agent`. vibed handles this in the `handleSessionChannel` request loop,
 before dispatch, alongside the existing `env` and forwards requests. Every line
 is an envelope object. **One channel carries one operation.** `list`, `create`,
-`kill`, and `restart` reply and close. `attach` keeps the channel open.
+`kill`, and `restart` reply and close. `attach` and `watch` keep the channel
+open. `watch` sends `sessions` once, then a `sessions` envelope whenever a
+session is created, exits, or changes `state` (status, pending requests, turn
+end). The desktop's attention center depends on it.
 
 Every channel starts with `{"op":"hello","version":N}`. vibed answers with its
 version and capabilities (see "Binaries and version skew" in
@@ -91,6 +104,7 @@ version and capabilities (see "Binaries and version skew" in
 {"op":"attach","session":"a1","since":4182}   // since: last seq seen, 0 for full replay
 {"op":"restart","session":"a1"}
 {"op":"kill","session":"a1"}
+{"op":"watch"}                                // streams state changes of all sessions
 ```
 
 `create` options are a per-driver allowlist, never free-form argv:
@@ -119,7 +133,20 @@ Server envelopes:
 
 The client's `hello` carries a display label (`{"op":"hello","version":N,
 "label":"desktop"}`). `welcome` returns the ID vibed assigned to this
-attachment (`client`).
+attachment (`client`). A reattaching client passes its previous ID
+(`"client":"c7"` in `hello`) to reclaim it. Otherwise responses to requests it
+sent before the disconnect, which are routed by client ID, would reach no one,
+and a settings change it started would stay unacknowledged.
+
+Two live channels never share an ID. If the reclaimed ID is still attached,
+vibed closes the older channel with `error: superseded` before the new one
+receives `welcome`. The newest claim wins rather than being refused, because
+the usual holder is the same client's dead connection: after sleep or a
+network change, vibed still counts it as attached until keepalives time out.
+Refusing would block exactly the reconnect that reclaiming exists for. All
+clients authenticate with the same session key, so this transfers no
+privilege. An ID vibed never assigned in this session is ignored, and the
+client gets a fresh one.
 
 `state` is the only normalized structure:
 `{status, busy, pending:[{id, kind, summary}], model, resumable, agentRef,
@@ -146,12 +173,16 @@ any number of UIs.
   inbound frames is what lets every client show prompts sent from another
   client: Claude's stream-json output does not echo stdin input, and ACP sends
   `user_message_chunk` only when replaying history. Each client has a bounded
-  queue. Overflow disconnects that client with `error: lagging`, and the
-  client reattaches with `since`. Agent stdout is never blocked by a client.
+  queue for live frames. Overflow disconnects that client with
+  `error: lagging`, and the client reattaches with `since`. Replay is read
+  from the log file under the channel's own flow control and never goes
+  through the bounded queue, so a large replay cannot cause another `lagging`
+  and a reattach loop. Agent stdout is never blocked by a client.
 - **Compaction**: the driver marks lines the log may drop once superseded,
   such as streaming deltas of a completed message. Replay of a compacted range
   sends the final frames only. If `since` falls inside a compacted range, the
-  client receives a full replay.
+  client receives a full replay, and `welcome` says so (`"replay":"full"`) so
+  the client discards its view first instead of showing frames twice.
 - **Handshake**: vibed runs it at process start and caches the result for
   `welcome`. It rejects client attempts to repeat it.
 - **Session lifecycle is vibed's**: clients cannot create, load, or resume
@@ -237,8 +268,12 @@ type Frame struct {
   --output-format stream-json --include-partial-messages
   --permission-prompt-tool stdio`, plus `--permission-mode default` or
   `--dangerously-skip-permissions`, plus `--resume <ref>` when resuming. The
-  `create` handler passes the command to `$SHELL -c`, as exec sessions do, so
-  login PATH setup applies.
+  `create` handler passes the command to `$SHELL -c` prefixed with `exec`, as
+  the experiment does, so login PATH setup applies and the supervised process
+  is `claude` itself rather than the shell. Every option value placed in the
+  command string (such as the `resume` reference) is validated against the
+  driver's expected format and shell-quoted; an allowlist of option names does
+  not stop injection through their values.
 - **Handshake**: `control_request{subtype:"initialize"}`. The cached response
   carries models, the permission mode, and commands.
 - **Agent requests**: `control_request` with `can_use_tool`. Other subtypes
@@ -255,8 +290,11 @@ type Frame struct {
 - **Superseded**: `stream_event` lines of a message whose `assistant` frame
   has arrived.
 
-The existing logic in `experiments/desktop/backend/agent.go` and
-`agent_config.go` moves here. The desktop keeps only the UI-side state.
+The process and protocol handling in `experiments/desktop/backend/agent.go`
+moves here. The model and effort handshake in `agent_config.go` (validation,
+acknowledgement matching, timeouts) moves to the Claude session controller in
+`@vibepit/agent-ui/core` (see the desktop architecture spec); vibed only
+tracks which configuration request is unacknowledged, for the turn policy.
 
 ### acp driver
 
@@ -272,8 +310,8 @@ The existing logic in `experiments/desktop/backend/agent.go` and
   from `toolCall.title` when present, otherwise the method name.
 - **Outcome**: for `session/request_permission`, the selected `optionId` is
   looked up in the request's options. An `allow_*` kind becomes `allowed`, a
-  `reject_*` kind becomes `denied`, and `{"outcome":"cancelled"}` becomes
-  `cancelled`. Any other request answered with a result becomes `answered`.
+  `reject_*` kind becomes `denied`, and `{"outcome":{"outcome":"cancelled"}}`
+  becomes `cancelled`. Any other request answered with a result becomes `answered`.
 - **Client-request rules**: requests are ID-rewritten. `initialize`,
   `session/new`, `session/load`, and `session/resume` are always rejected.
   `authenticate` is forwarded only while the session is `starting` because
@@ -286,8 +324,10 @@ The existing logic in `experiments/desktop/backend/agent.go` and
   `session/request_permission` with `{"outcome":{"outcome":"cancelled"}}`.
   The spec requires this from the client, and vibed is the client.
 - **Resume**: prefer `session/resume` when the log is intact. Use
-  `session/load` when the log is lost. Its replay becomes the new log. Agents
-  advertising neither are `resumable: false`.
+  `session/load` when the log is lost, or when it is intact but the agent
+  supports only `session/load`. Its replay replaces the log in both cases, so
+  history is never logged twice. Agents advertising neither are
+  `resumable: false`.
 - **Superseded**: none initially. ACP updates are chunks without a final
   aggregate frame.
 
@@ -361,7 +401,10 @@ uses it in place of its own process handling. A later
    both receive item deltas, approval requests, and each other's user input
    (`userMessage` items); whether either can answer, with the first answer
    winning; and what a connection that resumes mid-turn sees of the
-   in-progress turn.
+   in-progress turn. Also whether app-server sends a server request to every
+   subscribed connection or only to one (such as the first subscriber or the
+   turn's originator). If only one, the observer, which subscribes first and
+   never answers, could receive an approval no UI sees and stall the turn.
 2. **Codex sandbox modes** inside the hardened container (read-only root,
    dropped capabilities, no-new-privileges).
 3. **Claude `--resume`** with stream-json input: whether an interrupted turn or
@@ -376,5 +419,5 @@ uses it in place of its own process handling. A later
   (Zed custom agent server) to ACP-driver sessions, with `_vibepit/resolved`
   as an extension notification.
 - Notifications on the host for detached sessions waiting on approval, driven
-  by `list` or a long-lived `watch` operation.
+  by `watch`, for a host without the desktop (for example the CLI).
 - ACP v2 once it is stable.
