@@ -44,6 +44,9 @@ TLS only where rules need it".
 - Per-rule or per-preset audit mode.
 - Native keychain integration (the `command` source covers it).
 - Placeholder replacement inside request bodies.
+- Secret scanners, detection of real secret values in requests, body
+  inspection, and a scan-wide termination switch. The inspector interface is
+  built now; see section 6.
 - Changing the `default` preset (it keeps `vcs-github`).
 - OAuth flows run by agents (Claude Code `/login`, Codex login). Planned with
   the host daemon; see "Future: OAuth with the host daemon". Host CLIs that
@@ -395,7 +398,39 @@ it carries no value.
 - A placeholder found anywhere else the proxy looks (other headers, path,
   query) blocks the request and raises an alert in the monitor. Bodies are
   not scanned. Placeholders sent to tunneled hosts are invisible; they are
-  worthless, so this is a detection signal, not a protection.
+  worthless, so this is a detection signal, not a protection. This check is
+  implemented as the first request inspector (section 6); stripping the
+  service's own header stays part of injection.
+
+### 6. Request inspectors
+
+An extension point for detecting exfiltration attempts, so secret scanners
+can be added later. This project builds the interface and its place in the
+request path; the placeholder check is the only inspector.
+
+- **Position in the pipeline:** rule evaluation, then inspectors, then
+  secret injection, then forwarding. Inspectors see the request exactly as
+  the agent sent it; running after injection would flag every injected
+  token.
+- **Interface (in `netproxy`):** an inspector receives the request target,
+  method, path, query, and headers, and returns findings. Each finding names
+  the inspector and rule, the location (header name, path, query, or later a
+  body offset), and an action: alert (log and continue) or block (403 with a
+  block code). A finding never contains the matched value; at most a short
+  prefix or a hash.
+- **Room for later, without changing existing inspectors:** streamed,
+  detect-only body access (with `Content-Encoding` decoding), buffered bodies
+  for blocking with a size cap, external scanner adapters (ICAP or
+  Envoy `ext_proc` style), and in-process scanners such as gitleaks' rules.
+- **Wire types:** a finding is carried on the log entry and the `/events`
+  stream, so the monitor and other clients can show it.
+- **vibepit chooses the inspectors;** `netproxy` ships none besides what the
+  caller registers. With no inspectors registered, no inspection work runs.
+- **Coverage:** inspectors see only terminated connections. Broad scanning
+  will need broad termination (like audit mode's: allowed hosts on 443,
+  except `host.vibepit`) behind its own switch, added together with the
+  first real scanner. Tunneled traffic stays invisible, and the threat model
+  says so.
 
 **Project trust.** A project config may use `secret` on rules and presets, and
 add entries to sets used by secret-bearing rules, only after the user
@@ -413,7 +448,7 @@ approves it:
   startup.
 - Project config without secret-related parts works exactly as today.
 
-### 6. Audit mode
+### 7. Audit mode
 
 - Enabled with `--audit` on `run`/`up`, or `audit: true` in config.
 - Terminates TLS on every allowed host and logs every request with method
@@ -427,7 +462,7 @@ approves it:
   object-form `allow-http` YAML grouped by host and method with path
   patterns, for the user to edit into a preset.
 
-### 7. Logging and events
+### 8. Logging and events
 
 - `LogEntry` gains `Method`, `Path`, `Query`, `Status`, `Mode`
   (tunnel/mitm), `Secret` (name only), and an audit marker.
@@ -441,7 +476,7 @@ approves it:
   out host-level blocks. `/events` carries both.
 - `HostStats` gets separate `Connections` and `Requests` counters.
 
-### 8. TUI
+### 9. TUI
 
 - Logs tab: method, path (truncated, `tui.SanitizeText`), status, a
   tunnel/mitm marker, a secret-injected marker, a "would block" marker in
@@ -453,9 +488,9 @@ approves it:
   references, sets, or presets, so it cannot change where a secret goes and
   never changes the trust hash.
 - The approve screen and host-level holds are unchanged.
-- Draft rules view (section 6).
+- Draft rules view (section 7).
 
-### 9. CLI and control API
+### 10. CLI and control API
 
 - `allow-http` / `deny-http` commands gain `--method` and `--path` flags that
   produce object entries.
@@ -463,7 +498,7 @@ approves it:
 - Control API: allow and deny endpoints accept object entries; a new endpoint
   receives secret values; `GET /config` never includes them.
 
-### 10. Packaging: the `netproxy` module
+### 11. Packaging: the `netproxy` module
 
 The new proxy is a nested Go module, `netproxy/` (module
 `github.com/bernd/vibepit/netproxy`), that imports no vibepit packages, so it
@@ -473,8 +508,8 @@ untouched until the new one is done.
 **In `netproxy`:** policy (allowlists, deny rules, request rules, path
 matching, conditions), TLS termination (CA and leaf certificates, `Host`
 pinning, tunnel-or-terminate decision), secret injection from service
-definitions and values the caller supplies, holds, event hub, log buffers,
-DNS server, CIDR blocking, and the control API as an `http.Handler` with its
+definitions and values the caller supplies, the request inspector interface
+and pipeline stage, holds, event hub, log buffers, DNS server, CIDR blocking, and the control API as an `http.Handler` with its
 wire types. It takes a typed Go config containing only concrete rules.
 
 **In vibepit:** config files and merging, expanding sets and presets into
@@ -518,7 +553,7 @@ stops working because of the `replace`; it is not a documented install path.
 `cmd/` and `config/` switch to `netproxy`'s wire types and `proxy/` is
 deleted.
 
-### 11. Docs
+### 12. Docs
 
 - `threat-model.md` (currently states the proxy does not inspect encrypted
   traffic) and `security-model.md`: TLS termination, the MITM CA, secret
@@ -528,7 +563,7 @@ deleted.
 - Configuration reference for object entries, sets, presets with inputs,
   secrets, audit mode.
 
-### 12. Behavior the tests must pin
+### 13. Behavior the tests must pin
 
 - Inner `Host`/`:authority` mismatch is rejected.
 - No redirect is followed by the proxy.
@@ -537,6 +572,8 @@ deleted.
 - Deny wins over every allow, including preset and secret rules.
 - Path normalization rejections; case rules for allows vs denies.
 - Body cap and `when` error behavior for allows vs denies.
+- Inspectors run before secret injection and see the agent's original
+  headers; findings never contain the matched value.
 - `request.graphql.queryOnly` is false for mutations, subscriptions, mixed
   documents, mutations after comments or fragments, and batched arrays.
 - Secrets never appear in logs, events, `GET /config`, or errors.
