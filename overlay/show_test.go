@@ -356,6 +356,34 @@ func TestResizeWhilePrompting(t *testing.T) {
 	assertSameTerminal(t, h.term.shadow, h.real)
 }
 
+// iTerm2 moves the screen into its scrollback on ED 2, and on ED 0 in the
+// top left corner, also on the alternate screen: every prompt over a
+// full-screen app left copies of the app and of the prompt in it.
+func TestShowKeepsTheScrollback(t *testing.T) {
+	tests := []struct{ name, app string }{
+		{"primary screen", "$ ls\r\nfile"},
+		{"alternate screen", "\x1b[?1049hclaude\r\nfull screen"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, 20, 6)
+			h.app(tt.app)
+			before := len(h.stdout.String())
+			h.prompt(func() {
+				h.waitScreen("PROMPT W=20")
+				// Bubble Tea repaints the whole screen after a resize.
+				h.resize(24, 6)
+				h.waitScreen("PROMPT W=24")
+			})
+			out := h.stdout.String()
+			follow := newVT(t, 24, 6)
+			feed(t, follow, out[:before])
+			assert.Empty(t, scrollbackSaves(t, follow, out[before:]))
+			assertSameTerminal(t, h.term.shadow, h.real)
+		})
+	}
+}
+
 func TestShowFloodPastLogCap(t *testing.T) {
 	h := newHarness(t, 20, 6, withTiming(func(tm *timing) { tm.logMax = 1024 }))
 	h.prompt(func() {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bernd/vibepit/vt"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -197,4 +198,45 @@ func assertSameTerminal(t *testing.T, want, got *vt.Terminal) {
 	feed(t, want, probeSuffix)
 	feed(t, got, probeSuffix)
 	assert.Equal(t, stateOf(t, want), stateOf(t, got), "after the probe suffix")
+}
+
+// scrollbackSaves returns the erases in s that iTerm2 turns into "move the
+// screen into the scrollback" instead of erasing in place, with its default
+// settings, on either screen: ED 2 always, ED 0 with the cursor in the top
+// left corner. A clear the leave or the prompt writes must not be one: it
+// would leave a copy of the app's screen or of the prompt in the scrollback.
+// term follows s, so the cursor is known at each erase.
+func scrollbackSaves(t *testing.T, term *vt.Terminal, s string) []string {
+	t.Helper()
+	var saves []string
+	p := ansi.NewParser()
+	data := []byte(s)
+	for len(data) > 0 {
+		seq, _, n, _ := ansi.DecodeSequence(data, ansi.NormalState, p)
+		require.Positive(t, n)
+		if len(seq) > 2 && seq[0] == ansi.ESC && seq[1] == '[' && ansi.Cmd(p.Command()).Final() == 'J' && ansi.Cmd(p.Command()).Prefix() == 0 {
+			switch mode, _, _ := p.Params().Param(0, 0); mode {
+			case 2:
+				saves = append(saves, string(seq))
+			case 0:
+				if row, col := cursorOf(t, term); row == 1 && col == 1 {
+					saves = append(saves, string(seq))
+				}
+			}
+		}
+		feed(t, term, string(seq))
+		data = data[n:]
+	}
+	return saves
+}
+
+// cursorOf asks term for its cursor position, 1-based.
+func cursorOf(t *testing.T, term *vt.Terminal) (int, int) {
+	t.Helper()
+	b, err := term.Format(vt.FormatOptions{Region: vt.RegionNone, Extras: vt.Extras{Cursor: true}})
+	require.NoError(t, err)
+	var row, col int
+	_, err = fmt.Sscanf(string(b), "\x1b[%d;%dH", &row, &col)
+	require.NoError(t, err, "cursor extra %q", b)
+	return row, col
 }

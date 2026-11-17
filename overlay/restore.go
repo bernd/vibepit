@@ -61,7 +61,13 @@ const (
 	// The raw leave must not write it, because its pop already restored
 	// the app's flags.
 	keyboardReset = "\x1b[=0;1u\x1b[>4;0m"
-	clearScreen   = "\x1b[2J\x1b[H"
+	// clearScreen erases the screen in place and homes the cursor. iTerm2
+	// moves the screen into its scrollback on ED 2, and on ED 0 in the top
+	// left corner, also on the alternate screen, so each prompt would leave
+	// copies of the app's screen and of itself there. ED 1 from the last
+	// row and EL 2 erase the same cells without that; the scroll region is
+	// already reset, so the CUP reaches the last row also in origin mode.
+	clearScreen = "\x1b[9999H\x1b[1J\x1b[2K\x1b[H"
 )
 
 // cutState is the real terminal's state at the cut, read from the shadow.

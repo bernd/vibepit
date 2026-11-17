@@ -26,6 +26,7 @@ type filter struct {
 	pending []byte
 	out     []byte // reused across writes; w must not keep it
 	cr      bool   // the last byte passed was CR
+	home    bool   // the cursor is in the top left corner, put there by CUP
 }
 
 // NewFilter returns a writer that passes only the output a prompt may send
@@ -33,7 +34,7 @@ type filter struct {
 // editing, SGR, DECSTBM, and modes 25 and 2026. Everything else is
 // dropped, every query included, so the prompt changes only state the
 // leave restores. A bare LF gets a CR in front, as a TTY with ONLCR would
-// add.
+// add, and screen erases become ones that keep the scrollback (appendSeq).
 func NewFilter(w io.Writer) io.Writer {
 	return &filter{w: w, p: ansi.NewParser()}
 }
@@ -70,7 +71,7 @@ func (f *filter) Write(b []byte) (int, error) {
 				// the CR (ONLCR). The real terminal is in raw mode.
 				out = append(out, ansi.CR)
 			}
-			out = append(out, seq...)
+			out = f.appendSeq(out, seq)
 			f.cr = len(seq) == 1 && seq[0] == ansi.CR
 		}
 		data = data[n:]
@@ -82,6 +83,51 @@ func (f *filter) Write(b []byte) (int, error) {
 		}
 	}
 	return len(b), nil
+}
+
+// appendSeq appends seq, just decoded by f.p and allowed, rewriting the
+// erases iTerm2 turns into moving the screen into its scrollback, also on
+// the alternate screen: ED 2 anywhere, and ED 0 in the top left corner,
+// which is how Bubble Tea's renderer clears (CUP home, then ED). Where the
+// cursor is known to be home both become clearScreen, which leaves it
+// there; elsewhere ED 2 becomes ED 1 and ED 0, which erase the same cells
+// and leave the cursor too. An ED 0 in an unknown position passes.
+// clearScreen's CUP to the last row is absolute here despite a scroll
+// region the prompt may set: the enter turns origin mode off and the
+// filter drops mode 6.
+func (f *filter) appendSeq(out, seq []byte) []byte {
+	home := f.home
+	f.home = false
+	if len(seq) < 3 || seq[0] != ansi.ESC || seq[1] != '[' {
+		return append(out, seq...)
+	}
+	cmd, params := ansi.Cmd(f.p.Command()), f.p.Params()
+	if cmd.Prefix() != 0 {
+		// Modes 25 and 2026 don't move the cursor.
+		f.home = home
+		return append(out, seq...)
+	}
+	switch cmd.Final() {
+	case 'H':
+		row, _, _ := params.Param(0, 1)
+		col, _, _ := params.Param(1, 1)
+		f.home = len(params) <= 2 && max(row, 1) == 1 && max(col, 1) == 1
+	case 'm', 'K', 'X', '@', 'P', 'L', 'M', 'S', 'T':
+		// SGR and edits that leave the cursor; IL and DL put it in the
+		// first column.
+		f.home = home
+	case 'J':
+		switch mode, _, _ := params.Param(0, 0); {
+		case home && mode == 1:
+			f.home = true
+		case home:
+			f.home = true
+			return append(out, clearScreen...)
+		case mode == 2:
+			return append(out, "\x1b[1J\x1b[J"...)
+		}
+	}
+	return append(out, seq...)
 }
 
 // allowed reports whether seq, just decoded by p, may reach the terminal.
