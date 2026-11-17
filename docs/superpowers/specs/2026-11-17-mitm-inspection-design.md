@@ -426,11 +426,13 @@ request path; the placeholder check is the only inspector.
   stream, so the monitor and other clients can show it.
 - **vibepit chooses the inspectors;** `netproxy` ships none besides what the
   caller registers. With no inspectors registered, no inspection work runs.
+- **Inspectors only tighten.** A finding can alert or block; nothing an
+  inspector returns can allow a request that policy refused.
 - **Coverage:** inspectors see only terminated connections. Broad scanning
-  will need broad termination (like audit mode's: allowed hosts on 443,
-  except `host.vibepit`) behind its own switch, added together with the
-  first real scanner. Tunneled traffic stays invisible, and the threat model
-  says so.
+  will need broad termination (allowed hosts on 443, except `host.vibepit`).
+  That scope is one mechanism, built now for audit mode, which a future scan
+  switch also turns on. Tunneled traffic stays invisible, and the threat
+  model says so.
 
 **Project trust.** A project config may use `secret` on rules and presets, and
 add entries to sets used by secret-bearing rules, only after the user
@@ -456,7 +458,12 @@ approves it:
 - Requests refused only for not matching a path allow are let through and
   logged as "would block".
 - Not relaxed: the host allowlist (unlisted hosts are still blocked or held),
-  host-level denies, and explicit path denies.
+  host-level denies, explicit path denies, and inspector blocks (such as a
+  placeholder sent outside its binding).
+- Audit mode lives in the policy, not in an inspector: it relaxes a decision,
+  and inspectors may only add alerts or blocks, never turn a block into an
+  allow. What it shares with future scanning is the broad termination scope
+  (section 6).
 - Secret injection works as in normal mode.
 - Monitor "draft rules" action: from selected request entries, generate
   object-form `allow-http` YAML grouped by host and method with path
