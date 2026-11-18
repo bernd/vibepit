@@ -5,6 +5,7 @@
 @media(max-width:680px){.appbar{padding:0 8px;height:54px;gap:8px}.brand{font-size:16px}.brand svg{width:25px}.path{display:none}.quiet{font-size:11px;padding:5px 7px}.tabbar{padding-left:2px}.tab{padding-left:6px}.tab-name{font-size:12px}.scroll{padding:10px}.terminal{font-size:12px}.phead{padding:4px;gap:3px}#stage{padding:4px}.prompt{margin:4px}.gin{padding:2px 4px}.sandbox b{font-size:12px}}@media(max-width:410px){.slash,.sandbox{display:none}.appbar{gap:5px}.tab .glyph{display:none}}@media(pointer:coarse){.tab-name,.tabmenu,.quiet,.more,.grip,.gin button,.icon{min-height:36px}}
 
 .phead .zoom-toggle{margin-left:auto;padding:3px 7px;background:transparent;color:var(--mute);font-size:12px;white-space:nowrap}.phead .zoom-toggle:hover{color:var(--fg);background:var(--bar)}.phead .more{margin-left:0}.phead .zoom-toggle[hidden]+.more{margin-left:auto}
+.countdown{display:block;color:var(--warm);font:12px var(--mono);margin:4px 0 10px}.recovery{justify-content:space-between}
 </style></head><body>
 <header class="appbar"><div class="brand"><svg width="31" height="31" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#d4e7a8"/><path d="m5 9 11 6 11-6M5 15l11 6 11-6M9 21l7 4 7-4" fill="none" stroke="#243223" stroke-width="2.4" stroke-linejoin="round"/></svg>Vibepit</div><span class="slash">/</span><div class="sandbox"><b>vibepit</b><span class="path">~/projects/vibepit</span></div><span class="spacer"></span><button id="attention" class="quiet"></button><button id="demobtn" class="quiet">Demo controls</button></header>
 <nav class="tabbar" aria-label="Workspace tabs"><div id="strip"></div><button id="plus" class="icon" aria-label="New session">+</button><button id="types" class="icon" aria-label="Choose tab type">⌄</button></nav>
@@ -23,6 +24,8 @@ const windowId=new URLSearchParams(location.search).get('window')||'primary',lay
 function load(k){try{return JSON.parse(localStorage.getItem(k))}catch{return null}}
 function store(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 const entry=(style,text)=>({style,text});
+const holdDuration=20000;
+const makeHold=host=>({id:uid(),host,deadline:Date.now()+holdDuration});
 const clock=()=>new Date().toLocaleTimeString('en-GB');
 function starterSession(name){
  const lines=name==='Codex'?[entry('mut','~/projects/vibepit  ·  experiment/desktop'),entry('cmd','$ codex'),entry('tagline','Codex'),entry('cmd','› Add coverage for reconnecting the proxy stream.'),entry('mut','Inspecting the event subscription and replay path.'),entry('code','  read  proxy/events.go\n  read  proxy/events_test.go'),entry('cmd','Adding a test for a subscriber reconnecting after a hold.'),entry('patch','+ func TestReplayAfterReconnect(t *testing.T) {\n+     stream := newTestSubscription(t)\n+     stream.Reconnect()\n+     assertHoldDeliveredOnce(t, stream)\n+ }'),entry('accent','Working · checking the existing test harness…')]:name==='Tests'?[entry('mut','~/projects/vibepit  ·  experiment/desktop'),entry('cmd','$ git status --short'),entry('code',' M proxy/events_test.go'),entry('cmd','$ go test ./proxy/... -v'),entry('mut','=== RUN   TestHoldRequest\n--- PASS: TestHoldRequest (0.01s)\n=== RUN   TestEventReplay\n--- PASS: TestEventReplay (0.02s)'),entry('accent','PASS'),entry('cmd','ok    vibepit/proxy    0.42s')]:[entry('mut','~/projects/vibepit  ·  experiment/desktop'),entry('cmd','Type help for simulated commands.')];
@@ -39,6 +42,8 @@ const title=n=>n.children?leaves(n).map(title).join(' + '):n.type==='session'?(s
 function newSession(name){const id=uid();sessions[id]=starterSession(name);store(sessionsKey,sessions);return pane('session',id)}
 function newTab(root){return {id:uid(),root,focus:leaves(root)[0].id}}
 if(!layout){const pair=group('cols',[newSession('Codex'),newSession('Tests')]),t=newTab(pair);layout={tabs:[t,newTab(pane('logs')),newTab(pane('monitor'))],active:t.id};store(layoutKey,layout)}
+// Upgrade holds saved by the earlier mockup without resetting the sandbox.
+net.holds=net.holds.map(h=>typeof h==='string'?makeHold(h):h);
 store(networkKey,net);
 const tabs=()=>layout.tabs,active=()=>tabs().find(t=>t.id===layout.active),owner=id=>tabs().find(t=>find(t.root,id));
 const rank={'Needs input':4,Error:3,Working:2,Done:1};
@@ -56,11 +61,13 @@ function renderTabs(){
   name.setAttribute('aria-label',[label,...s.map(o=>title(o.p)+' '+o.status)].join(', '));name.title=name.getAttribute('aria-label');name.setAttribute('aria-pressed',String(t===active()));name.dataset.grab=t.root.id;name.dataset.unit='tab';name.onclick=()=>selectTab(t.id);
   const more=el('button','tabmenu','⋮');more.setAttribute('aria-label','Tab actions for '+label);more.onclick=()=>tabMenu(t,more);b.append(name,more);strip.append(b)
  }
- const t=tabs().at(-1),typ=t?(find(t.root,t.focus)||leaves(t.root)[0]).type:'session';$('#plus').title=$('#plus').ariaLabel='New '+names[typ].toLowerCase()+' tab';updateHeader()
+ updatePlusLabel();updateHeader()
 }
-function setFocus(id,seen=true){const t=active();if(!t||!find(t.root,id))return;t.focus=id;const p=find(t.root,id),s=sessions[p.sid];if(seen&&s?.status==='Done'&&p.seenDone!==s.turn){p.seenDone=s.turn;renderTabs()}save();$('#stage').querySelectorAll('.pane').forEach(x=>x.classList.toggle('focus',x.dataset.node===id))}
+function plusType(){const t=tabs().at(-1);return t?(find(t.root,t.focus)||leaves(t.root)[0]).type:'session'}
+function updatePlusLabel(){const b=$('#plus');b.title=b.ariaLabel='New '+names[plusType()].toLowerCase()+' tab'}
+function setFocus(id,seen=true){const t=active();if(!t||!find(t.root,id))return;t.focus=id;updatePlusLabel();const p=find(t.root,id),s=sessions[p.sid];if(seen&&s?.status==='Done'&&p.seenDone!==s.turn){p.seenDone=s.turn;renderTabs()}save();$('#stage').querySelectorAll('.pane').forEach(x=>x.classList.toggle('focus',x.dataset.node===id))}
 function selectTab(id){if(id!==layout.active||active()?.focus!==zoomedPane)zoomedPane=null;layout.active=id;save();render();const t=active();if(t){setFocus(t.focus);renderTabs();focusPane(t.focus)}}
-function focusPane(id){const n=document.getElementById('view-'+id);(n?.querySelector('.prompt input:not(:disabled)')||n?.querySelector('.phead button'))?.focus({preventScroll:true})}
+function focusPane(id){const n=document.getElementById('view-'+id);(n?.querySelector('.prompt input:not(:disabled)')||n?.querySelector('.phead button:not([hidden])'))?.focus({preventScroll:true})}
 const cache=new Map();
 let zoomedPane=null;
 function toggleZoom(id){
@@ -78,8 +85,10 @@ function build(n,t){
  z.hidden=!t.root.children;z.textContent=isZoomed?'Restore layout':'Zoom';z.ariaLabel=(isZoomed?'Restore layout':'Zoom pane')+' · '+title(n);z.title=z.ariaLabel+' (Ctrl+Shift+Enter or ⌘⇧Enter)';
  return v}
  const v=el('section','node group');v.dataset.node=n.id;const h=el('div','gin');h.dataset.grab=n.id;h.classList.add('grab');h.innerHTML='<span class="grip" aria-hidden="true">⠿</span>'+icon('group')+'<b>'+escapeText(title(n))+'</b>';
- const m=btn('Move group…',()=>moveDialog(n.id),'more');h.append(m);const split=el('div','split '+n.dir);
- n.children.forEach((c,i)=>{if(i)split.append(divider(n,i-1,split));const box=build(c,t);box.style.flexGrow=n.weights[i];split.append(box)});v.append(h,split);return v
+ const m=btn('Group actions',()=>menu(m,[title(n),['Move group…',()=>moveDialog(n.id)],['Equalize sizes',()=>{
+  n.weights=n.children.map(()=>1);save();render();focusPane(t.focus)
+ }]]),'more');m.ariaLabel='Group actions for '+title(n);h.append(m);const split=el('div','split '+n.dir);
+ n.children.forEach((c,i)=>{if(i)split.append(divider(n,i-1,split));const box=build(c,t),minimum=minSize(c);box.style.minWidth=minimum.w+'px';box.style.minHeight=minimum.h+'px';box.style.flexGrow=n.weights[i];split.append(box)});v.append(h,split);return v
 }
 function minSize(n){if(!n.children)return {w:124,h:86};const c=n.children.map(minSize),g=7*(c.length-1);return {w:n.dir==='cols'?c.reduce((s,x)=>s+x.w,0)+g+2:Math.max(...c.map(x=>x.w))+2,h:32+(n.dir==='rows'?c.reduce((s,x)=>s+x.h,0)+g:Math.max(...c.map(x=>x.h)))}}
 function divider(n,i,parent){
@@ -91,8 +100,46 @@ function divider(n,i,parent){
 function makePane(p){const v=el('section','node pane');v.id='view-'+p.id;v.dataset.node=p.id;v.onfocusin=()=>{if(!drag)setFocus(p.id)};v.addEventListener('pointerdown',()=>{if(!drag)setFocus(p.id)},true);
  const head=el('div','phead grab');head.dataset.grab=p.id;head.innerHTML='<span class="grip" aria-hidden="true">⠿</span>'+icon(p.type)+'<strong>'+escapeText(title(p))+'</strong><span class="pstatus"></span>';const more=btn('⋯',()=>paneMenu(p,more),'more');more.ariaLabel='Pane actions for '+title(p);head.append(btn('Zoom',()=>toggleZoom(p.id),'zoom-toggle'),more);
  const body=el('div','body');v.append(head,body);if(p.type==='session')terminal(p,v);else network(p,v);return v}
-function terminal(p,v){const s=sessions[p.sid],body=v.querySelector('.body'),scroll=el('div','scroll terminal'),form=el('form','prompt'),input=document.createElement('input');input.ariaLabel='Command in '+title(p);input.placeholder='Enter a command';input.value=p.draft||'';input.autocomplete='off';input.spellcheck=false;input.oninput=()=>{p.draft=input.value;save()};const enter=el('button','','↵');enter.ariaLabel='Run simulated command';form.append(el('span','','❯'),input,enter);form.onsubmit=e=>{e.preventDefault();if(!input.value.trim()||!online||s?.ended)return;const cmd=input.value.trim();p.draft=input.value='';command(p,cmd);save()};body.append(scroll,form);paintSession(p,v)}
-function paintSession(p,v){const s=sessions[p.sid];v.querySelector('.scroll').innerHTML=(s?.lines||[entry('mut','Session unavailable')]).map(l=>'<div class="'+l.style+'">'+escapeText(l.text)+'</div>').join('<div style="height:7px"></div>');v.querySelector('input').disabled=!online||!s||s.ended;v.querySelector('.pstatus').innerHTML=s?.status?badge(s.status):''}
+function terminal(p,v){const body=v.querySelector('.body'),scroll=el('div','scroll terminal'),form=el('form','prompt'),input=document.createElement('input');input.ariaLabel='Command in '+title(p);input.placeholder='Enter a command';input.value=p.draft||'';input.autocomplete='off';input.spellcheck=false;input.oninput=()=>{p.draft=input.value;save()};const enter=el('button','','↵');enter.ariaLabel='Run simulated command';form.append(el('span','','❯'),input,enter);form.onsubmit=e=>{e.preventDefault();if(!input.value.trim()||!online||!sessions[p.sid]||sessions[p.sid].ended)return;const cmd=input.value.trim();p.draft=input.value='';command(p,cmd);save()};body.append(scroll,form);paintSession(p,v)}
+function paintSession(p,v){const s=sessions[p.sid],name=title(p);
+ v.querySelector('.phead strong').textContent=name;
+ v.querySelector('.phead .more').ariaLabel='Pane actions for '+name;
+ v.querySelector('.prompt input').ariaLabel='Command in '+name;
+ let recovery=v.querySelector('.recovery');
+ if(!s||s.ended){
+  if(!recovery){recovery=el('div','tools recovery');recovery.append(el('span','',s?'Session exited':'Session unavailable'),btn('Open replacement shell',()=>replaceExited(p)));v.querySelector('.body').append(recovery)}
+  recovery.querySelector('button').disabled=!online
+ }else recovery?.remove();
+ v.querySelector('.scroll').innerHTML=(s?.lines||[entry('mut','Session unavailable')]).map(l=>'<div class="'+l.style+'">'+escapeText(l.text)+'</div>').join('<div style="height:7px"></div>');v.querySelector('input').disabled=!online||!s||s.ended;v.querySelector('.pstatus').innerHTML=s?.ended?badge('Exited'):s?.status?badge(s.status):''}
+function replaceExited(p){
+ if(!online||sessions[p.sid]&&!sessions[p.sid].ended)return;
+ p.sid=newSession('Shell').sid;p.draft='';p.scroll=0;delete p.seenDone;
+ cache.delete(p.id);save();render();focusPane(p.id)
+}
+function renameSession(p){
+ const box=modal('Rename session'),form=el('form'),input=el('input');
+ input.value=title(p);input.maxLength=64;input.required=true;input.autocomplete='off';
+ const actions=el('div','dialogfoot'),cancel=btn('Cancel',()=>dlg.close()),submit=el('button','primary','Rename');
+ cancel.type='button';actions.append(cancel,submit);form.append(field('Session name',input),actions);box.append(form);
+ input.oninput=()=>input.setCustomValidity('');
+ form.onsubmit=e=>{e.preventDefault();const name=input.value.trim();
+  if(!name){input.setCustomValidity('Enter a session name.');input.reportValidity();return}
+  if(!sessions[p.sid])return;
+  sessions[p.sid].name=name;dlg.close();updateSessions(p.sid);render();focusPane(p.id)
+ };
+ input.focus();input.select()
+}
+function splitShell(p,dir){
+ if(!online){tell('Reconnect to open a shell');return}
+ const t=owner(p.id),view=cache.get(p.id);if(!t||!view)return;
+ const rect=view.getBoundingClientRect(),splitMin=minSize(group(dir,[p,p]));
+ if(rect.width<splitMin.w||rect.height<splitMin.h){tell('Too little space to split this pane.');return}
+ const trial=substitute(cloneNode(t.root),p.id,group(dir,[p,p]));
+ const extent=minSize(trial),stage=$('#stage').getBoundingClientRect();
+ if(extent.w>stage.width-10||extent.h>stage.height-10){tell('Too little space in the tiled layout.');return}
+ const fresh=newSession('Shell');t.root=substitute(t.root,p.id,group(dir,[p,fresh]));
+ t.focus=fresh.id;commit(layout)
+}
 function updateSessions(id){store(sessionsKey,sessions);for(const t of tabs())for(const p of leaves(t.root))if(p.sid===id&&cache.has(p.id))paintSession(p,cache.get(p.id));renderTabs()}
 function stateFor(p,status){const s=sessions[p.sid];if(!s||s.ended)return;s.status=status;s.turn=uid();s.lines.push(entry(status==='Error'?'cmd':'accent',{'Working':'Working · inspecting the workspace…','Done':'Done · turn completed.','Needs input':'Waiting for your input.','Error':'Agent reported an error.'}[status]||status));updateSessions(p.sid)}
 function command(p,cmd){const s=sessions[p.sid];s.lines.push(entry('cmd','$ '+cmd));const k=cmd.toLowerCase();if(k==='clear')s.lines=[];else if(['codex','claude','work'].includes(k))stateFor(p,'Working');else if(k==='done')stateFor(p,'Done');else if(k==='ask')stateFor(p,'Needs input');else{s.lines.push(entry('mut',k==='pwd'?'/home/dev/projects/vibepit':k==='ls'?'cmd/  docs/  experiments/  proxy/  go.mod':k.startsWith('go test')?'PASS\nok    vibepit/proxy    0.42s':k==='git status'?'On branch experiment/desktop\n M proxy/events_test.go':k==='help'?'Demo commands: pwd, ls, git status, go test, codex, claude, ask, done, clear':'Simulated shell. Type help to list commands.'))}updateSessions(p.sid);const sc=cache.get(p.id).querySelector('.scroll');sc.scrollTop=sc.scrollHeight}
@@ -102,20 +149,54 @@ function network(p,v){const body=v.querySelector('.body');body.replaceChildren()
  const isLog=p.type==='logs'||p.page==='Logs',sc=el('div','scroll');sc.setAttribute('aria-label',title(p)+' content');
  if(isLog){const tools=el('div','tools'),input=el('input');input.placeholder='Filter hosts…';input.ariaLabel='Filter hosts';input.value=p.query;
   const filter=()=>{paintNetwork(p,v);save()};input.oninput=()=>{p.query=input.value;filter()};
-  tools.append(input,selectBox(['All','HTTP','DNS'],p.proto,x=>{p.proto=x;filter()},'Protocol filter'),selectBox(['All','Allowed','Blocked','Held','Denied'],p.action,x=>{p.action=x;filter()},'Action filter'));
+  tools.append(input,selectBox(['All','HTTP','DNS'],p.proto,x=>{p.proto=x;filter()},'Protocol filter'),selectBox(['All','Allowed','Blocked','Held','Denied','Expired'],p.action,x=>{p.action=x;filter()},'Action filter'));
   const follow=btn(p.follow?'Following':'Paused',()=>{p.follow=!p.follow;follow.textContent=p.follow?'Following':'Paused';follow.setAttribute('aria-pressed',p.follow);if(p.follow)sc.scrollTop=0;save()});follow.setAttribute('aria-pressed',p.follow);tools.append(follow);body.append(tools)
  }body.append(sc);paintNetwork(p,v);sc.scrollTop=p.scroll||0
 }
 function paintNetwork(p,v){const sc=v.querySelector('.scroll');if(!sc)return;const old=sc.scrollTop,priorHeight=sc.scrollHeight;sc.replaceChildren();const page=p.type==='logs'?'Logs':p.page;
- if(page==='Requests'){if(!net.holds.length)sc.append(el('div','empty','No requests waiting.'));for(const host of net.holds){const d=el('section','hold');d.append(el('h3','',host),el('p','','Held HTTP request · applies to this sandbox'));const row=el('div','choices');for(const [lbl,allow,persist] of [['Allow for session',true,false],['Allow and save',true,true],['Reject',false,false],['Deny and save',false,true]])row.append(btn(lbl,()=>decide(host,allow,persist),allow&&!persist?'primary':''));d.append(row);sc.append(d)}}
+ if(page==='Requests'){if(!net.holds.length)sc.append(el('div','empty','No requests waiting.'));for(const hold of net.holds){const d=el('section','hold'),timer=el('span','countdown',remaining(hold));timer.dataset.deadline=hold.deadline;d.append(el('h3','',hold.host),el('p','','Held HTTP request · applies to this sandbox'),timer);const row=el('div','choices');for(const [lbl,allow,persist] of [['Allow for session',true,false],['Allow and save',true,true],['Reject',false,false],['Deny and save',false,true]])row.append(btn(lbl,()=>decide(hold.id,allow,persist),allow&&!persist?'primary':''));d.append(row);sc.append(d)}}
  if(page==='Logs'){for(const [time,proto,action,host] of net.events.filter(e=>(p.proto==='All'||e[1]===p.proto)&&(p.action==='All'||e[2]===p.action)&&e[3].toLowerCase().includes(p.query.toLowerCase()))){const d=el('div','netrow');d.append(el('small','',time),el('span','kind',proto),el('code','',host),el('span',action==='Allowed'?'accent':'held',action));sc.append(d)}if(!sc.childElementCount)sc.append(el('p','mut','No matching events.'))}
  if(page==='Hosts'){const h=new Map();for(const e of net.events){const host=e[3].split(':')[0];if(!h.has(host))h.set(host,{allowed:0,blocked:0,held:0});const row=h.get(host);row[e[2]==='Allowed'?'allowed':e[2]==='Held'?'held':'blocked']++}for(const [host,r] of h){const d=el('div','netrow');d.append(el('code','',host),el('small','',r.allowed+' allowed · '+r.blocked+' blocked · '+r.held+' held'));sc.append(d)}}
  if(page==='Rules'){for(const r of net.rules){const d=el('div','netrow');d.append(el('code','',r.host),el('span','kind',r.action),el('small','',r.scope));sc.append(d)}}
  if(page==='Logs')sc.scrollTop=p.follow?0:old+Math.max(0,sc.scrollHeight-priorHeight)
 }
-function syncNet(){store(networkKey,net);for(const t of tabs())for(const p of leaves(t.root))if(p.type!=='session'&&cache.has(p.id))paintNetwork(p,cache.get(p.id));renderTabs()}
-function decide(host,allow,persist){if(!online){tell('Reconnect to decide a request');return}if(!net.holds.includes(host))return;net.holds=net.holds.filter(x=>x!==host);net.rules=net.rules.filter(x=>x.host!==host);net.rules.push({host,action:allow?'Allow':'Deny',scope:persist?'Project':'Session'});net.events.unshift([clock(),'HTTP',allow?'Allowed':'Denied',host]);syncNet();tell((allow?'Allowed ':'Denied ')+host)}
-function addHold(){const host=['registry.npmjs.org:443','proxy.golang.org:443','api.github.com:443'].find(h=>!net.holds.includes(h))||'packages-'+uid().slice(0,4)+'.example.org:443';net.holds.push(host);net.events.unshift([clock(),'HTTP','Held',host]);syncNet();tell('New simulated hold · '+host)}
+function redrawNet(){
+ for(const t of tabs())for(const p of leaves(t.root))if(p.type!=='session'&&cache.has(p.id))paintNetwork(p,cache.get(p.id));
+ renderTabs();if(dlg.open&&dlg.getAttribute('aria-label')==='Workspace attention')attention()
+}
+function remaining(hold,now=Date.now()){return Math.max(0,Math.ceil((hold.deadline-now)/1000))+'s remaining'}
+function removeExpired(now){
+ const expired=net.holds.filter(h=>h.deadline<=now);if(!expired.length)return false;
+ net.holds=net.holds.filter(h=>h.deadline>now);
+ for(const h of expired)net.events.unshift([new Date(h.deadline).toLocaleTimeString('en-GB'),'HTTP','Expired',h.host]);
+ return true
+}
+// Serialize decisions and expiry across windows when Web Locks is available.
+async function changeNetwork(change){
+ function run(){
+  net=load(networkKey)||net;
+  const expired=removeExpired(Date.now()),changed=change?.();
+  if(expired||changed)store(networkKey,net);
+  redrawNet()
+ }
+ if(navigator.locks)await navigator.locks.request(networkKey,run);else run()
+}
+function tickHolds(){
+ const now=Date.now();if(net.holds.some(h=>h.deadline<=now)){void changeNetwork();return}
+ document.querySelectorAll('[data-deadline]').forEach(e=>e.textContent=remaining({deadline:Number(e.dataset.deadline)},now))
+}
+function decide(id,allow,persist){if(!online){tell('Reconnect to decide a request');return}
+ return changeNetwork(()=>{
+  const h=net.holds.find(x=>x.id===id);if(!h){tell('This request is no longer pending');return false}
+  net.holds=net.holds.filter(x=>x.id!==id);net.rules=net.rules.filter(x=>x.host!==h.host);
+  net.rules.push({host:h.host,action:allow?'Allow':'Deny',scope:persist?'Project':'Session'});
+  net.events.unshift([clock(),'HTTP',allow?'Allowed':'Denied',h.host]);tell((allow?'Allowed ':'Denied ')+h.host);return true
+ })
+}
+function addHold(){return changeNetwork(()=>{
+ const host=['registry.npmjs.org:443','proxy.golang.org:443','api.github.com:443'].find(h=>!net.holds.some(x=>x.host===h))||'packages-'+uid().slice(0,4)+'.example.org:443';
+ net.holds.push(makeHold(host));net.events.unshift([clock(),'HTTP','Held',host]);tell('New simulated hold · '+host);return true
+})}
 function addTab(type,existing){const p=existing|| (type==='session'?newSession('Shell'):pane(type)),t=newTab(p);tabs().push(t);selectTab(t.id)}
 function menu(anchor,items){const pop=$('#pop');pop.replaceChildren();for(const item of items){if(typeof item==='string'){pop.append(el('div','poplabel',item));continue}const [label,fn,cl]=item;pop.append(btn(label,()=>{hideMenu();fn()},cl||''))}
  pop.hidden=false;const rect=anchor.getBoundingClientRect();pop.style.left=Math.max(4,Math.min(innerWidth-pop.offsetWidth-5,rect.left))+'px';pop.style.top=Math.max(4,Math.min(innerHeight-pop.offsetHeight-5,rect.bottom+2))+'px';pop.querySelector('button')?.focus()}
@@ -124,18 +205,34 @@ document.addEventListener('pointerdown',e=>{if(!$('#pop').contains(e.target))hid
 const dlg=$('#dlg');function modal(name){hideMenu();const box=$('#dialogBody');box.replaceChildren();const head=el('div','dialoghead');head.append(el('h2','',name),btn('×',()=>dlg.close(),'icon'));head.lastChild.ariaLabel='Close dialog';box.append(head);if(!dlg.open)dlg.showModal();dlg.setAttribute('aria-label',name);return box}
 function ask(name,detail,label,action){const b=modal(name);b.append(el('p','note',detail),btn(label,()=>{dlg.close();action()},'danger'))}
 function tabMenu(t,a){menu(a,[title(t.root),['Move tab…',()=>moveDialog(t.root.id)],...statuses(t.root).map(o=>[title(o.p)+' · '+o.status,()=>{t.focus=o.p.id;selectTab(t.id)}]),['Close tab',()=>closeNode(t.root.id)]])}
-function paneMenu(p,a){const items=[title(p),['Move pane…',()=>moveDialog(p.id)],['Move to new tab',()=>applyMove(p.id,{gap:tabs().length})]];if(p.type==='session'&&!sessions[p.sid]?.ended){items.push(['Simulate agent status…',()=>statusDialog(p)],['End session…',()=>ask('End '+title(p)+'?','All attached views will see this simulated session exit.','End session',()=>{const s=sessions[p.sid];s.ended=true;s.status='';s.lines.push(entry('mut','Session ended.'));updateSessions(p.sid)}) ,'danger'])}items.push(['Close pane',()=>closeNode(p.id)]);menu(a,items)}
+function paneMenu(p,a){const items=[title(p),['Split right',()=>splitShell(p,'cols')],['Split below',()=>splitShell(p,'rows')],['Move pane…',()=>moveDialog(p.id)],['Move to new tab',()=>applyMove(p.id,{gap:tabs().length})]];if(p.type==='session'&&!sessions[p.sid]?.ended){items.push(['Rename session…',()=>renameSession(p)],['Simulate agent status…',()=>statusDialog(p)],['End session…',()=>ask('End '+title(p)+'?','All attached views will see this simulated session exit.','End session',()=>{const s=sessions[p.sid];s.ended=true;s.status='';s.lines.push(entry('mut','Session ended.'));updateSessions(p.sid)}) ,'danger'])}items.push(['Close pane',()=>closeNode(p.id)]);menu(a,items)}
 function statusDialog(p){const b=modal('Agent status · '+title(p));b.append(el('p','note','Send a simulated report from this terminal.'));const row=el('div','choices');for(const s of ['Working','Needs input','Done','Error'])row.append(btn(s,()=>{dlg.close();stateFor(p,s)}));b.append(row)}
 function detachedList(){const b=modal('Attach a session');const used=new Set(tabs().flatMap(t=>leaves(t.root).map(p=>p.sid)));let count=0;for(const [id,s] of Object.entries(sessions)){if(used.has(id)||s.ended)continue;count++;const d=el('div','detachrow');d.append(el('div','',s.name+' · '+id.slice(0,5)),btn('Attach',()=>{dlg.close();addTab('session',pane('session',id))}));b.append(d)}if(!count)b.append(el('p','note','No detached sessions. Close a terminal pane to detach it.'))}
 $('#types').onclick=()=>menu($('#types'),['New tab',...Object.entries(names).map(([k,v])=>[v,()=>addTab(k)]),['Attach existing session…',detachedList]]);
-$('#plus').onclick=()=>{const t=tabs().at(-1);addTab(t?(find(t.root,t.focus)||leaves(t.root)[0]).type:'session')};
-function guide(){const b=modal('Workspace guide');const ul=el('ul','guide');for(const s of ['Drag the Codex + Tests tab over Logs, then to the top or right edge. Release to commit the preview.','On touch or keyboard, open the tab’s ⋮ menu and choose Move tab. Choose a target and edge.','Zoom in a pane header expands that pane to the full workspace. Choose Restore layout or use Ctrl+Shift+Enter (⌘⇧Enter on macOS) to toggle the focused pane.','Move group carries the pair. A pane’s ⋯ moves just that view. Drag a divider to adjust the split.','Use + for another tab of the adjacent type. The dropdown opens Session, Monitor, Logs, or a detached session.','Demo controls create network holds, simulate a reconnect, or open a second workspace window. Terminal input accepts help for sample commands.'])ul.append(el('li','',s));b.append(ul)}
+$('#plus').onclick=()=>addTab(plusType());
+function guide(){const b=modal('Workspace guide');const ul=el('ul','guide');for(const s of ['Use a pane’s ⋯ menu to split right or below with a fresh shell, or rename a live session. Group actions can equalize adjacent panes.','Drag the Codex + Tests tab over Logs, then to the top or right edge. Release to commit the preview.','On touch or keyboard, open the tab’s ⋮ menu and choose Move tab. Choose a target and edge.','Zoom in a pane header expands that pane to the full workspace. Choose Restore layout or use Ctrl+Shift+Enter (⌘⇧Enter on macOS) to toggle the focused pane.','Move group carries the pair. A pane’s ⋯ moves just that view. Drag a divider to adjust the split.','Use + for another tab of the adjacent type. The dropdown opens Session, Monitor, Logs, or a detached session.','Demo controls create network holds, simulate a reconnect, or open a second workspace window. Terminal input accepts help for sample commands.'])ul.append(el('li','',s));b.append(ul)}
 $('#help').onclick=guide;
-function attention(){const b=modal('Workspace attention'),list=el('div','attentionlist');for(const t of tabs())for(const {p,status} of statuses(t.root))list.append(btn(title(p)+' · '+status,()=>{dlg.close();t.focus=p.id;selectTab(t.id)}));for(const h of net.holds)list.append(btn('Sandbox hold · '+h,()=>{dlg.close();for(const t of tabs()){const m=leaves(t.root).find(p=>p.type==='monitor');if(m){m.page='Requests';if(cache.has(m.id))network(m,cache.get(m.id));t.focus=m.id;selectTab(t.id);return}}addTab('monitor')}));if(!list.childElementCount)list.append(el('p','note','Nothing needs attention.'));b.append(list)}
+function attention(){const b=modal('Workspace attention'),list=el('div','attentionlist');for(const t of tabs())for(const {p,status} of statuses(t.root))list.append(btn(title(p)+' · '+status,()=>{dlg.close();t.focus=p.id;selectTab(t.id)}));for(const h of net.holds)list.append(btn('Sandbox hold · '+h.host,()=>{dlg.close();for(const t of tabs()){const m=leaves(t.root).find(p=>p.type==='monitor');if(m){m.page='Requests';if(cache.has(m.id))network(m,cache.get(m.id));t.focus=m.id;selectTab(t.id);return}}addTab('monitor')}));if(!list.childElementCount)list.append(el('p','note','Nothing needs attention.'));b.append(list)}
 $('#attention').onclick=attention;
-function reconnect(){online=false;refreshTerminals();tell('Connection interrupted · retaining layout');setTimeout(()=>{online=true;refreshTerminals();tell('Reconnected · restored session attachments')},1800)}
+function reconnect(exitSid){
+ if(!online)return;
+ online=false;refreshTerminals();tell('Connection interrupted · retaining layout');
+ setTimeout(()=>{
+  online=true;const lost=exitSid&&sessions[exitSid];
+  if(lost&&!lost.ended){lost.ended=true;lost.status='';lost.lines.push(entry('mut','Session exited while disconnected.'));updateSessions(exitSid)}
+  refreshTerminals();tell(lost?'Reconnected · '+lost.name+' exited':'Reconnected · restored session attachments')
+ },1800)
+}
+function reconnectWithExit(){
+ const b=modal('Choose a terminal to exit during reconnect'),seen=new Set();
+ for(const t of tabs())for(const p of leaves(t.root)){
+  if(!sessions[p.sid]||sessions[p.sid].ended||seen.has(p.sid))continue;
+  seen.add(p.sid);b.append(btn(title(p),()=>{dlg.close();reconnect(p.sid)}))
+ }
+ if(!seen.size)b.append(el('p','note','Open a live terminal session first.'))
+}
 function refreshTerminals(){for(const t of tabs())for(const p of leaves(t.root))if(p.sid&&cache.has(p.id))paintSession(p,cache.get(p.id));renderTabs()}
-$('#demobtn').onclick=()=>menu($('#demobtn'),['Demo controls',['Simulate network hold',addHold],['Simulate agent status…',()=>{const b=modal('Choose terminal');for(const t of tabs())for(const p of leaves(t.root))if(p.sid&&!sessions[p.sid]?.ended)b.append(btn(title(p),()=>statusDialog(p))) }],['Simulate reconnect',reconnect],['Open another window',()=>{const u=new URL(location.href);u.searchParams.set('window',uid());window.open(u.href,'_blank','noopener')}],['Workspace guide',guide],['Restore example tabs…',()=>ask('Restore example tabs?','Replace this window’s layout with fresh Codex, Tests, Logs and Monitor views.','Restore example',()=>{const t=newTab(group('cols',[newSession('Codex'),newSession('Tests')]));layout={tabs:[t,newTab(pane('logs')),newTab(pane('monitor'))],active:t.id};zoomedPane=null;cache.clear();save();render()})]]);
+$('#demobtn').onclick=()=>menu($('#demobtn'),['Demo controls',['Simulate network hold',addHold],['Simulate agent status…',()=>{const b=modal('Choose terminal');for(const t of tabs())for(const p of leaves(t.root))if(p.sid&&!sessions[p.sid]?.ended)b.append(btn(title(p),()=>statusDialog(p))) }],['Simulate reconnect',()=>reconnect()],['Reconnect with an exited terminal…',reconnectWithExit],['Open another window',()=>{const u=new URL(location.href);u.searchParams.set('window',uid());window.open(u.href,'_blank','noopener')}],['Workspace guide',guide],['Restore example tabs…',()=>ask('Restore example tabs?','Replace this window’s layout with fresh Codex, Tests, Logs and Monitor views.','Restore example',()=>{const t=newTab(group('cols',[newSession('Codex'),newSession('Tests')]));layout={tabs:[t,newTab(pane('logs')),newTab(pane('monitor'))],active:t.id};zoomedPane=null;cache.clear();save();render()})]]);
 // Layout transforms copy containers and retain live pane objects.
 function cloneNode(n){return n.children?{...n,weights:[...n.weights],children:n.children.map(cloneNode)}:n}
 function detach(n,id){if(n.id===id)return null;if(!n.children)return n;
@@ -216,7 +313,12 @@ document.addEventListener('pointerup',e=>{if(drag&&e.pointerId===drag.pid)hit(e.
 document.addEventListener('pointercancel',()=>stopDrag(false));window.addEventListener('blur',()=>stopDrag(false));
 document.addEventListener('click',e=>{if(performance.now()<ignoreClickUntil){e.preventDefault();e.stopImmediatePropagation()}},true);
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&e.shiftKey&&!e.altKey&&!dlg.open&&!drag&&active()?.root.children){e.preventDefault();toggleZoom(active().focus);return}if(e.key==='Escape'){stopDrag(false);hideMenu()}if(e.key==='?'&&!dlg.open&&!['INPUT','SELECT'].includes(document.activeElement.tagName)){e.preventDefault();guide()}});
-window.addEventListener('storage',e=>{if(e.key===networkKey){net=load(networkKey)||net;for(const t of tabs())for(const p of leaves(t.root))if(p.type!=='session'&&cache.has(p.id))paintNetwork(p,cache.get(p.id));renderTabs()}if(e.key===sessionsKey){sessions=load(sessionsKey)||sessions;refreshTerminals()}});
+window.addEventListener('storage',e=>{if(e.key===networkKey){net=load(networkKey)||net;redrawNet()}if(e.key===sessionsKey){sessions=load(sessionsKey)||sessions;refreshTerminals();
+ const showing=drag?.reveal?tabs().find(t=>t.id===drag.reveal):active();
+ if(showing)for(const node of all(showing.root)){
+  if(node.children){const head=document.querySelector('[data-node="'+node.id+'"] > .gin');if(head){head.querySelector('b').textContent=title(node);head.querySelector('button').ariaLabel='Group actions for '+title(node)}}
+  else if(node.sid){const z=cache.get(node.id)?.querySelector('.zoom-toggle');if(z){z.ariaLabel=(zoomedPane===node.id?'Restore layout':'Zoom pane')+' · '+title(node);z.title=z.ariaLabel+' (Ctrl+Shift+Enter or ⌘⇧Enter)'}}
+ }}});
 window.addEventListener('pagehide',()=>{if(!drag)scrollRemember();save()});
-render();
+render();tickHolds();setInterval(tickHolds,500);
 </script></body></html>
