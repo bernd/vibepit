@@ -52,6 +52,14 @@ The drag source sets the unit of movement. A tab carries its root layout, a grou
 
 Reject a move into the source itself or one of its descendants. When the available space cannot accommodate the result at the supported pane minimums, show the target as unavailable and keep the source intact. Preview and commit must use the same sizing and targeting rules.
 
+## Pane zoom
+
+In a tab with multiple panes, **Zoom pane** expands one Session, Monitor, or Logs pane to fill the workspace below the tab bar. Keyboard focus alone selects where input goes. Zoom requires an explicit action. Keep the tab bar and workspace attention controls available while zoomed.
+
+Show **Zoom** in the pane header and **Restore layout** in the same position while zoomed. **Ctrl+Shift+Enter** (Command+Shift+Enter on macOS) toggles the focused pane. Restore brings back the exact group hierarchy, pane order and divider proportions, with keyboard focus in the same pane. Hidden siblings continue running. Zoom does not create, detach, or replace a view.
+
+Zoom is temporary window state. Switching tabs or committing a layout move returns to the tiled view. A drag previews the full layout, and canceling it restores the zoomed view. Single-pane tabs already use the available workspace.
+
 ## Background status and focus
 
 A terminal agent may report **Working**, **Needs input** or **Done**. A quiet PTY supplies no evidence that a turn has finished. Use agent events for a structured agent view or program-reported status for a terminal view. The architecture places terminal program status under future OSC 7501 support. The experiment can exercise these states with simulated reports.
@@ -95,6 +103,7 @@ This document covers the workspace layout portion of the desktop UI design. The 
 | Use + beside a mixed tab while a different tab is selected. | A new tab opens with the adjacent tab’s last-focused pane type. |
 | Leave an agent running while another pane needs input and a network hold arrives. | The tab identifies the waiting pane. The hold is identifiable as sandbox-wide. Keyboard focus stays put. |
 | With a detach-capable backend, close a live terminal pane and attach to its session again. | The same session is available. Explicitly ending it instead is observable from other attached views. |
+| Resize a divider in a nested group, zoom a terminal with an unsent command, then restore. Repeat with a Logs pane. | Only the requested pane fills the workspace. The original group tree, divider proportions, draft and filters survive. The same pane retains keyboard focus. |
 | Change filters in one of two Logs views and rearrange both. | Filters remain independent. Moving either view preserves its filters and scroll position. |
 
 ### Related project documents
