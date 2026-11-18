@@ -35,6 +35,10 @@ The **+** and dropdown sit together at the end of the tab bar. The dropdown offe
 | Monitor | The desktop equivalent of `vibepit monitor`, covering held requests and their decisions, HTTP/DNS request history, host statistics, and effective rules. |
 | Logs | The monitor’s network event view opened directly. Each view owns its filters, scroll position and follow state. All views observe the same underlying sandbox activity and decisions. |
 
+**Split right** and **Split below** in any pane’s menu open a fresh shell next to that pane in the same tab. Focus moves to the new shell. The existing session or network view keeps its state. If the split cannot fit, leave the layout intact and create no session. **+** continues to open a tab. Its tooltip and accessible label update as soon as focus changes within the adjacent tab, using the same type selection as the click action.
+
+**Rename session** gives a live shell session a descriptive name, such as *Proxy tests*. Use the name in pane headers, tab and group titles, docking previews, attention items and the reattach picker. Keep the session ID stable and propagate the name to other attached views. Ignore surrounding whitespace and require a nonempty name.
+
 A dedicated Claude conversation could become another pane type. Its addition should require no changes to docking semantics.
 
 ## Manual docking
@@ -47,6 +51,8 @@ The drag source sets the unit of movement. A tab carries its root layout, a grou
 3. **Orient.** At the top or bottom, the incoming group’s immediate children run left to right. At the left or right, they run top to bottom. Preserve child order and relative weights. A child that is itself a group retains its own orientation, order and proportions.
 4. **Commit.** Release to apply exactly the preview in one operation. Remove an emptied source tab. If removing a child leaves a group with one child, promote that child. Preserve every group still containing multiple children. An invalid drop or Escape restores the previous layout, active tab and focus.
 5. **Adjust.** Drag a divider to resize neighboring panes. A group or pane can be picked up again and docked elsewhere or moved into a tab-bar gap. Keyboard-accessible move commands must offer the same source, target, edge and new-tab choices.
+
+**Equalize sizes** in a group’s action menu distributes space equally among its immediate children, subject to their minimum sizes. Nested groups keep their internal weights. Save the adjusted proportions with the layout.
 
 **Nested example.** Dock a group containing Shell and the pair (Codex, Tests) to the right of Logs. Shell goes above the pair. If Codex and Tests were side by side inside that pair, they remain side by side. Only the two direct children of the incoming group were reoriented.
 
@@ -68,6 +74,8 @@ For a mixed background tab, show **Needs input** ahead of **Working**, then **Do
 
 A held network request belongs to the sandbox. Surface its count in Monitor and the workspace attention UI even when the user is in another tab. Never attribute a host request to an agent by correlating timestamps. A Monitor and Logs pane in the same tab still represent one underlying request.
 
+Show each hold’s remaining time in Monitor. At the proxy deadline, withdraw its decision controls and attention item, refresh the count in all views, and record the expiry in Logs. Apply a decision only to its still-pending request ID. A new request for the same host has a separate ID. The mockup uses a 20-second deadline so expiry can be exercised without a proxy.
+
 ## Session lifetime and ownership
 
 Moving, tiling, resizing or hiding a pane is a presentation change. Preserve its terminal scrollback and selection, network filters, or agent draft. Keep its attachment and client identity stable through a move. A committed terminal resize may update the PTY dimensions.
@@ -85,6 +93,10 @@ The current experiment also has a Claude process bound to its SSH channel. Durab
 | Holds, network history, host statistics and effective rules | Sandbox proxy, accessed through the host’s network control client |
 | Network filters, terminal selection and other view-local state | Individual pane or its feature |
 
+### Reconnect with an exited terminal
+
+Alongside successful reconnect, provide a demo scenario that exits one selected terminal during the interruption. Restore the layout and other attachments. The affected pane shows **Exited**, retains its transcript, and offers **Open replacement shell**. This explicit action starts a fresh session in the same pane. All group memberships, divider positions, and sibling views survive.
+
 ## Alternatives and scope
 
 The per-pane tab-bar sketch let each column switch independently. The selected single bar gives the whole arrangement one place to return to and one place to show background status. The automatic grid sketch made adding a fourth pane convenient, but the drop edge expresses an intention the grid cannot infer. V1 uses manual docking with a live preview.
@@ -100,6 +112,11 @@ This document covers the workspace layout portion of the desktop UI design. The 
 | Dock the nested Shell + (Codex, Tests) group. | Only Shell and the pair change orientation relative to each other. Explicit child groups survive. |
 | Hover a background tab, switch between outer and pane targets, then cancel. | The outline and preview identify the affected region. Cancellation restores selection, layout and focus. |
 | Repeat a move using keyboard commands. | The same layouts and new-tab destinations are reachable. |
+| Split a Logs pane right, then split its shell below. Rename the new session and move it. | New shells open in place and receive focus. The name follows the same session in headers, previews, attention and reattachment. |
+| Change focus between Logs and a terminal in the rightmost tab. | The + tooltip and accessible name immediately describe the type that clicking it opens. |
+| Resize a nested group, then equalize its parent. | The parent’s children share the space and the nested proportions survive. |
+| Let a simulated network hold expire while viewing it in two windows. | Both lose the hold and its actions. Logs show one expiry and the rules are unchanged. |
+| Reconnect with one terminal exited. | The exited terminal remains in place. Opening a replacement there preserves the layout and other sessions. |
 | Use + beside a mixed tab while a different tab is selected. | A new tab opens with the adjacent tab’s last-focused pane type. |
 | Leave an agent running while another pane needs input and a network hold arrives. | The tab identifies the waiting pane. The hold is identifiable as sandbox-wide. Keyboard focus stays put. |
 | With a detach-capable backend, close a live terminal pane and attach to its session again. | The same session is available. Explicitly ending it instead is observable from other attached views. |
