@@ -744,6 +744,11 @@ protocol-specific.
   `{kind, target, decision, code, reason, rule, detail, ...}`. It replaces
   `LogEntry` on the wire; the fields from section 8 above (method, path,
   status, mode, secret, audit marker) live in the `http-request` details.
+- **Parent flows.** A flow record has an optional `parent`: the ID of the
+  flow it belongs to. An `http-request` names the `http-connect` of its
+  terminated connection, so the monitor can group requests under their
+  connection. Later kinds use the same field (an MCP call inside an
+  `http-request`, a channel inside an SSH session).
 - **Targets.** The host table becomes a target table: rows keyed by
   (kind, target) with counts and flags (allowed, denied, rejected, held).
   DNS and HTTP rows for the same domain stay separate, as today.
@@ -760,6 +765,25 @@ protocol-specific.
   the kind, the target as a string, and the decision. Each target carries an
   `allowable` flag from the proxy; an older client can still allow it through
   `/decisions` without understanding the kind.
+
+**How future kinds fit.** Not built in this project; recorded to check that
+the protocol holds up.
+- **Raw TCP egress** (e.g. `psql` to a cloud database): a new entry point
+  (SOCKS5 or per-port listeners) and a kind such as `tcp-connect` with target
+  `{host, port}`. It reuses host admission, the per-dial check (CIDR,
+  aliases), holds, policy, and the stream. The kind is declared not
+  inspectable: no termination, no request rules.
+- **SSH:** as plain TCP, the same. As an SSH-aware proxy (terminating SSH the
+  way the proxy terminates TLS), an `ssh-session` kind with user and command
+  as details (e.g. `git-upload-pack 'acme/api'`) would allow repo rules for
+  git over SSH; channels are child flows via `parent`.
+- **Inbound forwards** (host to sandbox) and **MCP calls** (child flows of
+  `http-request`) fit as kinds as well.
+- **Limit: secret injection is HTTP-specific.** Service definitions inject
+  into HTTP headers. Credentials for other kinds (an SSH key through a signing
+  agent on the host, a database password) need new injection types in
+  service definitions, per kind. The schema can grow without breaking
+  existing definitions, but each kind is real work.
 
 **The `host-port` kind.** Today `host.vibepit` is an HTTP target with special
 handling: a blocked `host.vibepit:3000` is held, and allowing it writes
@@ -1012,6 +1036,7 @@ in a `when` condition on `request.path`.
 - Generic protocol: every kind's flows, holds, target rows, and decisions go
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
+- `http-request` flows carry their `http-connect` as `parent`.
 - `host-port`: traffic to `host.vibepit:<port>` produces `host-port` flows,
   is held when not allowed, and allowing it writes `allow-host-ports`; old
   `allow-http: host.vibepit:<port>` entries still work, with a warning.
