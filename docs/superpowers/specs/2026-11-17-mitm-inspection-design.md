@@ -149,21 +149,43 @@ connection. The CA is installed
 in every session (rules can arrive at runtime). The CA never goes into the
 home volume.
 
+**Two decisions.** The proxy makes two separate decisions, each in exactly
+one place:
+
+1. **Admission**, at `CONNECT`: refuse, tunnel, or terminate. A host admitted
+   only by path allows is terminated, so its requests can be authorized.
+   Holds and alias checks happen here.
+2. **Request authorization**, for every request the proxy forwards: request
+   rules, audit mode, inspectors, then secret injection. It runs for every
+   request form: ordinary proxy requests with an absolute `http://` or
+   `https://` URL (today's `DoFunc`, which checks only host and port and
+   forwards HTTPS upstream itself, so it sees the path without termination),
+   HTTP/1.1 inside a terminated `CONNECT`, and HTTP/2 streams. The same
+   upstream request gets the same decision however it reaches the proxy.
+
 **Inside a terminated connection.**
-- The inner `Host` header (or HTTP/2 `:authority`) must equal the `CONNECT`
-  target (default port applied). goproxy prefers the inner `Host` when
-  building the upstream URL (`https.go`, "We prioritize req.Host"), so a
-  mismatch is rejected, never followed. The checked target is carried in
-  `ctx.UserData`.
-- Every decrypted request goes through one function that evaluates request
-  rules, audit mode, and secrets. Host-level checks (holds, CIDR, aliases)
-  run once at `CONNECT`, not per request.
+- The request's authority must equal the `CONNECT` target (default port
+  applied), for both forms: the inner `Host` header or HTTP/2 `:authority`
+  for origin-form requests, and the URL's host for absolute-form requests.
+  goproxy prefers the inner `Host` when building the upstream URL
+  (`https.go`, "We prioritize req.Host") and keeps an absolute-form URL's
+  host, so a mismatch is rejected, never followed. The checked target is
+  carried in `ctx.UserData`.
+- The client must speak TLS. goproxy serves a non-TLS connection after
+  `CONNECT` as cleartext `http` (including h2c); a terminated connection
+  rejects that instead.
 - Blocked requests get a real `403` with an explanatory body (today a blocked
   HTTPS host only shows a failed connection).
 - HTTP/2 is enabled (`AllowHTTP2`). WebSocket upgrade requests are evaluated
   like any request; frames are not inspected.
 - Upstream certificates are always verified against system roots; there is no
   option to skip verification. The proxy image must carry CA roots.
+- **Every upstream dial connects to a validated address.** Today the CIDR
+  check and the dial resolve the hostname separately, so the address dialed
+  can differ from the one checked; a terminated connection can also open
+  several upstream connections over its life. The dialer resolves, checks
+  every address against the CIDR rules, and dials one of those addresses,
+  keeping the hostname for TLS verification. This applies to tunnels too.
 - The proxy never follows redirects; the client's follow-up request is checked
   again.
 
@@ -212,12 +234,21 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   requests, such as audit-mode traffic on hosts without rules, are forwarded
   untouched. Scoped npm packages (`/@scope%2fname`) and GitLab-style
   `group%2Fproject` paths keep working.
-- Match against the percent-decoded path, except `%2F` and `%5C`, which stay
-  part of their segment. Allows match only that form; denies also match the
-  form with `%2F`/`%5C` decoded as separators, so both fail toward blocking.
-- Reject (do not rewrite) requests with `.` or `..` segments, `//`, or NUL
-  when a path pattern is evaluated. Forward the original bytes so signed URLs
-  keep working.
+- Two interpretations are computed: (a) the percent-decoded path with `%2F`
+  and `%5C` kept inside their segment, and (b) the path with `%2F`/`%5C` also
+  decoded as separators. An upstream router may use either, so:
+  - an allow, and a credential's inject paths, match only if **every**
+    interpretation is in scope;
+  - a deny matches if **any** interpretation matches.
+- Reject (do not rewrite) requests with `.` or `..` segments, `//`, or NUL in
+  either interpretation when a path pattern is evaluated, so
+  `/repos/acme/api/..%2F..%2Fother` can't match an allow on
+  `/repos/acme/api/**` and reach `/repos/other` with a credential. Forward
+  the original bytes so signed URLs keep working. Encoded package names such
+  as `/@scope%2fname` pass whenever both interpretations fit the rule (e.g.
+  under `/**`).
+- Tests check authorization and injection against the path the upstream
+  actually receives.
 - Allows match case-sensitively; denies match case-insensitively.
 - Path patterns don't match query strings; use `when`.
 - Methods omitted means any. `read-only` means GET, HEAD, OPTIONS. No
@@ -356,6 +387,10 @@ Built-in ones are embedded in vibepit (not `netproxy`), in a new
 
 `auth` styles: `bearer`, `token`, `{basic: <user>}`, `raw`.
 
+Each inject entry binds to an **HTTPS origin**: scheme `https`, the listed
+hosts, and an explicit port (`port`, default 443). A rule with `secret` whose
+port differs from every binding is a config error.
+
 **Secrets** are configured in global config only:
 
 ```yaml
@@ -387,10 +422,15 @@ Sources: `env` and `command`.
 env for each name in the service's `env`. It exists so tools like `gh` run;
 it carries no value.
 
-**Injection.** For a request on a terminated host:
+**Injection.** For any request that passes request authorization (terminated
+`CONNECT` or an ordinary `https://` proxy request):
 - If an allow rule with `secret: X` matches, the request is allowed overall
   (no deny matches), and the host and path fall within one of X's `inject`
   entries, the proxy overwrites that entry's header with the formatted value.
+- Immediately before attaching, the proxy checks the final outbound URL:
+  scheme `https` and authority equal to the binding's host and port. Plain
+  `http://` requests, cleartext inside `CONNECT`, and any other port never
+  carry a credential upstream.
 - If two different secrets would set the same header on one request, block
   it and log the conflict.
 - Otherwise, if the service's header carries the placeholder (decoding Basic
@@ -401,6 +441,29 @@ it carries no value.
   worthless, so this is a detection signal, not a protection. This check is
   implemented as the first request inspector (section 6); stripping the
   service's own header stays part of injection.
+
+**Project trust.** A project config may use `secret` on rules and presets, and
+add entries to sets used by secret-bearing rules, only after the user
+approves it:
+- An approval is bound to the project's identity (its resolved root path)
+  and to a hash of the project's **entire** network policy (`allow-http`,
+  `deny-http`, `sets`, `presets`) whenever any part of it is secret-related.
+  Hashing only the secret-related parts would miss changes that widen a
+  credential grant indirectly, such as removing a project deny that narrows
+  a secret-bearing allow. It is stored on the host, outside the repo.
+- The approval prompt shows the effective credential grants after expansion:
+  for each secret, the hosts, methods, and path patterns it will be sent to,
+  and the denies that narrow them.
+- The check runs where the project config is loaded: when `run` starts a new
+  session, it asks if the hash is new or changed; `up` refuses with a hint to
+  run a new `vibepit trust` command. `connect`, and `run` attaching to a
+  running session, don't load config and don't ask.
+- Declining aborts startup with a message naming the secret-related parts.
+  There is no "start without them" mode.
+- The agent can't change the project config mid-session: `.vibepit` is
+  hidden in the sandbox behind a read-only mount, and config is read only at
+  startup.
+- Project config without secret-related parts works exactly as today.
 
 ### 6. Request inspectors
 
@@ -428,31 +491,19 @@ request path; the placeholder check is the only inspector.
   caller registers. With no inspectors registered, no inspection work runs.
 - **Inspectors only tighten.** A finding can alert or block; nothing an
   inspector returns can allow a request that policy refused.
-- **Coverage:** inspectors see only terminated connections. Broad scanning
+- **Coverage:** inspectors see every request that goes through request
+  authorization: terminated connections and ordinary proxy requests, not
+  tunnels. Broad scanning
   will need broad termination (allowed hosts on 443, except `host.vibepit`).
   That scope is one mechanism, built now for audit mode, which a future scan
   switch also turns on. Tunneled traffic stays invisible, and the threat
   model says so.
 
-**Project trust.** A project config may use `secret` on rules and presets, and
-add entries to sets used by secret-bearing rules, only after the user
-approves it:
-- vibepit stores, on the host outside the repo, a hash of the project
-  config's secret-related parts.
-- The check runs where the project config is loaded: when `run` starts a new
-  session, it asks if the hash is new or changed; `up` refuses with a hint to
-  run a new `vibepit trust` command. `connect`, and `run` attaching to a
-  running session, don't load config and don't ask.
-- Declining aborts startup with a message naming the secret-related parts.
-  There is no "start without them" mode.
-- The agent can't change the project config mid-session: `.vibepit` is
-  hidden in the sandbox behind a read-only mount, and config is read only at
-  startup.
-- Project config without secret-related parts works exactly as today.
-
 ### 7. Audit mode
 
-- Enabled with `--audit` on `run`/`up`, or `audit: true` in config.
+- Enabled with `--audit` on `run`/`up`, or `audit: true` in the global
+  config. It is a host-controlled setting: `audit` in a project config is a
+  config error, so a cloned repo can't relax path allows.
 - Terminates TLS on every allowed host and logs every request with method
   and path.
 - Requests refused only for not matching a path allow are let through and
@@ -473,9 +524,16 @@ approves it:
 
 - `LogEntry` gains `Method`, `Path`, `Query`, `Status`, `Mode`
   (tunnel/mitm), `Secret` (name only), and an audit marker.
-- Query strings: parameter names only normally; values kept in audit mode.
-- Never logged: headers, bodies, secret values, placeholders. A placeholder
-  block logs "placeholder for secret `github` sent outside its binding".
+- Query strings: parameter names only, in every mode including audit. Signed
+  download URLs carry credentials vibepit doesn't know about. Draft rules
+  need only host, method, and path.
+- Never logged: headers, bodies, query values, secret values, placeholders. A
+  placeholder block logs "placeholder for secret `github` sent outside its
+  binding".
+- Log entries are sanitized when they are built, before they enter a ring
+  buffer or `/events`: known placeholders and secret values in the path are
+  replaced with `<secret:NAME>`. Redacting only the inspector's finding is not
+  enough, since the request entry itself carries the path.
 - New block codes for request-rule refusals, host mismatch, placeholder
   misuse, and missing secret values. `AllowFixes` is false for all except a
   request-level "not allowlisted".
@@ -572,7 +630,27 @@ deleted.
 
 ### 13. Behavior the tests must pin
 
-- Inner `Host`/`:authority` mismatch is rejected.
+**First acceptance test, written before the `netproxy` extraction begins:**
+a whole-host allow plus one explicit path deny, exercised through every
+supported request form (ordinary `http://` and `https://` proxy requests,
+HTTP/1.1 inside `CONNECT`, HTTP/2 streams). For each, assert the client gets
+a 403 and the upstream receives zero requests. Repeat with a host admitted
+only by a path allow.
+
+- Inner `Host`/`:authority` and absolute-form URL host mismatches are
+  rejected; cleartext after a terminated `CONNECT` is rejected.
+- Credentials are never sent upstream over `http`, cleartext inside
+  `CONNECT`, or a port other than the binding's.
+- Each upstream dial, including a reconnect late in a long-lived terminated
+  connection, goes to an address that passed the CIDR check, even if DNS
+  changes in between.
+- Allows and credential paths require every path interpretation in scope;
+  `..%2F` traversal is rejected; scoped npm names still pass under `/**`.
+- Log entries in the ring buffers and on `/events` contain no query values,
+  placeholders, or secret values, including for blocked requests.
+- Changing any part of a secret-using project's network policy, including
+  removing a deny, requires approval again; `audit` in project config is an
+  error.
 - No redirect is followed by the proxy.
 - Hosts without request rules or secrets are tunneled, not terminated.
 - Older-format configs produce identical decisions.
