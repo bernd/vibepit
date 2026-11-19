@@ -149,11 +149,24 @@ connection. The CA is installed
 in every session (rules can arrive at runtime). The CA never goes into the
 home volume.
 
+**Request forms.** The new proxy accepts exactly two:
+
+- `CONNECT`, which is the only way to reach an HTTPS destination.
+- Ordinary proxy requests with an absolute `http://` URL, for plain HTTP
+  (apt and some package mirrors need it). These never carry credentials.
+
+An ordinary proxy request with an absolute `https://` URL is rejected with a
+400 that tells the client to use `CONNECT`. Today's `DoFunc` accepts it and
+makes the TLS connection upstream itself; common clients (curl, git, npm,
+pip, Go, Node, Java with `https.proxyHost`) use `CONNECT` for HTTPS anyway.
+Dropping it leaves one way into HTTPS, so credentials only ever travel inside
+terminated `CONNECT` connections.
+
 **Two decisions.** The proxy makes two separate decisions, each in exactly
 one place:
 
 1. **Host admission**, shared by both entry points: at `CONNECT`, and for
-   each ordinary proxy request (which has no `CONNECT` phase; today's
+   each ordinary `http://` request (which has no `CONNECT` phase; today's
    `checkRequest` does this for both). It applies host-level allows and
    denies and holds, and yields refuse, tunnel, or terminate (`CONNECT`) or
    refuse or continue (ordinary request). A host admitted only by path allows
@@ -162,11 +175,9 @@ one place:
    dial (below), so they still hold on a reconnect.
 2. **Request authorization**, for every request the proxy forwards: request
    rules, audit mode, inspectors, then secret injection. It runs for every
-   request form: ordinary proxy requests with an absolute `http://` or
-   `https://` URL (today's `DoFunc`, which checks only host and port and
-   forwards HTTPS upstream itself, so it sees the path without termination),
-   HTTP/1.1 inside a terminated `CONNECT`, and HTTP/2 streams. The same
-   upstream request gets the same decision however it reaches the proxy.
+   request form: ordinary `http://` proxy requests, HTTP/1.1 inside a
+   terminated `CONNECT`, and HTTP/2 streams. The same upstream request gets
+   the same decision however it reaches the proxy.
 
 **Inside a terminated connection.**
 - The request's authority must equal the `CONNECT` target (default port
@@ -449,8 +460,9 @@ Sources: `env` and `command`.
 env for each name in the service's `env`. It exists so tools like `gh` run;
 it carries no value.
 
-**Injection.** For any request that passes request authorization (terminated
-`CONNECT` or an ordinary `https://` proxy request):
+**Injection.** For a request inside a terminated `CONNECT` connection that
+passes request authorization (the only request form that can carry a
+credential):
 - If an allow rule with `secret: X` matches, the request is allowed overall
   (no deny matches), and the host and path fall within one of X's `inject`
   entries, the proxy overwrites that entry's header with the formatted value.
@@ -527,8 +539,8 @@ request path; the placeholder check is the only inspector.
 - **Inspectors only tighten.** A finding can alert or block; nothing an
   inspector returns can allow a request that policy refused.
 - **Coverage:** inspectors see every request that goes through request
-  authorization: terminated connections and ordinary proxy requests, not
-  tunnels. Broad scanning
+  authorization: terminated connections and ordinary `http://` proxy
+  requests, not tunnels. Broad scanning
   will need broad termination (allowed hosts on 443, except `host.vibepit`).
   That scope is one mechanism, built now for audit mode, which a future scan
   switch also turns on. Tunneled traffic stays invisible, and the threat
@@ -672,8 +684,8 @@ deleted.
 
 **First acceptance test, written before the `netproxy` extraction begins:**
 a whole-host allow plus one explicit path deny, exercised through every
-supported request form (ordinary `http://` and `https://` proxy requests,
-HTTP/1.1 inside `CONNECT`, HTTP/2 streams). For each, assert the client gets
+supported request form (ordinary `http://` proxy requests, HTTP/1.1 inside
+`CONNECT`, HTTP/2 streams). For each, assert the client gets
 a 403 and the upstream receives zero requests. Repeat with a host admitted
 only by a path allow: a non-matching request gets a 403 with zero upstream
 requests, and a matching request reaches the upstream exactly once, through
@@ -694,8 +706,10 @@ in a `when` condition on `request.path`.
 - Anything that changes the canonical credential policy asks for approval
   again (project edit, removed deny, built-in preset change); changes that
   leave it identical don't; `audit` in project config is an error.
-- Ordinary proxy requests get the same host admission as `CONNECT`: holds,
-  host-level denies, and alias denies.
+- Ordinary `http://` proxy requests get the same host admission as
+  `CONNECT`: holds, host-level denies, and alias denies.
+- An ordinary proxy request with an absolute `https://` URL gets a 400 and
+  the upstream receives nothing.
 - Alias and CIDR checks run on every upstream dial; the `host.vibepit`
   gateway route works while another name resolving to the same private
   address is blocked.
