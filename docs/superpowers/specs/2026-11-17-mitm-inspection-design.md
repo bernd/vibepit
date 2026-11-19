@@ -50,6 +50,8 @@ TLS only where rules need it".
 - Changing the `default` preset (it keeps `vcs-github`).
 - Chaining through an upstream (corporate) proxy. The current proxy doesn't
   either; with the new dialer it would be a dialer option.
+- Telemetry exporter configuration in vibepit. `netproxy` provides the
+  telemetry APIs now; vibepit keeps exporting off.
 - OAuth flows run by agents (Claude Code `/login`, Codex login). Planned with
   the host daemon; see "Future: OAuth with the host daemon". Host CLIs that
   manage their own OAuth (`gh auth token`, `gcloud auth print-access-token`)
@@ -986,6 +988,47 @@ embeddable.
 - **In-process subscriptions:** an embedder that wants to persist runtime
   decisions subscribes to `policy` events and stores them however it likes.
 
+**Telemetry.** `netproxy` provides operational telemetry (how the proxy
+itself is doing) through standard APIs; domain events (flows, holds, policy
+changes) stay on the event stream and are not duplicated.
+
+- **Metrics and traces: OpenTelemetry API, no SDK.** `netproxy` depends only
+  on the OTel API packages (`go.opentelemetry.io/otel`, `/metric`, `/trace`),
+  which pull in neither gRPC nor exporters. The embedder passes a
+  `MeterProvider` and `TracerProvider` as options; without them telemetry is
+  a no-op. Exporters are the embedder's choice.
+- **Logs: `log/slog`.** `netproxy` takes a `*slog.Logger` (standard library,
+  no dependencies). Embedders route it anywhere, including OTel through the
+  `otelslog` bridge. The OTel Logs API for Go is not used directly.
+- **Rejected:** Prometheus `client_golang` (metrics only, ties the library
+  to Prometheus; the OTel exporter can serve Prometheus), own hook interfaces
+  (would rebuild the OTel API, especially context propagation for traces),
+  `expvar` (simple counters only).
+- **Low cardinality.** Metric attributes are bounded values such as `kind`,
+  `decision`, and `code`, never host or path: the sandbox can generate any
+  number of names, and per-target counts are in the target table.
+- **Redaction applies.** Span attributes and log fields follow the
+  flow-record rules (no query values, headers, bodies, placeholders, or
+  secret values) and go through the same sanitizer before they reach a span
+  or log record.
+- **No trace propagation into agent traffic.** The proxy never adds
+  `traceparent` or other trace headers to upstream requests. An incoming
+  `traceparent` from the sandbox is untrusted and not used as the parent
+  span by default; an option can enable it.
+- **Spans:** one per connection (`CONNECT`, tunnel or terminated, or
+  ordinary `http://` request), with children per request for admission,
+  authorization, inspection, injection, the upstream dial (DNS and the CIDR
+  check), and the upstream round trip.
+- **Metrics:** active connections and holds; flows by kind and decision;
+  latency of dial, TLS handshake, upstream round trip, and hold duration;
+  event subscriber drops and gaps; leaf certificate cache size and misses;
+  secrets loaded or missing.
+- **vibepit's side:** exporting is off by default. A later project can add
+  global config for an exporter (OTLP/HTTP rather than OTLP/gRPC, which would
+  noticeably grow the proxy binary). The remote branch `origin/add/otlp`
+  goes the other way (the proxy receiving agents' OTLP telemetry); that is
+  agent-specific, belongs to vibepit, and is not part of this design.
+
 **In vibepit:** config files and merging, expanding sets and presets into
 concrete rules (and the preset content), built-in service definitions,
 secret sources, project trust, the `ProxyConfig` JSON container format, mTLS
@@ -1124,6 +1167,11 @@ in a `when` condition on `request.path`.
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
 - `http-request` flows carry their `http-connect` as `parent`.
+- Telemetry: without providers, telemetry is a no-op; with test providers,
+  spans and metrics appear with only bounded attributes; no span attribute or
+  log field contains query values, placeholders, or secret values; upstream
+  requests carry no trace headers; an incoming `traceparent` is ignored by
+  default.
 - Only subscribers of the `holds` topic enable holds; a subscriber to other
   topics alone gets no holds and no "unwatched" endings when it leaves.
 - `ApplyConfig` replaces the policy atomically and publishes `policy` events;
