@@ -50,7 +50,8 @@ TLS only where rules need it".
 - Changing the `default` preset (it keeps `vcs-github`).
 - Chaining through an upstream (corporate) proxy. The current proxy doesn't
   either; with the new dialer it would be a dialer option.
-- Secrets in project config (project trust); see "Future: project trust".
+- Approving credential grants on first use, like a hold; see "Future:
+  approving grants on first use". This project uses `vibepit trust`.
 - Telemetry exporter configuration in vibepit. `netproxy` provides the
   telemetry APIs now; vibepit keeps exporting off.
 - OAuth flows run by agents (Claude Code `/login`, Codex login). Planned with
@@ -450,8 +451,8 @@ sets:
 
 ### 4. Presets
 
-**Using presets** (global or project config; `secret` only in global config,
-see section 5). Strings stay valid:
+**Using presets** (global or project config; `secret` in a project config
+needs project trust, see section 5). Strings stay valid:
 
 ```yaml
 presets:
@@ -573,7 +574,9 @@ with `secret` whose port differs from every binding is a config error. An
 inject entry without `kind`, or with a kind that isn't injectable, is a
 config error.
 
-**Secrets** are configured in global config only:
+**Secrets** (values, sources, and inline service definitions) are
+configured in global config only. Rules that *use* a secret may also come
+from a project config, after project trust (below):
 
 ```yaml
 secrets:
@@ -626,17 +629,48 @@ credential):
   implemented as the first request inspector (section 6); stripping the
   service's own header stays part of injection.
 
-**Secrets are global-only in this project.** Everything that can send a
-secret is configured in the global config:
-- `secret` on an allow entry or a preset use is accepted only in the global
-  config; in a project config it is a startup error.
-- A secret-bearing rule that references a set sees only the set's global
-  entries; project entries of the same set apply to rules without secrets.
-- So a cloned repo's project config can't widen where a secret goes, and no
-  approval step is needed. Per-project repo lists for credentialed access go
-  in the global config for now.
-- Project trust (projects using secrets after an approval) is a later
-  project; see "Future: project trust".
+**Where credential grants come from.** A credential grant is an allow rule
+or preset use with `secret`.
+- **Grants in the global config apply to every project.** That is their
+  definition, and the docs say so plainly: a grant for private repos in the
+  global config can be used from any checkout.
+- **Per-project grants go in the project config** (for example a project's
+  own list of private repos) and need project trust before they apply.
+  Secret values, sources, and service definitions never come from a project
+  config.
+
+**Project trust (`vibepit trust`).** A project config may contribute
+credential grants after the user approves them, the way `direnv allow` and
+`mise trust` work.
+- **What is approved is the effective credential policy.** vibepit expands
+  the merged config (global plus project, sets and presets resolved,
+  built-in presets included) into a canonical list of credential grants:
+  per secret, the HTTPS origin, methods, path patterns, `when` conditions,
+  and every deny on that origin. Approval is needed when the project
+  contributes to that list: the list computed with the project config
+  differs from the list without it (its own grants, or entries it adds to a
+  set that a grant references).
+- **Approval identity.** The approval is bound to the project's resolved
+  root path and a hash of the canonical list, stored on the host outside the
+  repo. Anything that changes the list asks again: a project edit, a removed
+  deny that narrowed a grant, a new set entry, a vibepit upgrade whose
+  built-in preset widens a grant, or a global edit that changes a grant the
+  project contributes to. Changes that leave the list identical (such as
+  allows without `secret`) don't ask.
+- **What the user sees.** `vibepit trust`, run in the project directory,
+  lists the grants per secret and flags grants that paths can't limit (the
+  GraphQL presets) as "all repositories this token can access", then asks
+  for approval. `vibepit trust --revoke` removes the approval.
+- **Where it's checked.** Where the project config is loaded: when `run`
+  starts a new session it shows the same list and asks if the hash is new or
+  changed; `up` refuses with a hint to run `vibepit trust`. `connect`, and
+  `run` attaching to a running session, don't load config and don't ask.
+- **Declining** aborts startup with a message naming the grants. There is no
+  "start without them" mode.
+- **The agent can't change the project config mid-session:** `.vibepit` is
+  hidden in the sandbox behind a read-only mount, and config is read only at
+  startup.
+- Project config without credential grants works exactly as today.
 
 ### 6. Request inspectors
 
@@ -928,8 +962,11 @@ slow subscriber instead of blocking; keepalive comments.
 - On a refused request entry the monitor offers: allow exact path, allow a
   prefix, deny the path. These write object entries with literal hosts and
   paths to the project config. The monitor never writes `secret`, `{set}`
-  references, sets, or presets, and secrets live only in the global config,
-  so it cannot widen where a secret goes.
+  references, sets, or presets, so it cannot widen where a secret goes. A
+  saved allow never changes the approved credential policy. A saved deny on
+  an origin that has a credential grant does change it (denies on that
+  origin are part of the list), so the next startup of an approved project
+  asks again; the list shows the grant narrowed.
 - The approve screen and host-level holds are unchanged in behavior.
 - At cutover, the feed (`cmd/feed.go`), the hosts tab, and the prompt are
   rebuilt on the new event stream (section 8): they apply the snapshot and
@@ -946,7 +983,8 @@ slow subscriber instead of blocking; keepalive comments.
 
 - `allow-http` / `deny-http` commands gain `--method` and `--path` flags that
   produce object entries.
-- New command: `vibepit secret refresh`.
+- New commands: `vibepit secret refresh`; `vibepit trust` (and
+  `--revoke`), run in the project directory.
 - Control API: `POST /decisions` for allow, deny, and reject of a target of
   any kind; a rules endpoint for object-form rules (kind plus rule); a new
   endpoint receives secret values. `/events` is the versioned state stream
@@ -1048,7 +1086,8 @@ changes) stay on the event stream and are not duplicated.
 
 **In vibepit:** config files and merging, expanding sets and presets into
 concrete rules (and the preset content), built-in service definitions,
-secret sources, the `ProxyConfig` JSON container format, mTLS
+secret sources, project trust, the `ProxyConfig` JSON container format,
+mTLS
 setup from the `VIBEPIT_PROXY_*` env vars, CA common names, user-facing
 message text, `host.vibepit`, the SSH forwarder, sandbox trust setup, and the
 TUI. Also where the proxy's config lives and what survives a restart:
@@ -1146,8 +1185,8 @@ wire types, and `proxy/` is deleted.
 
 - `threat-model.md` (currently states the proxy does not inspect encrypted
   traffic) and `security-model.md`: TLS termination, the MITM CA, secret
-  handling, secrets being global-only, token scope as the primary control
-  for writes,
+  handling, global grants applying to every project, project trust, token
+  scope as the primary control for writes,
   and that OAuth tokens from agent logins still live in the sandbox's home
   volume until the host daemon exists.
 - Configuration reference for object entries, sets, presets with inputs,
@@ -1176,9 +1215,13 @@ in a `when` condition on `request.path`.
   `..%2F` traversal is rejected; scoped npm names still pass under `/**`.
 - Flow records in the ring buffers and on `/events` contain no query values,
   placeholders, or secret values, including for blocked requests.
-- `secret` on a rule or preset use in a project config is a startup error;
-  a secret-bearing rule ignores project entries of the sets it references;
-  `audit` in project config is an error.
+- Project trust: a project with credential grants doesn't start (`run`
+  asks, `up` refuses) until approved; anything that changes the canonical
+  credential policy asks again (project edit, removed deny, added set entry,
+  built-in preset change), and changes that leave it identical don't; two
+  checkouts with different project grants each get only their own plus the
+  global ones; secret values or sources in a project config are startup
+  errors; `audit` in project config is an error.
 - Ordinary `http://` proxy requests get the same host admission as
   `CONNECT`: holds, host-level denies, and alias denies.
 - An ordinary proxy request with an absolute `https://` URL gets a 400 and
@@ -1296,30 +1339,31 @@ also replace manual refresh for `command` sources. OpenShell-style refresh
 strategies (`oauth2-refresh-token`, `oauth2-client-credentials`) for tokens
 the user configures could follow the same path.
 
-## Future: project trust
+## Future: approving grants on first use
 
-Not built in this project. Recorded from the design discussion so a later
-project can pick it up. Goal: a project config may use secrets (for example
-per-project lists of private repos) after the user approves it once, the way
-`direnv allow` and `mise trust` work.
+Not built in this project; `vibepit trust` covers project grants for now.
+Recorded because the protocol already fits it.
 
-- **What is approved is the effective credential policy.** vibepit expands
-  the merged config (global plus project, sets and presets resolved,
-  built-in presets included) into a canonical list of credential grants: per
-  secret, the HTTPS origin, methods, path patterns, `when` conditions, and
-  every deny on that origin. Approval is needed when the project contributes
-  to that list. The approval is bound to the project's resolved root path and
-  a hash of the list, stored on the host outside the repo. Anything that
-  changes the list asks again (a project edit, a removed deny, a new set
-  entry, a built-in preset change, a global edit that affects a grant the
-  project contributes to).
-- The prompt lists the grants per secret and flags grants paths can't limit
-  (the GraphQL presets) as "all repositories this token can access".
-- The check runs where project config is loaded: `run` asks when starting a
-  new session; `up` refuses with a hint to run a `vibepit trust` command;
-  declining aborts startup.
-- Monitor saves: a saved allow never changes the list; a saved deny on an
-  origin with a credential grant does, so the next start asks again.
+- **Idea.** Instead of approving a project's whole credential policy at
+  startup, the proxy holds the first request that needs an unapproved
+  project grant, and the prompt shows it in context: "~/code/acme wants to
+  send secret `github` to api.github.com for `GET /repos/acme/api/**` (rule
+  from github-read)", with allow for this project, allow for this session,
+  or reject. Only grants that are actually used get asked about, and a
+  config change asks again only when the changed grant is used.
+- **Protocol fit.** A holdable kind such as `credential-grant` with target
+  `{project, secret, grant}`. Holds, `/decisions`, the event stream, and the
+  per-kind watcher rule carry it without anything new. The number of grants
+  is small and fixed by config, so unlike general request-level holds there
+  is no grouping problem.
+- **Shared with `vibepit trust`.** The same per-grant identity (canonical
+  grant including the denies on its origin) and the same store on the host;
+  `vibepit trust` becomes batch approval of open grants, still needed for
+  `up` with nobody attached. Storing approvals stays vibepit's job;
+  `netproxy` only learns that a grant is approved.
+- **To decide then.** Whether a request after a rejected grant gets a 403 or
+  goes out without the credential (placeholder stripped, so public reads keep
+  working).
 
 ## Left to the builder
 
@@ -1330,5 +1374,7 @@ per-project lists of private repos) after the user approves it once, the way
   HTTP, REST, and LFS docs).
 - Leaf certificate cache size and lifetime; CA lifetime matching the existing
   session credentials.
+- Where the trust record is stored (per `config/paths.go`) and the exact
+  canonical form that is hashed.
 - The draft-rules output mechanism (view plus copy, or write to a file).
 - Monitor key bindings for the new actions, consistent with `a`/`A`/`N`.
