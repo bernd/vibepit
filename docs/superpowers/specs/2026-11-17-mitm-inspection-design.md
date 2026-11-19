@@ -48,6 +48,8 @@ TLS only where rules need it".
   inspection, and a scan-wide termination switch. The inspector interface is
   built now; see section 6.
 - Changing the `default` preset (it keeps `vcs-github`).
+- Chaining through an upstream (corporate) proxy. The current proxy doesn't
+  either; with the new dialer it would be a dialer option.
 - OAuth flows run by agents (Claude Code `/login`, Codex login). Planned with
   the host daemon; see "Future: OAuth with the host daemon". Host CLIs that
   manage their own OAuth (`gh auth token`, `gcloud auth print-access-token`)
@@ -71,7 +73,8 @@ TLS only where rules need it".
   `httputil`); the existing `proxy/` keeps using goproxy v1.9.4 until the
   cutover.
 - The control API is mTLS and reachable only from the host.
-- The proxy container restarts on its own (`unless-stopped`).
+- In `run` mode the proxy container restarts on its own (`unless-stopped`);
+  in daemon mode (`up`) it doesn't (`NoRestart`).
 - The host is trusted; the sandbox is not; a cloned repo's project config is
   written by whoever wrote the repo.
 
@@ -588,11 +591,11 @@ Sources: `env` and `command`.
 **Delivery.**
 - `run` and `up` resolve sources on the host at startup and push values to
   the proxy through a new mTLS control API endpoint. Values are held in proxy
-  memory only, never in `ProxyConfig`, container env, `GET /config`, or any
-  response.
+  memory only, never in `ProxyConfig`, container env, or any response.
 - `vibepit secret refresh` resolves and pushes again (for expired tokens).
-- After a proxy restart no values are loaded. Requests that need a secret get
-  a 403: "secret `github` not loaded, run `vibepit secret refresh`".
+- After a proxy restart (in `run` mode, which restarts automatically) no
+  values are loaded. Requests that need a secret get a 403: "secret `github`
+  not loaded, run `vibepit secret refresh`".
 
 **Placeholders.** One random placeholder per secret per session (for example
 `vibepit-secret-github-<random>`), stable for the session, set in the sandbox
@@ -886,6 +889,12 @@ watch" stream:
    the target table and sends a row's update at most every few hundred
    milliseconds, so clients don't aggregate flows themselves.
 
+**Who turns holds on.** Today a request is held only while some subscriber
+is on `/events` (`h.hub.Watching()`), and open holds end as "unwatched" when
+the last one leaves. With topics, only subscribers of the `holds` topic count
+as watching: a client that reads only the request log must not make requests
+wait on a prompt nobody shows.
+
 Kept from today: hold deadlines sent as time remaining (`hold_left_ms`), so
 the proxy's and client's clocks don't need to agree; publishing that drops a
 slow subscriber instead of blocking; keepalive comments.
@@ -923,10 +932,15 @@ slow subscriber instead of blocking; keepalive comments.
 - New commands: `vibepit secret refresh`, `vibepit trust`.
 - Control API: `POST /decisions` for allow, deny, and reject of a target of
   any kind; a rules endpoint for object-form rules (kind plus rule); a new
-  endpoint receives secret values; `GET /config` never includes them.
-  `/events` is the versioned state stream and `GET /targets` its one-off
-  snapshot (section 8). `/allow-http`, `/allow-dns`, `/deny*`, `/hosts`, and
-  `X-Vibepit-Last-Log-ID` go away with the old proxy.
+  endpoint receives secret values. `/events` is the versioned state stream
+  and `GET /targets` its one-off snapshot (section 8).
+- Going away with the old proxy, with their successors: `/allow-http`,
+  `/allow-dns`, `/deny`, `/deny-http`, `/deny-dns` (→ `/decisions` and the
+  rules endpoint); `/hosts` and `X-Vibepit-Last-Log-ID` (→ `/targets` and the
+  stream); `/check`, which the approve screen uses to see whether another
+  client already decided (→ policy events and the snapshot); `/config`,
+  which returns the whole `ProxyConfig` (→ the effective policy in the
+  snapshot); `/logs` (→ the stream).
 - `allow-host-ports` gains a matching `deny-host-ports`; the prompt and
   monitor save host-port decisions there.
 
@@ -947,12 +961,69 @@ takes a typed Go config containing only concrete rules. It is built on the
 standard library and does not depend on goproxy; its tunnel copy loop is its
 own (it can't import vibepit's `netpipe`).
 
+**`netproxy` owns no durable state.** It holds state in memory: open
+connections, tunnels and holds; the target table and flow ring buffers;
+runtime policy changes (allows, denies, session rejections); secret values;
+the leaf certificate cache; the event sequence and instance ID. None of it
+survives a restart, which resets everything to the config it is started
+with: connections and holds break (clients retry), counters and history are
+observability, decisions that were never saved are meant to be temporary,
+secrets come back through `secret refresh` (later the daemon), and clients
+see the new instance ID and take a fresh snapshot. What must last belongs to
+the embedder. That makes `netproxy` disposable: it can be thrown away and
+started again with a new config at any time, which is what makes it
+embeddable.
+
+- **No files, no persistence, no restart logic** in `netproxy`. It gets a
+  typed Go config at construction.
+- **A Go API at the core; the control API is its HTTP binding.** Decisions,
+  rules, secret values, and event subscriptions with topics are Go methods;
+  the HTTP handler is a thin layer over them. Another project can embed
+  `netproxy` without the HTTP control API, or with its own.
+- **`ApplyConfig(cfg)`** replaces the whole policy atomically at runtime and
+  publishes the changes as `policy` events, so an embedder can reload from
+  any source without a restart.
+- **In-process subscriptions:** an embedder that wants to persist runtime
+  decisions subscribes to `policy` events and stores them however it likes.
+
 **In vibepit:** config files and merging, expanding sets and presets into
 concrete rules (and the preset content), built-in service definitions,
 secret sources, project trust, the `ProxyConfig` JSON container format, mTLS
 setup from the `VIBEPIT_PROXY_*` env vars, CA common names, user-facing
 message text, `host.vibepit`, the SSH forwarder, sandbox trust setup, and the
-TUI.
+TUI. Also where the proxy's config lives and what survives a restart:
+
+- Today `bootstrap` writes the proxy config to a temp file
+  (`os.CreateTemp("", "vibepit-proxy-*.json")`) mounted read-only as
+  `/config.json`; only the TLS credentials travel in the container env. A
+  Docker restart re-reads the unchanged file, so rules saved during the
+  session are lost until the next session. After a host reboot the temp file
+  may be gone; Docker then creates an empty directory at that path and the
+  proxy fails to start.
+- New: the proxy config lives in the session directory next to the session
+  credentials, so it survives a reboot. When the CLI or TUI saves a rule (on
+  the host; the proxy only reads the file), it also updates that file, so a
+  restart loads saved rules. Unsaved decisions are lost on restart, as
+  today.
+- `cmd/proxy.go` reads the file, translates it into `netproxy`'s config, sets
+  up mTLS, adds the `host.vibepit` rewrite, and starts `netproxy` and the SSH
+  forwarder. Watching the file and calling `ApplyConfig` is possible but not
+  part of this project.
+
+**Carried over unchanged from today's proxy:**
+- The DNS server: filtering by `allow-dns`/`deny-dns`, the CNAME check, the
+  CIDR check on DNS answers, `host.vibepit` answered with the proxy IP,
+  configurable upstream DNS. DNS queries are never held; resolvers time out
+  within seconds.
+- Hold limits (at most 32 held targets and 64 waiting requests) and the
+  configurable `hold-timeout`. `host-port` holds count toward the same
+  limits.
+- The target table cap (today `MaxHosts`, 2000), since the sandbox can
+  generate any number of names. `http-request` targets are `{host, port}`,
+  not paths, so the table stays bounded.
+- `block-cidr`/`allow-cidr`, now checked on every dial.
+- The control API's mTLS credentials: Ed25519, generated per session, valid
+  for 30 days; `netproxy` receives the `tls.Config` from vibepit.
 
 **Things `netproxy` makes configurable instead of hard-coding:** block
 message text, host rewrites (`host.vibepit` becomes a general name → gateway
@@ -1053,6 +1124,12 @@ in a `when` condition on `request.path`.
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
 - `http-request` flows carry their `http-connect` as `parent`.
+- Only subscribers of the `holds` topic enable holds; a subscriber to other
+  topics alone gets no holds and no "unwatched" endings when it leaves.
+- `ApplyConfig` replaces the policy atomically and publishes `policy` events;
+  `netproxy` works without its HTTP control API through the Go API alone.
+- A rule saved during a session is in the session's proxy config file, and a
+  restarted proxy container enforces it; the file survives a reboot.
 - `host-port`: traffic to `host.vibepit:<port>` produces `host-port` flows,
   is held when not allowed, and allowing it writes `allow-host-ports`; old
   `allow-http: host.vibepit:<port>` entries still work, with a warning.
