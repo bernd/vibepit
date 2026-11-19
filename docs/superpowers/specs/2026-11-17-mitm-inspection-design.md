@@ -845,14 +845,15 @@ watch" stream:
 
 1. **Snapshot, then changes, on one sequence.** The proxy keeps the state
    itself: the target table, open holds, the effective policy of every kind
-   including runtime allows and denies, secret status, and session settings
-   such as audit mode. A stream starts with that state at sequence N, then
+   including runtime allows and denies, and the status section (below). A
+   stream starts with that state at sequence N, then
    sends only changes on the same sequence. Clients apply changes to their
    state; there is no separate poll and no merge. `GET /targets` returns the
    same snapshot once, for scripts.
 2. **Generic event types.** `snapshot`, `flow`, `hold-open`, `hold-end`,
    `policy` (a rule of any kind added or removed), `target` (a row update),
-   `finding`, `session`, and `gap`. The kind is a field inside the data, never
+   `finding`, `status` (a status section update), and `gap`. The kind is a
+   field inside the data, never
    a new event type. Example:
 
    ```json
@@ -890,6 +891,18 @@ watch" stream:
 8. **Target row updates are rate-limited per target.** The proxy aggregates
    the target table and sends a row's update at most every few hundred
    milliseconds, so clients don't aggregate flows themselves.
+9. **Status section.** The snapshot carries a `status` section that
+   `netproxy` maintains itself, and `status` events update it (rate-limited
+   like target rows, topic `status`). It holds what a client shows about the
+   proxy: instance ID and uptime; audit mode and other session settings;
+   active connections and tunnels; open holds; flows per kind and decision
+   since start; secrets loaded or missing. Status displays (TUI, desktop app)
+   read it from the stream. They don't derive it from telemetry: telemetry
+   lives in the proxy container, is tuned for external backends (metric
+   names, temporality, sampling), can be switched off, and would need the
+   OTel SDK in the binary. Values that appear in both are maintained
+   separately; telemetry stays optional and external. An embedder may still
+   wire an in-process metric reader for a debug view.
 
 **Who turns holds on.** Today a request is held only while some subscriber
 is on `/events` (`h.hub.Watching()`), and open holds end as "unwatched" when
@@ -1022,7 +1035,9 @@ changes) stay on the event stream and are not duplicated.
 - **Metrics:** active connections and holds; flows by kind and decision;
   latency of dial, TLS handshake, upstream round trip, and hold duration;
   event subscriber drops and gaps; leaf certificate cache size and misses;
-  secrets loaded or missing.
+  secrets loaded or missing. Some overlap with the stream's status section
+  (section 8) on purpose: the status section serves clients, telemetry serves
+  observability backends.
 - **vibepit's side:** exporting is off by default. A later project can add
   global config for an exporter (OTLP/HTTP rather than OTLP/gRPC, which would
   noticeably grow the proxy binary). The remote branch `origin/add/otlp`
@@ -1167,6 +1182,8 @@ in a `when` condition on `request.path`.
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
 - `http-request` flows carry their `http-connect` as `parent`.
+- The status section in the snapshot matches the proxy's state, and
+  `status` events keep it current with telemetry switched off.
 - Telemetry: without providers, telemetry is a no-op; with test providers,
   spans and metrics appear with only bounded attributes; no span attribute or
   log field contains query values, placeholders, or secret values; upstream
