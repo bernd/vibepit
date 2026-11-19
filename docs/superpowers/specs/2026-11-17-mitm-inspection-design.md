@@ -152,9 +152,14 @@ home volume.
 **Two decisions.** The proxy makes two separate decisions, each in exactly
 one place:
 
-1. **Admission**, at `CONNECT`: refuse, tunnel, or terminate. A host admitted
-   only by path allows is terminated, so its requests can be authorized.
-   Holds and alias checks happen here.
+1. **Host admission**, shared by both entry points: at `CONNECT`, and for
+   each ordinary proxy request (which has no `CONNECT` phase; today's
+   `checkRequest` does this for both). It applies host-level allows and
+   denies and holds, and yields refuse, tunnel, or terminate (`CONNECT`) or
+   refuse or continue (ordinary request). A host admitted only by path allows
+   is terminated, so its requests can be authorized. Alias (CNAME) deny
+   checks and CIDR checks are not done here once; they run on every upstream
+   dial (below), so they still hold on a reconnect.
 2. **Request authorization**, for every request the proxy forwards: request
    rules, audit mode, inspectors, then secret injection. It runs for every
    request form: ordinary proxy requests with an absolute `http://` or
@@ -183,9 +188,17 @@ one place:
 - **Every upstream dial connects to a validated address.** Today the CIDR
   check and the dial resolve the hostname separately, so the address dialed
   can differ from the one checked; a terminated connection can also open
-  several upstream connections over its life. The dialer resolves, checks
-  every address against the CIDR rules, and dials one of those addresses,
-  keeping the hostname for TLS verification. This applies to tunnels too.
+  several upstream connections over its life. The dialer resolves the
+  hostname once per dial, getting both the CNAME chain and the addresses
+  (the proxy already queries upstream DNS directly for aliases), checks the
+  chain against deny rules and every address against the CIDR rules, and
+  dials one of those addresses, keeping the hostname for TLS verification.
+  This applies to tunnels and ordinary requests too.
+- **The one exception is the authorized `host.vibepit` rewrite.** When host
+  admission rewrites `host.vibepit` on an allowed port to the configured
+  gateway, the dialer connects to exactly that gateway address without the
+  CIDR check, as today. Any other name that resolves to the same private
+  address stays blocked.
 - The proxy never follows redirects; the client's follow-up request is checked
   again.
 
@@ -258,9 +271,14 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
 - CEL (cel-go) or `expr`, chosen by measuring the binary size increase. The
   environment and rules are identical either way.
 - Environment: `request.method`, `request.host`, `request.port`,
-  `request.path` (normalized), `request.param(name)`, `request.header(name)`,
+  `request.path`, `request.param(name)`, `request.header(name)`,
   `request.json` (request body parsed as JSON, only when the expression
   references it), and `request.graphql.queryOnly`.
+- A condition that references `request.path` is a path decision and follows
+  the path rules above, even on a rule without `paths`: the request is
+  rejected if either interpretation contains `.`, `..`, `//`, or NUL, and the
+  condition is evaluated once per interpretation. An allow matches only if it
+  is true for every interpretation; a deny matches if it is true for any.
 - `request.graphql.queryOnly` is true only when the body is a single GraphQL
   request (not a batched JSON array) whose document, parsed with a real
   GraphQL parser (`gqlparser`), contains only query operations. A text check
@@ -454,17 +472,23 @@ it carries no value.
 **Project trust.** A project config may use `secret` on rules and presets, and
 add entries to sets used by secret-bearing rules, only after the user
 approves it:
-- An approval is bound to the project's identity (its resolved root path)
-  and to a hash of the project's **entire** network policy (`allow-http`,
-  `deny-http`, `sets`, `presets`) whenever any part of it is secret-related.
-  Hashing only the secret-related parts would miss changes that widen a
-  credential grant indirectly, such as removing a project deny that narrows
-  a secret-bearing allow. It is stored on the host, outside the repo.
-- The approval prompt shows the effective credential grants after expansion:
-  for each secret, the hosts, methods, and path patterns it will be sent to,
-  and the denies that narrow them. Grants that path patterns can't limit,
-  such as the GraphQL presets, are flagged as "all repositories this token
-  can access".
+- **What is approved is the effective credential policy**, and the prompt
+  shows exactly that. vibepit expands the merged config (global plus
+  project, sets and presets resolved, built-in presets included) into a
+  canonical list of credential grants: for each secret, the HTTPS origin,
+  methods, path patterns, `when` conditions, and every deny on that origin.
+  - Approval is needed when the project contributes to that list: the list
+    computed with the project config differs from the list without it.
+  - The approval is bound to the project's identity (its resolved root path)
+    and a hash of the canonical list, stored on the host outside the repo.
+  - So anything that changes the list asks again: a project edit, removing a
+    deny that narrowed a grant, a new set entry, a vibepit upgrade whose
+    built-in preset widens a grant, or a global edit that changes a grant the
+    project contributes to. Changes that leave the list identical (such as
+    allows without `secret`) don't ask.
+- The prompt lists the grants per secret. Grants that path patterns can't
+  limit, such as the GraphQL presets, are flagged as "all repositories this
+  token can access".
 - The check runs where the project config is loaded: when `run` starts a new
   session, it asks if the hash is new or changed; `up` refuses with a hint to
   run a new `vibepit trust` command. `connect`, and `run` attaching to a
@@ -542,9 +566,11 @@ request path; the placeholder check is the only inspector.
   placeholder block logs "placeholder for secret `github` sent outside its
   binding".
 - Log entries are sanitized when they are built, before they enter a ring
-  buffer or `/events`: known placeholders and secret values in the path are
-  replaced with `<secret:NAME>`. Redacting only the inspector's finding is not
-  enough, since the request entry itself carries the path.
+  buffer or `/events`: known placeholders and secret values are replaced with
+  `<secret:NAME>` in every retained field derived from the request (host,
+  path, query parameter names, reason text). Redacting only the inspector's
+  finding is not enough, since the request entry itself carries those
+  fields.
 - New block codes for request-rule refusals, host mismatch, placeholder
   misuse, and missing secret values. `AllowFixes` is false for all except a
   request-level "not allowlisted".
@@ -561,8 +587,11 @@ request path; the placeholder check is the only inspector.
 - On a refused request entry the monitor offers: allow exact path, allow a
   prefix, deny the path. These write object entries with literal hosts and
   paths to the project config. The monitor never writes `secret`, `{set}`
-  references, sets, or presets, so it cannot change where a secret goes and
-  never changes the trust hash.
+  references, sets, or presets, so it cannot widen where a secret goes. A
+  saved allow never changes the approved credential policy. A saved deny on
+  an origin that has a credential grant does change it (denies on that
+  origin are part of the list), so the next startup asks for approval again;
+  the prompt shows the grant narrowed.
 - The approve screen and host-level holds are unchanged.
 - Draft rules view (section 7).
 
@@ -646,7 +675,10 @@ a whole-host allow plus one explicit path deny, exercised through every
 supported request form (ordinary `http://` and `https://` proxy requests,
 HTTP/1.1 inside `CONNECT`, HTTP/2 streams). For each, assert the client gets
 a 403 and the upstream receives zero requests. Repeat with a host admitted
-only by a path allow.
+only by a path allow: a non-matching request gets a 403 with zero upstream
+requests, and a matching request reaches the upstream exactly once, through
+each request form. Repeat once more with the path restriction expressed only
+in a `when` condition on `request.path`.
 
 - Inner `Host`/`:authority` and absolute-form URL host mismatches are
   rejected; cleartext after a terminated `CONNECT` is rejected.
@@ -659,9 +691,16 @@ only by a path allow.
   `..%2F` traversal is rejected; scoped npm names still pass under `/**`.
 - Log entries in the ring buffers and on `/events` contain no query values,
   placeholders, or secret values, including for blocked requests.
-- Changing any part of a secret-using project's network policy, including
-  removing a deny, requires approval again; `audit` in project config is an
-  error.
+- Anything that changes the canonical credential policy asks for approval
+  again (project edit, removed deny, built-in preset change); changes that
+  leave it identical don't; `audit` in project config is an error.
+- Ordinary proxy requests get the same host admission as `CONNECT`: holds,
+  host-level denies, and alias denies.
+- Alias and CIDR checks run on every upstream dial; the `host.vibepit`
+  gateway route works while another name resolving to the same private
+  address is blocked.
+- A placeholder used as a query parameter name doesn't appear in the ring
+  buffer entry or the `/events` output.
 - No redirect is followed by the proxy.
 - Hosts without request rules or secrets are tunneled, not terminated.
 - Older-format configs produce identical decisions.
