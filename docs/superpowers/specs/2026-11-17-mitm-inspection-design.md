@@ -727,10 +727,14 @@ holds, and endpoints such as `/allow-http` and `/allow-dns` are each
 protocol-specific.
 
 - **Kind.** Every network use case is a kind. This project has four:
-  - `http-connect`: a `CONNECT` or ordinary `http://` request, decided at
-    host level; target `{host, port}`.
-  - `http-request`: a request inside a terminated connection; target
-    `{host, port}`, details method, path, query parameter names, status.
+  - `http-connect`: a `CONNECT`, or the host admission of an ordinary
+    `http://` request; target `{host, port}`.
+  - `http-request`: a request the proxy authorizes, inside a terminated
+    connection (`mode: mitm`) or as an ordinary `http://` request
+    (`mode: plain`); target `{host, port}`, details method, path, query
+    parameter names, status. Path refusals, inspector findings, audit
+    "would block" records, and the monitor's path actions work the same for
+    both modes; only `mitm` requests can carry a credential.
   - `dns-query`: target `{domain}`, details query type.
   - `host-port`: sandbox-to-host traffic through `host.vibepit`; target
     `{port}`.
@@ -748,9 +752,9 @@ protocol-specific.
   `LogEntry` on the wire; the fields from section 8 above (method, path,
   status, mode, secret, audit marker) live in the `http-request` details.
 - **Parent flows.** A flow record has an optional `parent`: the ID of the
-  flow it belongs to. An `http-request` names the `http-connect` of its
-  terminated connection, so the monitor can group requests under their
-  connection. Later kinds use the same field (an MCP call inside an
+  flow it belongs to. An `http-request` names its `http-connect` (the
+  terminated connection, or the admission of the ordinary `http://`
+  request), so the monitor can group requests under their connection. Later kinds use the same field (an MCP call inside an
   `http-request`, a channel inside an SSH session).
 - **Targets.** The host table becomes a target table: rows keyed by
   (kind, target) with counts and flags (allowed, denied, rejected, held).
@@ -807,9 +811,15 @@ handling: a blocked `host.vibepit:3000` is held, and allowing it writes
   a matching `deny-host-ports`. Allowing from the prompt or monitor writes
   `allow-host-ports: [3000]`.
 - The prompt shows "sandbox wants host port 3000", not a hostname.
-- Existing `allow-http`/`deny-http` entries for `host.vibepit:<port>` are a
-  startup error with a hint to use `allow-host-ports`/`deny-host-ports`
-  (vibepit is 0.x).
+- Every `allow-http`/`deny-http` entry is checked at startup against the
+  rewrite name by pattern, not only by literal name: an entry that matches
+  `host.vibepit:<port>` for any port (explicitly, or by wildcard such as
+  `*.vibepit:3000` or `**.vibepit:*`) is a startup error naming the entry and
+  the `allow-host-ports`/`deny-host-ports` rule to write instead (vibepit is
+  0.x). Today HTTP rules are decided before the gateway allowance
+  (`proxy/http.go`), so `deny-http: "*.vibepit:3000"` overrides
+  `allow-host-ports: [3000]`; silently moving host ports to their own rules
+  would drop that deny while the config keeps loading.
 - `host-port` targets are never terminated (no public CA certifies
   `host.vibepit`), and their dial uses the gateway exception from section 1.
 - In `netproxy`, `host.vibepit` is the general host-rewrite configuration
@@ -833,8 +843,16 @@ watch" stream:
    sends only changes on the same sequence. Clients apply changes to their
    state; there is no separate poll and no merge. `GET /targets` returns the
    same snapshot once, for scripts.
+   A new subscription may ask for a bounded history tail (`tail=N`, at most
+   the ring size): the most recent flow records with sequence up to the
+   snapshot's, filtered by its topics and kinds, delivered before any live
+   change. Sequence numbers make each record arrive exactly once, so a
+   monitor opened after an audit run can still draft rules from it.
 2. **Generic event types.** `snapshot`, `flow`, `hold-open`, `hold-end`,
-   `policy` (a rule of any kind added or removed), `target` (a row update),
+   `policy` (a rule of any kind added or removed), `target` (a row update or
+   removal, `op: upsert|remove`; removal happens when the table cap evicts
+   the least recently seen row, and it supersedes any pending rate-limited
+   update for that row),
    `finding`, `status` (a status section update), and `gap`. The kind is a
    field inside the data, never
    a new event type. Example:
@@ -890,8 +908,12 @@ watch" stream:
 **Who turns holds on.** Today a request is held only while some subscriber
 is on `/events` (`h.hub.Watching()`), and open holds end as "unwatched" when
 the last one leaves. With topics, only subscribers of the `holds` topic count
-as watching: a client that reads only the request log must not make requests
-wait on a prompt nobody shows.
+as watching, and they count per holdable kind: a subscriber watches kind K
+if it subscribes to `holds` and its kind filter includes K. A flow of kind K
+is held only while a watcher for K exists, and when the last watcher for K
+leaves, open K holds end as "unwatched". A client that reads only the
+request log, or one that watches holds for `http-connect` only, must not make
+other requests wait on a prompt nobody shows.
 
 Kept from today: hold deadlines sent as time remaining (`hold_left_ms`), so
 the proxy's and client's clocks don't need to agree; publishing that drops a
@@ -1039,10 +1061,29 @@ TUI. Also where the proxy's config lives and what survives a restart:
   may be gone; Docker then creates an empty directory at that path and the
   proxy fails to start.
 - New: the proxy config lives in the session directory next to the session
-  credentials, so it survives a reboot. When the CLI or TUI saves a rule (on
-  the host; the proxy only reads the file), it also updates that file, so a
-  restart loads saved rules. Unsaved decisions are lost on restart, as
-  today.
+  credentials, so it survives a reboot. Unsaved decisions are lost on
+  restart, as today.
+- **The session file is derived, never edited piecewise.** It is regenerated
+  from the durable inputs: the global and project config files as they are
+  now, plus the CLI inputs given at session start (`-a`, `-p`, and the like),
+  which vibepit stores in the session directory. Regenerating from the live
+  policy instead would persist `--no-save` decisions. Manual edits to the
+  config files mid-session therefore take effect on the next proxy restart;
+  the docs say so.
+- **Saving a rule** happens in this order: apply it live through the control
+  API; write the project config under its existing lock
+  (`withProjectConfigLock`); regenerate the session file under a
+  session-directory lock, written to a temp file and renamed into place.
+  Every regeneration reads the files inside the lock, so two concurrent saves
+  (CLI and monitor) can't drop each other's rules.
+- **What the UI reports:**
+  - both writes succeeded: "Saved";
+  - the live change worked but the project write failed: "active for this
+    session, not saved", as today;
+  - the project write worked but regeneration failed: "saved to the project
+    config and active now, but a proxy restart won't load it yet", with the
+    error. Any later save regenerates the whole file and repairs it, and the
+    status section shows the session config as stale until then.
 - `cmd/proxy.go` reads the file, translates it into `netproxy`'s config, sets
   up mTLS, adds the `host.vibepit` rewrite, and starts `netproxy` and the SSH
   forwarder. Watching the file and calling `ApplyConfig` is possible but not
@@ -1165,6 +1206,20 @@ in a `when` condition on `request.path`.
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
 - `http-request` flows carry their `http-connect` as `parent`.
+- Saves: two simultaneous saves (CLI and monitor) both end up in the session
+  file; a failing session-file write reports the partial save and a later
+  save repairs it; a restart enforces a saved rule and drops an unsaved one.
+- An ordinary `http://` request produces an `http-connect` and an
+  `http-request` (`mode: plain`) record; a path refusal on it is a refused
+  `http-request` the monitor can act on.
+- A subscription with `tail=N` receives a completed request from before it
+  opened, and a request arriving while it opens exactly once.
+- Evicting a target row emits `target` with `op: remove`, also while an
+  update for that row is pending; the subscriber's table then equals a fresh
+  snapshot.
+- Holds are per kind: a watcher for `http-connect` only doesn't make
+  `host-port` requests wait; when the last watcher for a kind leaves, that
+  kind's holds end as unwatched.
 - The status section in the snapshot matches the proxy's state, and
   `status` events keep it current with telemetry switched off.
 - Telemetry: without providers, telemetry is a no-op; with test providers,
@@ -1179,8 +1234,10 @@ in a `when` condition on `request.path`.
 - A rule saved during a session is in the session's proxy config file, and a
   restarted proxy container enforces it; the file survives a reboot.
 - `host-port`: traffic to `host.vibepit:<port>` produces `host-port` flows,
-  is held when not allowed, and allowing it writes `allow-host-ports`; old
-  `allow-http: host.vibepit:<port>` entries fail at startup with a hint.
+  is held when not allowed, and allowing it writes `allow-host-ports`; any
+  `allow-http`/`deny-http` entry matching `host.vibepit:<port>`, including a
+  wildcard deny such as `*.vibepit:3000` next to `allow-host-ports: [3000]`,
+  fails at startup with a migration hint.
 - Hosts without request rules or secrets are tunneled, not terminated.
 - Older-format configs produce identical decisions.
 - Deny wins over every allow, including preset and secret rules.
