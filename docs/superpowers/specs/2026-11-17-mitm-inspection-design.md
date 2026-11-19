@@ -355,15 +355,24 @@ not in project config):
   back to whole-host `vcs-github` via `default`. The docs tell users to update
   vibepit before using narrowing presets. The string shorthand stays valid for
   all presets.
-- Built-in presets to add: `github-read` (git fetch, REST reads, raw and
-  codeload downloads, LFS download via `when` on `request.json.operation`,
-  website browsing without credentials, and `POST /graphql` with credentials
-  and `when: request.graphql.queryOnly`, so `gh` works for reads; GitHub
-  requires authentication for GraphQL, so this rule only applies when a
-  secret is passed. GraphQL reads are scoped by the token, not by `repos`)
-  and `github-write` (`repos` required:
-  git push, REST writes, LFS upload, `/graphql` with credentials). The
-  `default` preset is unchanged.
+- Built-in presets to add:
+  - `github-read`: git fetch, REST reads, raw and codeload downloads, LFS
+    download via `when` on `request.json.operation`, website browsing without
+    credentials. No `/graphql`.
+  - `github-write` (`repos` required): git push, REST writes, LFS upload. No
+    `/graphql`.
+  - `github-graphql-read`: `POST /graphql` with credentials and
+    `when: request.graphql.queryOnly`, so `gh` works for reads.
+  - `github-graphql-write`: `POST /graphql` with credentials, mutations
+    included.
+- `repos` stays an honest limit: every rule a `github-read`/`github-write`
+  instance creates is scoped by it. GraphQL serves every repository through
+  one endpoint, so it can't be scoped by `repos`; the GraphQL presets take no
+  `repos` input and reach everything the token can. Their descriptions, the
+  docs, and the trust approval say so ("all repositories this token can
+  access"). GitHub requires authentication for GraphQL, so both presets
+  require a `secret`.
+- The `default` preset is unchanged.
 
 ### 5. Secrets and services
 
@@ -453,7 +462,9 @@ approves it:
   a secret-bearing allow. It is stored on the host, outside the repo.
 - The approval prompt shows the effective credential grants after expansion:
   for each secret, the hosts, methods, and path patterns it will be sent to,
-  and the denies that narrow them.
+  and the denies that narrow them. Grants that path patterns can't limit,
+  such as the GraphQL presets, are flagged as "all repositories this token
+  can access".
 - The check runs where the project config is loaded: when `run` starts a new
   session, it asks if the hash is new or changed; `up` refuses with a hint to
   run a new `vibepit trust` command. `connect`, and `run` attaching to a
