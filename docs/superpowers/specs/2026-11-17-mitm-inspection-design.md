@@ -692,15 +692,17 @@ request path; the placeholder check is the only inspector.
 
 ### 8. Logging and events
 
-- `LogEntry` gains `Method`, `Path`, `Query`, `Status`, `Mode`
-  (tunnel/mitm), `Secret` (name only), and an audit marker.
+- Request-level records gain method, path, query parameter names, status,
+  mode (tunnel/mitm), secret (name only), and an audit marker. On the wire
+  they are the details of `http-request` flows (see "A generic protocol"
+  below).
 - Query strings: parameter names only, in every mode including audit. Signed
   download URLs carry credentials vibepit doesn't know about. Draft rules
   need only host, method, and path.
 - Never logged: headers, bodies, query values, secret values, placeholders. A
   placeholder block logs "placeholder for secret `github` sent outside its
   binding".
-- Log entries are sanitized when they are built, before they enter a ring
+- Flow records are sanitized when they are built, before they enter a ring
   buffer or `/events`: known placeholders and secret values are replaced with
   `<secret:NAME>` in every retained field derived from the request (host,
   path, query parameter names, reason text). Redacting only the inspector's
@@ -709,9 +711,72 @@ request path; the placeholder check is the only inspector.
 - New block codes for request-rule refusals, host mismatch, placeholder
   misuse, and missing secret values. `AllowFixes` is false for all except a
   request-level "not allowlisted".
-- Request entries go into their own ring buffer (10k), so floods don't push
-  out host-level blocks. `/events` carries both.
-- `HostStats` gets separate `Connections` and `Requests` counters.
+- `http-request` flows go into their own ring buffer (10k), so floods don't
+  push out host-level blocks. `/events` carries both.
+- Target rows count flows per kind (connections for `http-connect`, requests
+  for `http-request`, queries for `dns-query`, connections for `host-port`).
+
+**A generic protocol: kinds, targets, flows.** The control API and event
+stream are not written per protocol, so future network use cases don't need
+a new stream or new endpoints. Today's model is halfway there (`Source` is
+`proxy` or `dns`, `HostKey` is a target), but event types, the host table,
+holds, and endpoints such as `/allow-http` and `/allow-dns` are each
+protocol-specific.
+
+- **Kind.** Every network use case is a kind. This project has four:
+  - `http-connect`: a `CONNECT` or ordinary `http://` request, decided at
+    host level; target `{host, port}`.
+  - `http-request`: a request inside a terminated connection; target
+    `{host, port}`, details method, path, query parameter names, status.
+  - `dns-query`: target `{domain}`, details query type.
+  - `host-port`: sandbox-to-host traffic through `host.vibepit`; target
+    `{port}`.
+
+  A kind defines its target (a normalized key), its details (a typed
+  struct), which rules apply to it, and whether it can be held, allowed, or
+  inspected. Later kinds (outbound SSH, raw TCP or UDP, MCP calls, inbound
+  forwards) add a value and two structs; the stream, envelope, event types,
+  and endpoints stay the same.
+- **Typed, not a bag of maps.** Each kind has a Go struct for its target and
+  one for its details, with `kind` as the discriminator. No
+  `map[string]any`. TypeScript types generate as discriminated unions.
+- **Flows.** One decision about one flow of any kind is a flow record:
+  `{kind, target, decision, code, reason, rule, detail, ...}`. It replaces
+  `LogEntry` on the wire; the fields from section 8 above (method, path,
+  status, mode, secret, audit marker) live in the `http-request` details.
+- **Targets.** The host table becomes a target table: rows keyed by
+  (kind, target) with counts and flags (allowed, denied, rejected, held).
+  DNS and HTTP rows for the same domain stay separate, as today.
+- **Generic holds.** Any kind whose decision can wait can be held. In this
+  project: `http-connect` and `host-port`. A hold's key is (kind, target).
+- **One decision endpoint.** `POST /decisions {kind, target, action}`, with
+  action `allow`, `deny`, or `reject`, replaces `/allow-http`, `/allow-dns`,
+  `/deny`, `/deny-http`, and `/deny-dns`. The proxy turns the target into a
+  rule of that kind, applies it, and returns the rule in canonical form for
+  vibepit to save to config. Clients need no rule syntax. Object-form rules
+  (methods, paths, `when`) from the CLI go through a rules endpoint that takes
+  a kind and a rule.
+- **Unknown kinds degrade cleanly.** A client that doesn't know a kind shows
+  the kind, the target as a string, and the decision. Each target carries an
+  `allowable` flag from the proxy; an older client can still allow it through
+  `/decisions` without understanding the kind.
+
+**The `host-port` kind.** Today `host.vibepit` is an HTTP target with special
+handling: a blocked `host.vibepit:3000` is held, and allowing it writes
+`allow-http: host.vibepit:3000`. As its own kind:
+- Traffic to `host.vibepit:<port>` (through `CONNECT` or an ordinary
+  `http://` request) produces `host-port` flows with target `{port}`.
+- Rules are `allow-host-ports` (which already exists in project config) and
+  a matching `deny-host-ports`. Allowing from the prompt or monitor writes
+  `allow-host-ports: [3000]`.
+- The prompt shows "sandbox wants host port 3000", not a hostname.
+- Existing `allow-http`/`deny-http` entries for `host.vibepit:<port>` are
+  read as host-port rules, with a warning to move them.
+- `host-port` targets are never terminated (no public CA certifies
+  `host.vibepit`), and their dial uses the gateway exception from section 1.
+- In `netproxy`, `host.vibepit` is the general host-rewrite configuration
+  (section 11): a name, a gateway address, and the kind its traffic belongs
+  to.
 
 **Event stream: one versioned state stream.** Today clients build their view
 from two sources: they poll `/hosts` (with `X-Vibepit-Last-Log-ID`) and read
@@ -724,44 +789,52 @@ buffer silently loses entries. `netproxy` replaces this with a "list then
 watch" stream:
 
 1. **Snapshot, then changes, on one sequence.** The proxy keeps the state
-   itself: the host table (with allowed, denied, and rejected flags), open
-   holds, the effective policy including runtime allows and denies, secret
-   status, and session settings such as audit mode. A stream starts with that
-   state at sequence N, then sends only changes on the same sequence: log and
-   request entries, hold opened and ended, policy changes, host row updates,
-   findings. Clients apply changes to their state; there is no separate poll
-   and no merge. `GET /hosts` stays as a one-off read of the same snapshot,
-   for scripts.
-2. **Policy changes are events.** An allow, deny, or reject from any client
-   (prompt, monitor, `vibepit allow-http`, the desktop app) reaches every
-   subscriber at once.
-3. **Proxy instance ID.** A random ID per proxy start is part of every
+   itself: the target table, open holds, the effective policy of every kind
+   including runtime allows and denies, secret status, and session settings
+   such as audit mode. A stream starts with that state at sequence N, then
+   sends only changes on the same sequence. Clients apply changes to their
+   state; there is no separate poll and no merge. `GET /targets` returns the
+   same snapshot once, for scripts.
+2. **Generic event types.** `snapshot`, `flow`, `hold-open`, `hold-end`,
+   `policy` (a rule of any kind added or removed), `target` (a row update),
+   `finding`, `session`, and `gap`. The kind is a field inside the data, never
+   a new event type. Example:
+
+   ```json
+   {"instance":"7f3a…","seq":4812,"type":"flow","data":{
+     "kind":"http-request",
+     "target":{"host":"api.github.com","port":"443"},
+     "decision":"block","code":"request_not_allowlisted",
+     "rule":"allow-http[3]",
+     "detail":{"method":"POST","path":"/repos/acme/x/issues"}
+   }}
+   ```
+3. **Policy changes are events.** An allow, deny, or reject from any client
+   (prompt, monitor, CLI, the desktop app) reaches every subscriber at once.
+4. **Proxy instance ID.** A random ID per proxy start is part of every
    snapshot and event. A resume point is instance plus sequence; a different
    instance means a restart, detected for certain.
-4. **Gap signal.** If the requested resume point is no longer available, or
-   the subscriber was dropped for falling behind, the proxy says so
-   explicitly and sends a fresh snapshot instead of silently skipping
-   entries.
-5. **Topics.** A subscriber names what it wants: `holds`, `policy`, `hosts`,
-   `log`, `requests`, `findings`. The prompt subscribes to `holds,policy`;
-   only the monitor's log tab takes the high-volume `requests`. DNS needs no
-   topic or buffer of its own: its query entries share the connection-level
-   buffer and come through `log`, as today; DNS rows are part of `hosts`, and
-   `allow-dns`/`deny-dns` changes part of `policy`. DNS volume stays low
-   because clients that use the proxy leave name resolution to it, and the
-   proxy resolves through upstream DNS directly, not through the sandbox's
-   DNS server.
-6. **Standard SSE framing, uniform envelope.** Each event carries
-   `id: <instance>:<seq>`; its data is always `{instance, seq, type, data}`,
-   with one Go struct per `type`, so TypeScript types can be generated
-   mechanically. Resume position and topics are both query parameters:
+5. **Gap signal.** If the requested resume point is no longer available, or
+   the subscriber was dropped for falling behind, the proxy sends a `gap`
+   event and a fresh snapshot instead of silently skipping entries.
+6. **Topics and kinds.** A subscriber filters by event type and, optionally,
+   by kind: `?topics=holds,policy` for the prompt;
+   `?topics=flows&kinds=http-request` for the monitor's request log. Flow
+   records of each kind keep their own ring buffer where volume calls for
+   it: `http-request` gets its own (10k); `http-connect`, `dns-query`, and
+   `host-port` share one, as today. DNS volume stays low because clients that
+   use the proxy leave name resolution to it, and the proxy resolves through
+   upstream DNS directly, not through the sandbox's DNS server.
+7. **Standard SSE framing, uniform envelope.** Each event carries
+   `id: <instance>:<seq>`; its data is always `{instance, seq, type, data}`.
+   Resume position and filters are query parameters:
    `GET /events?after=<instance>:<seq>&topics=holds,policy`. The standard
    `Last-Event-ID` header exists for browsers' `EventSource`, which can't set
    headers and reconnects to the same URL; no client of the mTLS API is a
    browser, so the header can be added later if one ever is.
-7. **Host row updates are rate-limited per host.** The proxy aggregates the
-   host table and sends a host's update at most every few hundred
-   milliseconds, so clients don't aggregate log entries themselves.
+8. **Target row updates are rate-limited per target.** The proxy aggregates
+   the target table and sends a row's update at most every few hundred
+   milliseconds, so clients don't aggregate flows themselves.
 
 Kept from today: hold deadlines sent as time remaining (`hold_left_ms`), so
 the proxy's and client's clocks don't need to agree; publishing that drops a
@@ -786,7 +859,11 @@ slow subscriber instead of blocking; keepalive comments.
   rebuilt on the new event stream (section 8): they apply the snapshot and
   changes instead of polling `/hosts` and merging, and drop their local
   guesses about allows, denies, and rejections. This removes most of
-  `cmd/monitor_hosts.go`'s merge logic.
+  `cmd/monitor_hosts.go`'s merge logic. The hosts tab shows the target table,
+  all kinds included; decisions go through `/decisions`.
+- The prompt and monitor render the four known kinds specifically (e.g.
+  "sandbox wants host port 3000") and any unknown kind generically: kind,
+  target as a string, decision, and allow if the target is allowable.
 - Draft rules view (section 7).
 
 ### 10. CLI and control API
@@ -794,10 +871,14 @@ slow subscriber instead of blocking; keepalive comments.
 - `allow-http` / `deny-http` commands gain `--method` and `--path` flags that
   produce object entries.
 - New commands: `vibepit secret refresh`, `vibepit trust`.
-- Control API: allow and deny endpoints accept object entries; a new endpoint
-  receives secret values; `GET /config` never includes them. `/events` is the
-  versioned state stream (section 8); `GET /hosts` returns its snapshot
-  without the `X-Vibepit-Last-Log-ID` header.
+- Control API: `POST /decisions` for allow, deny, and reject of a target of
+  any kind; a rules endpoint for object-form rules (kind plus rule); a new
+  endpoint receives secret values; `GET /config` never includes them.
+  `/events` is the versioned state stream and `GET /targets` its one-off
+  snapshot (section 8). `/allow-http`, `/allow-dns`, `/deny*`, `/hosts`, and
+  `X-Vibepit-Last-Log-ID` go away with the old proxy.
+- `allow-host-ports` gains a matching `deny-host-ports`; the prompt and
+  monitor save host-port decisions there.
 
 ### 11. Packaging: the `netproxy` module
 
@@ -825,8 +906,10 @@ TUI.
 
 **Things `netproxy` makes configurable instead of hard-coding:** block
 message text, host rewrites (`host.vibepit` becomes a general name → gateway
-rule with allowed ports), the control API's `tls.Config`, and neutral header
-names (no `X-Vibepit-*`).
+rule whose traffic is the `host-port` kind, with its allowed ports), the
+control API's `tls.Config`, and neutral header names (no `X-Vibepit-*`).
+The set of kinds is part of `netproxy`'s API; adding a kind is a change to
+`netproxy`, not to the stream or endpoints.
 
 **Control API protocol.** HTTP+JSON with the server-sent-event stream, as
 today, over mTLS. `netproxy` ships the wire types and a Go client package
@@ -915,7 +998,13 @@ in a `when` condition on `request.path`.
   client reaches every other subscriber; a restarted proxy (new instance ID)
   and a resume point past the ring buffer both produce an explicit gap and a
   fresh snapshot; a dropped slow subscriber resumes with a gap, not missing
-  entries; topics filter what a subscriber receives.
+  entries; topics and kinds filter what a subscriber receives.
+- Generic protocol: every kind's flows, holds, target rows, and decisions go
+  through the same event types and `/decisions`; a client built without
+  knowledge of `host-port` can still show and allow a held host port.
+- `host-port`: traffic to `host.vibepit:<port>` produces `host-port` flows,
+  is held when not allowed, and allowing it writes `allow-host-ports`; old
+  `allow-http: host.vibepit:<port>` entries still work, with a warning.
 - Hosts without request rules or secrets are tunneled, not terminated.
 - Older-format configs produce identical decisions.
 - Deny wins over every allow, including preset and secret rules.
