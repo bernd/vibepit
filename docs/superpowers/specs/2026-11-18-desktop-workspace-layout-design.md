@@ -128,3 +128,46 @@ This document covers the workspace layout portion of the desktop UI design. The 
 - [Desktop system architecture and UI design gate](https://github.com/bernd/vibepit/blob/experiment/desktop/docs/superpowers/specs/2026-11-15-desktop-architecture-design.md)
 - [Agent sessions in vibed](https://github.com/bernd/vibepit/blob/experiment/desktop/docs/superpowers/specs/2026-11-15-agent-sessions-design.md)
 - [Desktop experiment and current behavior](https://github.com/bernd/vibepit/tree/experiment/desktop/experiments/desktop)
+
+## Open review findings
+
+Review of 19 November 2026. Each item still needs a decision or a fix in this document. #1, #2 and #5 change behavior the acceptance checks depend on and come first.
+
+### Conflicts with the architecture and code
+
+1. **Windows per sandbox.** This document lets a second window attach to the same sandbox and has an acceptance check that uses two windows. The architecture design (Desktop backend, Workspaces) allows one window per sandbox and focuses the existing window instead, so each sandbox has one connection, one attention list and one set of notifications. Choose one rule. If multiple windows stay, the architecture must say which window owns attention, notifications and the holding indicator, and what "preferences for the sandbox and window" are keyed by.
+2. **Hold decisions are per target, not per request ID.** The proxy keys holds by target (`proxy/hold.go`, `held map[Target]*hold`). Approving adds a runtime allow rule and then ends matching holds (`EndAllowed`). Rejecting adds the target to the deny set and ends its hold. Nothing checks that a hold ID is still open, so a late decision on an expired hold still changes the rules. "Apply a decision only to its still-pending request ID" and "the rules are unchanged" need either a conditional decision in the control API (decide hold ID N, fail if it has ended) or a weaker promise.
+3. **Expiry in Logs.** On expiry the proxy does not append a log entry. It sets the outcome of the hold's existing entry to `timeout` and publishes `hold-end`. "Record the expiry in Logs" and "Logs show one expiry" should describe the hold row changing. One hold can cover several requests to the same target, so "one underlying request" should read "one underlying hold", and a new request gets a separate ID only after the earlier hold has ended.
+4. **Exited terminal transcript.** `session.Manager` removes a session once its process exits (`session/manager.go`). After reconnect, the transcript of an **Exited** pane can only come from the desktop's in-memory terminal buffer. That works while the window stayed open, but not after the desktop restarts. Name the source and state what the pane shows without one.
+
+### Undefined tree operations
+
+5. **Explicit groups and merging.** "Explicit group" is never defined, and the spec does not say whether a group created by docking at a pane edge is explicit. Docking C at the right outer edge of a side-by-side root (A, B) could give (A, B, C) or ((A, B), C). Docking C right of pane A inside (A, B) could give (A, C, B) or ((A, C), B). If every dock creates a permanent group, trees get deeper with each move and group handles multiply. Proposal: groups created by docking are implicit and merge into a parent of the same orientation. Only groups that were moved in stay explicit.
+6. **Size of the incoming content.** "Preserve relative weights" covers the incoming group's own children, but not how much of the target it takes (half, its previous size, something else). Preview and commit must agree, so this needs a rule rather than prototype tuning.
+7. **Active tab and focus after a commit.** Escape and an invalid drop restore them. A successful drop does not say which tab becomes active or which pane gets focus.
+8. **Round trips change the moved group's orientation.** Moving into a tab-bar gap keeps the internal layout. Docking at an edge changes the orientation of the moved group's direct children, so docking a side-by-side pair at a right edge and dragging it back to the tab bar returns it stacked. State that this is intended, and decide whether a modifier keeps the original orientation.
+
+### Gaps in behavior
+
+9. **Detached shells and the session limit.** **Close pane** detaches, while Split and **+** always start fresh shells. vibed allows 50 sessions (`cmd/vibed.go`), so they pile up, and the spec does not say what happens at the limit. "The reattach picker" is referenced but never designed. The **+** dropdown offers only Session, Monitor and Logs. Design the picker or a detached-sessions list. Also consider whether closing a pane whose shell sits idle at a prompt should end the shell, since that is what desktop terminal users expect.
+10. **Attention while zoomed.** Status badges are defined for background tabs. A sibling hidden by zoom in the current tab can need input with no visible signal. Show sibling status while zoomed, for example on **Restore layout**.
+11. **Holding stays on after closing Monitor.** The window's network feature owns the subscription, so holding stays on while the window is connected, even with every Monitor and Logs pane closed. The architecture requires a holding indicator, and this document should place it, for example in the window header or attention UI.
+12. **Several views of one session.** Each view has its own client ID and only one is the writer. Describe the read-only view and the **Take back input** banner from the architecture's terminal service section.
+13. **Status precedence.** The order Needs input, Working, Done leaves out Error and Exited, which the architecture treats as attention items. Place them and map the states to OSC 7501 (`blocked` becomes Needs input, with its `kind`).
+
+### Design questions
+
+14. **What + opens.** Because **+** sits at the end of the bar, "the tab immediately to its left" always means the last tab. That rule makes the focus-tracking tooltip and two acceptance checks necessary. "**+** opens a Session, the dropdown opens anything else" removes all three. Prefer that unless the prototype shows people want the repeat.
+15. **Shortcuts taken from terminals.** State which key chords the desktop takes from terminal panes. Terminal coding agents rely on modified Enter keys.
+16. **Session name validation.** Besides trimming whitespace and requiring a nonempty name, vibed's `rename` should limit length and allow only printable characters, as with `VIBEPIT_LABEL`. Names appear in attention items and other clients.
+
+### Acceptance checks to add or change
+
+- Quit and reopen the desktop. Tab order, layout tree, weights and last focus are restored, and no hover preview was saved.
+- Reach the session limit with Split and **+**.
+- Rewrite the two-window hold expiry check once #1 is decided.
+
+### Editorial
+
+- Use relative links for the related documents instead of absolute `blob/experiment/desktop` URLs.
+- "Keyboard focus alone selects where input goes. Zoom requires an explicit action." could read "Focusing a pane never zooms it."
