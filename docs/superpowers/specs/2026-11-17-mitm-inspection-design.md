@@ -655,7 +655,7 @@ request path; the placeholder check is the only inspector.
   detect-only body access (with `Content-Encoding` decoding), buffered bodies
   for blocking with a size cap, external scanner adapters (ICAP or
   Envoy `ext_proc` style), and in-process scanners such as gitleaks' rules.
-- **Wire types:** a finding is carried on the log entry and the `/events`
+- **Wire types:** a finding is carried on the flow record and the `/events`
   stream, so the monitor and other clients can show it.
 - **vibepit chooses the inspectors;** `netproxy` ships none besides what the
   caller registers. With no inspectors registered, no inspection work runs.
@@ -971,7 +971,7 @@ in a `when` condition on `request.path`.
   changes in between.
 - Allows and credential paths require every path interpretation in scope;
   `..%2F` traversal is rejected; scoped npm names still pass under `/**`.
-- Log entries in the ring buffers and on `/events` contain no query values,
+- Flow records in the ring buffers and on `/events` contain no query values,
   placeholders, or secret values, including for blocked requests.
 - Anything that changes the canonical credential policy asks for approval
   again (project edit, removed deny, built-in preset change); changes that
