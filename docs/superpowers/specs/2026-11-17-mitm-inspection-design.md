@@ -765,7 +765,17 @@ protocol-specific.
 handling: a blocked `host.vibepit:3000` is held, and allowing it writes
 `allow-http: host.vibepit:3000`. As its own kind:
 - Traffic to `host.vibepit:<port>` (through `CONNECT` or an ordinary
-  `http://` request) produces `host-port` flows with target `{port}`.
+  `http://` request) produces `host-port` flows with target `{port}`. A
+  `CONNECT` tunnel carries any TCP protocol, so clients that use an HTTP
+  proxy reach any host service this way. Clients that ignore `HTTP_PROXY`
+  and open raw TCP (`psql`, `redis-cli`, plain `ssh`) can't: the sandbox
+  network only reaches the proxy, and the proxy's DNS answers `host.vibepit`
+  with the proxy's own IP, where nothing listens on that port. There is no
+  SOCKS or transparent TCP proxy, and none is in scope.
+- The kind doesn't depend on transport. A later raw-TCP path (SOCKS5, or
+  per-port listeners on the proxy IP for allowed host ports) produces the
+  same `host-port` flows; the details record the path (`connect`, `http`,
+  later e.g. `socks`).
 - Rules are `allow-host-ports` (which already exists in project config) and
   a matching `deny-host-ports`. Allowing from the prompt or monitor writes
   `allow-host-ports: [3000]`.
