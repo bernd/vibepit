@@ -536,21 +536,36 @@ Built-in ones are embedded in vibepit (not `netproxy`), in a new
 - name: github
   env: [GH_TOKEN, GITHUB_TOKEN]
   inject:
-    - hosts: [api.github.com]
+    - kind: http-request
+      hosts: [api.github.com]
       paths: ["/**"]
       header: Authorization
       auth: bearer
-    - hosts: [github.com]
+    - kind: http-request
+      hosts: [github.com]
       paths: ["/*/*.git/**", "/*/*/info/refs", "/*/*/git-upload-pack", "/*/*/git-receive-pack"]
       header: Authorization
       auth: {basic: x-access-token}
 ```
 
-`auth` styles: `bearer`, `token`, `{basic: <user>}`, `raw`.
+Every inject entry names its `kind`, and it is required: there is no
+default. The kind decides which other fields the entry takes and which
+flows it applies to. This project has one injectable kind, `http-request`,
+with the fields above. A later kind (for example `ssh-session`) adds its own
+entry type alongside without changing existing definitions; the trust
+approval lists grants per kind. Everything around injection is shared by all
+kinds: sources, delivery, placeholders and their detection, trust approval,
+redaction, and binding to the targets the definition allows. Only applying
+the credential to a flow is per kind.
 
-Each inject entry binds to an **HTTPS origin**: scheme `https`, the listed
-hosts, and an explicit port (`port`, default 443). A rule with `secret` whose
-port differs from every binding is a config error.
+`auth` styles for `http-request`: `bearer`, `token`, `{basic: <user>}`,
+`raw`.
+
+Each `http-request` inject entry binds to an **HTTPS origin**: scheme
+`https`, the listed hosts, and an explicit port (`port`, default 443). A rule
+with `secret` whose port differs from every binding is a config error. An
+inject entry without `kind`, or with a kind that isn't injectable, is a
+config error.
 
 **Secrets** are configured in global config only:
 
@@ -562,7 +577,8 @@ secrets:
     source: {env: MY_API_KEY}
     env: [MY_API_KEY]
     inject:
-      - hosts: [api.example.com]
+      - kind: http-request
+        hosts: [api.example.com]
         header: X-Api-Key
         auth: raw
 ```
@@ -779,11 +795,11 @@ the protocol holds up.
   git over SSH; channels are child flows via `parent`.
 - **Inbound forwards** (host to sandbox) and **MCP calls** (child flows of
   `http-request`) fit as kinds as well.
-- **Limit: secret injection is HTTP-specific.** Service definitions inject
-  into HTTP headers. Credentials for other kinds (an SSH key through a signing
-  agent on the host, a database password) need new injection types in
-  service definitions, per kind. The schema can grow without breaking
-  existing definitions, but each kind is real work.
+- **Secret injection is per kind by nature.** Today only `http-request` is
+  injectable (HTTP headers). Credentials for other kinds (an SSH key through a
+  signing agent on the host, a database password) need their own inject
+  entry type, selected by the entry's required `kind`. Existing definitions
+  stay valid, but each kind's injection is real work.
 
 **The `host-port` kind.** Today `host.vibepit` is an HTTP target with special
 handling: a blocked `host.vibepit:3000` is held, and allowing it writes
