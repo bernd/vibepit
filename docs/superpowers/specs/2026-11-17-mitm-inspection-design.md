@@ -744,7 +744,13 @@ watch" stream:
    entries.
 5. **Topics.** A subscriber names what it wants: `holds`, `policy`, `hosts`,
    `log`, `requests`, `findings`. The prompt subscribes to `holds,policy`;
-   only the monitor's log tab takes the high-volume `requests`.
+   only the monitor's log tab takes the high-volume `requests`. DNS needs no
+   topic or buffer of its own: its query entries share the connection-level
+   buffer and come through `log`, as today; DNS rows are part of `hosts`, and
+   `allow-dns`/`deny-dns` changes part of `policy`. DNS volume stays low
+   because clients that use the proxy leave name resolution to it, and the
+   proxy resolves through upstream DNS directly, not through the sandbox's
+   DNS server.
 6. **Standard SSE framing, uniform envelope.** Each event carries
    `id: <instance>:<seq>`; its data is always `{instance, seq, type, data}`,
    with one Go struct per `type`, so TypeScript types can be generated
