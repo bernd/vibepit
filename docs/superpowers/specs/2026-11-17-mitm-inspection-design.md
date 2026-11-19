@@ -1142,7 +1142,8 @@ in a `when` condition on `request.path`.
   headers; findings never contain the matched value.
 - `request.graphql.queryOnly` is false for mutations, subscriptions, mixed
   documents, mutations after comments or fragments, and batched arrays.
-- Secrets never appear in logs, events, `GET /config`, or errors.
+- Secrets never appear in flow records, events, snapshots, API responses, or
+  errors.
 - Injection only within the service's host and path binding; placeholder
   stripping and misuse blocking.
 - HTTP/2 and WebSocket requests through a terminated connection.
