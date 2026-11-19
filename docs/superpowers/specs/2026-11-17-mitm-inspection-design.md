@@ -1035,6 +1035,13 @@ embeddable.
   rules, secret values, and event subscriptions with topics are Go methods;
   the HTTP handler is a thin layer over them. Another project can embed
   `netproxy` without the HTTP control API, or with its own.
+- **The embedder supplies the proxy listener.** `ServeProxy(ln net.Listener)`
+  serves ordinary HTTP proxy requests and `CONNECT` on a listener the caller
+  has already opened. For example, vvmm can supply a TCP listener on its
+  virtual gateway, or forward that port to a Unix socket served by the proxy.
+  The embedder decides separately whether and where to serve the control API
+  and guest DNS. This lets vvmm expose only the proxy port to the guest while
+  the proxy resolves upstream names on the host.
 - **`ApplyConfig(cfg)`** replaces the whole policy atomically at runtime and
   publishes the changes as `policy` events, so an embedder can reload from
   any source without a restart.
