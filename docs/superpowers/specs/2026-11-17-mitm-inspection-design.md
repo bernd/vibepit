@@ -67,7 +67,9 @@ TLS only where rules need it".
 - `CGO_ENABLED=0`; the proxy runs on a distroless image; the macOS build
   embeds the Linux arm64 proxy binary, so binary size matters.
 - The sandbox has a read-only root filesystem with `/tmp` as tmpfs.
-- goproxy v1.9.4 is the proxy library (supports MITM, HTTP/2, WebSockets).
+- `netproxy` is built on the standard library (`net/http`, `crypto/tls`,
+  `httputil`); the existing `proxy/` keeps using goproxy v1.9.4 until the
+  cutover.
 - The control API is mTLS and reachable only from the host.
 - The proxy container restarts on its own (`unless-stopped`).
 - The host is trusted; the sandbox is not; a cloned repo's project config is
@@ -93,11 +95,34 @@ TLS only where rules need it".
   and long path lists don't fit.
 
 **TLS termination implementation.**
-- *goproxy `MitmConnect`, tightly wrapped (selected):* smallest change; a
-  test suite pins the behavior we rely on so a later switch is safe.
-- *Own `crypto/tls` + `httputil.ReverseProxy` for CONNECT:* full control,
-  but a second proxy stack on the most security-sensitive path.
-- *Replace goproxy entirely:* rewrites working code without need.
+- *Standard library (selected, after a spike):* `http.Server` accepts
+  `CONNECT` and hijacks the connection; tunnels are a copy loop; terminated
+  connections go through `tls.Server` and a one-connection `http.Server`
+  (HTTP/1.1 and HTTP/2 through one handler); `httputil.ReverseProxy` with a
+  pinned `http.Transport` forwards. The security rules are properties of the
+  structure: only `tls.Server` ever reads a terminated connection, so
+  cleartext can't be served, and one handler sees every request.
+- *goproxy `MitmConnect`, tightly wrapped:* first choice because it meant the
+  smallest change to working code. That reason fell away once `netproxy`
+  became a new module. Its MITM path makes decisions that have to be
+  corrected: it prefers the inner `Host`, `:authority`, or an absolute-form
+  URL's host over the `CONNECT` target, serves cleartext and h2c after
+  `CONNECT`, defaults its transport to `ProxyFromEnvironment`, and dials
+  tunnels without our checks. Each needs a workaround that depends on
+  goproxy's internals staying the same.
+- *Spike result (throwaway, not kept in the repo):* both versions passed the
+  same 11 cases (whole-host allow plus path deny through ordinary `http://`,
+  HTTP/1.1 and HTTP/2 inside `CONNECT`; path-allow-only host; `https://`
+  ordinary request rejected; tunneling without rules; host mismatch;
+  absolute-form inside the tunnel; cleartext after `CONNECT`; dial pinning on
+  reconnect), stable over 10 runs and under the race detector. Disabling each
+  guard in turn confirmed the tests catch it; with goproxy, cleartext after
+  `CONNECT` reached a plain-HTTP upstream once its guard was removed. goproxy
+  needed 72 lines with 5 corrections; the standard-library version 183 lines,
+  the difference being plumbing (hijack, copy loop, one-connection listener,
+  certificate cache) rather than security logic.
+- goproxy's years of fixes are the checklist for the edge cases the new code
+  owns; see "Edge cases from goproxy's history" in section 1.
 
 **Condition language for `when`.**
 - *CEL or expr (selected):* boolean expressions, no I/O, type-checked at load.
@@ -116,8 +141,8 @@ terminates TLS for the `host:port` if any of these holds:
   matches the host and port;
 - an allow entry with `secret` matches the host and port;
 - audit mode is on and the target is an allowed host on port 443, other than
-  `host.vibepit`. Other ports may carry non-HTTP protocols that goproxy's MITM
-  path would break, so in audit mode they stay tunneled and are logged at the
+  `host.vibepit`. Other ports may carry non-HTTP protocols that termination
+  would break, so in audit mode they stay tunneled and are logged at the
   connection level.
 
 Otherwise it tunnels as today. Rule changes at runtime apply to new
@@ -131,8 +156,10 @@ discarded after signing). The CLI generates it with the other session
 credentials and delivers its key to the proxy the same way as the control
 API server key, so a proxy restart keeps the same CA and the sandbox's trust
 stays valid. Leaf certificates use ECDSA P-256 (many clients reject Ed25519
-server certs) and are cached per host. goproxy's built-in `GoproxyCa` must
-never be used; its private key is public.
+server certs) and are cached per host. Each leaf names only its `CONNECT`
+host, gets a random serial, and is valid for a short period well under
+browser and OS limits (Chrome rejects leaves valid longer than 398 days, as
+goproxy found in #432).
 
 **Sandbox trust.** The CA certificate is mounted read-only into the sandbox.
 The entrypoint concatenates the system bundle and the CA into a file under
@@ -179,21 +206,31 @@ one place:
    terminated `CONNECT`, and HTTP/2 streams. The same upstream request gets
    the same decision however it reaches the proxy.
 
+**Structure.** `http.Server` accepts proxy requests. For `CONNECT` it runs
+host admission, then hijacks the connection and answers with the client's
+HTTP version. A tunnel is a copy loop with half-close. A terminated
+connection is handed to `tls.Server` (leaf from the session CA, ALPN `h2` and
+`http/1.1`), then served by a one-connection `http.Server` whose single
+handler does request authorization for HTTP/1.1 and HTTP/2 alike, and
+forwards with `httputil.ReverseProxy` over a `http.Transport` that uses the
+pinned dialer. Ordinary `http://` requests use the same handler path after
+host admission.
+
 **Inside a terminated connection.**
 - The request's authority must equal the `CONNECT` target (default port
-  applied), for both forms: the inner `Host` header or HTTP/2 `:authority`
-  for origin-form requests, and the URL's host for absolute-form requests.
-  goproxy prefers the inner `Host` when building the upstream URL
-  (`https.go`, "We prioritize req.Host") and keeps an absolute-form URL's
-  host, so a mismatch is rejected, never followed. The checked target is
-  carried in `ctx.UserData`.
-- The client must speak TLS. goproxy serves a non-TLS connection after
-  `CONNECT` as cleartext `http` (including h2c); a terminated connection
-  rejects that instead.
+  applied): `r.Host` (the `Host` header or HTTP/2 `:authority`) and, for an
+  absolute-form request, the URL's host and scheme `https`. A mismatch gets a
+  `421 Misdirected Request`, never followed. 421 is also what tells an
+  HTTP/2 client that tries to reuse ("coalesce") the connection for another
+  host to open a new one; goproxy serves coalesced requests
+  (`TestMitmHTTP2Coalescing`), the new proxy deliberately does not.
+- The client must speak TLS. Only `tls.Server` reads a terminated connection,
+  so cleartext and h2c are never served; a non-TLS first byte closes the
+  connection.
 - Blocked requests get a real `403` with an explanatory body (today a blocked
   HTTPS host only shows a failed connection).
-- HTTP/2 is enabled (`AllowHTTP2`). WebSocket upgrade requests are evaluated
-  like any request; frames are not inspected.
+- HTTP/1.1 and HTTP/2 are both served. WebSocket upgrade requests are
+  evaluated like any request; frames are not inspected.
 - Upstream certificates are always verified against system roots; there is no
   option to skip verification. The proxy image must carry CA roots.
 - **Every upstream dial connects to a validated address.** Today the CIDR
@@ -212,6 +249,92 @@ one place:
   address stays blocked.
 - The proxy never follows redirects; the client's follow-up request is checked
   again.
+
+**Edge cases from goproxy's history.** goproxy's fixes over the years are the
+checklist for what the new code owns. Each item names the goproxy fix
+(release and PR, from its release notes and tests in v1.9.4), how the new
+proxy handles it, and needs a test. Where the standard library handles it,
+the test pins that our glue doesn't break it.
+
+- **Early client bytes after `CONNECT`** (v1.9.3 #814, MITM and tunnel;
+  `TestConnectEarlyClientBytes`): a client may send its TLS ClientHello in
+  the same write as `CONNECT`; those bytes sit in the server's read buffer and
+  are lost if the tunnel or handshake reads the raw socket. The hijacked
+  `bufio.Reader` is drained first by both the copy loop and `tls.Server`.
+  Test both paths with `CONNECT` and ClientHello in one write.
+- **`CONNECT` reply line** (v1.9.1 #804, issue #802; v1.8.2 #749 wrote
+  `HTTP/0.0`): reply with the client's HTTP version and
+  "200 Connection established".
+- **`Expect: 100-continue`** (v1.9.3 #810; `TestMitmSendsContinueBeforeReadingBody`,
+  `TestMitmDoesNotSendContinueAfterFinalResponse`): without a `net/http`
+  server on the terminated connection nobody sends `100 Continue` and the
+  client waits forever; after a final response it must not be sent, and the
+  connection must be closed rather than left waiting for a body that never
+  comes. `http.Server` does all three; a request refused before its body is
+  read gets its 403 without `100 Continue`. Test an allowed upload, a refused
+  one, and a body-dependent `when` rule.
+- **WebSocket upgrades** (v1.7.0 #637 rewrite; v1.9.2 #805 early first frame;
+  v1.2.2 #606 default port; v1.2 #505 scheme): `ReverseProxy` handles HTTP/1.1
+  `Upgrade` by switching to a bidirectional copy. Test a WebSocket through a
+  terminated connection and through a tunnel, including a first frame sent in
+  the same write as the upgrade request (bytes buffered at hijack must not be
+  dropped; wrap if `ReverseProxy` loses them). WebSockets over HTTP/2
+  (extended `CONNECT`, RFC 8441) are not supported in the first version.
+- **HTTP/2** (v1.9.0 #785 MITM; v1.8.1 #742 missing `Content-Length` from an
+  HTTP/2 upstream to an HTTP/1.1 client; v1.8.3 #755 upstream protocol version
+  leaking into the response; v1.7.1 #651 ALPN; tests for concurrent streams,
+  h2c, coalescing): test HTTP/1.1 client with HTTP/2 upstream and the
+  reverse, concurrent streams on one connection, and that the client sees its
+  own protocol version. h2c and coalescing are refused (above). `CONNECT` sent
+  to the proxy over HTTP/2 is out of scope: the sandbox talks HTTP/1.1 to the
+  proxy.
+- **Bodiless responses** (v1.9.1 #797; v1.8.4 #770 304, #776 `NoBody`; v1.2
+  #473 HEAD `Content-Length`): HEAD, 204, and 304 must never be framed as
+  chunked, or the stray framing corrupts the next response on a kept-alive
+  connection. Test each, over HTTP/1.1 and HTTP/2 upstreams, followed by a
+  second request on the same connection.
+- **Response head and headers** (v1.8.5 #787 head in one write, since many
+  tiny TLS records broke strict WebSocket clients; v1.8.5 #791 and v1.8.4
+  #771 headers overwritten; v1.8.4 #773 trailers): `http.Server` buffers the
+  head; `ReverseProxy` forwards trailers. Test trailers end to end (gRPC
+  relies on them) and multi-value headers.
+- **Body lifecycle and streaming** (v1.9.3 #812 body closed twice; v1.8.1
+  #744 request body not closed on a custom response; v1.8.6 #794 streaming;
+  v1.2 #523 flushing; `TestMitmResponseStreamsSSE`): stream bodies both ways
+  without buffering (except the capped buffering for `when` rules that read
+  the body), close every body once, and flush server-sent events as they
+  arrive (`ReverseProxy` flushes `text/event-stream` immediately). Test an SSE
+  stream that delivers events before the upstream finishes.
+- **Connection close and keep-alive** (v1.9.3 #815 `Connection: close`;
+  v1.8.0 #734 keep-alive; v1.8.4 #779 close when the upstream errors; v1.2.1
+  #587/#588 non-persistent connections; v1.2 #541 close on failed handshake):
+  `http.Server` handles `Connection: close` and keep-alive; the
+  one-connection listener and the hijacked socket are closed when the server
+  is done or the handshake fails. Test each, with a raw client that can tell
+  whether the proxy closed.
+- **Request cancellation** (v1.6.0 #634; v1.2 #483/#462 contexts): a client
+  that goes away cancels the upstream request through the request context.
+  Test that a disconnect mid-request ends the upstream request.
+- **Proxy and hop-by-hop headers** (v1.2 #460 `KeepHeader`): `ReverseProxy`
+  removes hop-by-hop headers, including `Proxy-Connection` and
+  `Proxy-Authorization`. The proxy adds no `X-Forwarded-*` headers.
+- **Header canonicalization** (v1.2.4 #607, v1.2 #553): goproxy offers to keep
+  header-name case. `net/http` canonicalizes HTTP/1.1 header names and HTTP/2
+  lowercases them anyway; accepted and documented.
+- **Malformed requests** (v1.9.2 #809 panic on a malformed URL; v1.8.6 #793
+  unexpected scheme): the `net/http` parser rejects malformed requests before
+  the handler; the handler validates scheme and authority. Fuzz the handler's
+  target parsing.
+- **Certificates and upstream TLS** (v1.2 #432 validity too long, #466
+  invalid certificates, #355 random serials; v1.8.4 #774 `InsecureSkipVerify`
+  on the origin transport; v1.9.4 #822 leaf key derivation): short-lived
+  leaves with random serials and fresh random keys; upstream verification
+  always on.
+- **Concurrency** (v1.2 #509 data race in MITM handling): run the proxy tests
+  under the race detector.
+- **Timeouts** (no goproxy fix, but its inner MITM loop sets none): the
+  one-connection servers set read-header and idle timeouts so an idle
+  terminated connection doesn't hold resources forever.
 
 ### 2. Rule model
 
@@ -626,8 +749,11 @@ untouched until the new one is done.
 matching, conditions), TLS termination (CA and leaf certificates, `Host`
 pinning, tunnel-or-terminate decision), secret injection from service
 definitions and values the caller supplies, the request inspector interface
-and pipeline stage, holds, event hub, log buffers, DNS server, CIDR blocking, and the control API as an `http.Handler` with its
-wire types. It takes a typed Go config containing only concrete rules.
+and pipeline stage, holds, event hub, log buffers, DNS server, CIDR
+blocking, and the control API as an `http.Handler` with its wire types. It
+takes a typed Go config containing only concrete rules. It is built on the
+standard library and does not depend on goproxy; its tunnel copy loop is its
+own (it can't import vibepit's `netpipe`).
 
 **In vibepit:** config files and merging, expanding sets and presets into
 concrete rules (and the preset content), built-in service definitions,
@@ -716,6 +842,13 @@ in a `when` condition on `request.path`.
 - A placeholder used as a query parameter name doesn't appear in the ring
   buffer entry or the `/events` output.
 - No redirect is followed by the proxy.
+- Every item in "Edge cases from goproxy's history" (section 1) has a test:
+  early client bytes, `CONNECT` reply version, `100-continue`, WebSockets
+  (including an early first frame), HTTP/1.1 and HTTP/2 combinations,
+  bodiless responses on kept-alive connections, trailers, SSE streaming,
+  connection close, cancellation, hop-by-hop headers, malformed targets,
+  certificates, and timeouts. The suite also runs under the race detector.
+- A coalesced HTTP/2 request for another host gets a 421.
 - Hosts without request rules or secrets are tunneled, not terminated.
 - Older-format configs produce identical decisions.
 - Deny wins over every allow, including preset and secret rules.
