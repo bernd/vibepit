@@ -713,6 +713,54 @@ request path; the placeholder check is the only inspector.
   out host-level blocks. `/events` carries both.
 - `HostStats` gets separate `Connections` and `Requests` counters.
 
+**Event stream: one versioned state stream.** Today clients build their view
+from two sources: they poll `/hosts` (with `X-Vibepit-Last-Log-ID`) and read
+`/events`, then merge (`cmd/monitor_hosts.go`: `polled`, `pending`,
+`covered`). Policy changes from other clients aren't events, so the monitor
+keeps its own guesses until the next poll (`denied`, `rejected`,
+`allowlisted`, `allowGen`). A proxy restart is detected by a heuristic (a
+cursor lower than the last ID), and a resume point that fell out of the ring
+buffer silently loses entries. `netproxy` replaces this with a "list then
+watch" stream:
+
+1. **Snapshot, then changes, on one sequence.** The proxy keeps the state
+   itself: the host table (with allowed, denied, and rejected flags), open
+   holds, the effective policy including runtime allows and denies, secret
+   status, and session settings such as audit mode. A stream starts with that
+   state at sequence N, then sends only changes on the same sequence: log and
+   request entries, hold opened and ended, policy changes, host row updates,
+   findings. Clients apply changes to their state; there is no separate poll
+   and no merge. `GET /hosts` stays as a one-off read of the same snapshot,
+   for scripts.
+2. **Policy changes are events.** An allow, deny, or reject from any client
+   (prompt, monitor, `vibepit allow-http`, the desktop app) reaches every
+   subscriber at once.
+3. **Proxy instance ID.** A random ID per proxy start is part of every
+   snapshot and event. A resume point is instance plus sequence; a different
+   instance means a restart, detected for certain.
+4. **Gap signal.** If the requested resume point is no longer available, or
+   the subscriber was dropped for falling behind, the proxy says so
+   explicitly and sends a fresh snapshot instead of silently skipping
+   entries.
+5. **Topics.** A subscriber names what it wants: `holds`, `policy`, `hosts`,
+   `log`, `requests`, `findings`. The prompt subscribes to `holds,policy`;
+   only the monitor's log tab takes the high-volume `requests`.
+6. **Standard SSE framing, uniform envelope.** Each event carries
+   `id: <instance>:<seq>`; its data is always `{instance, seq, type, data}`,
+   with one Go struct per `type`, so TypeScript types can be generated
+   mechanically. Resume position and topics are both query parameters:
+   `GET /events?after=<instance>:<seq>&topics=holds,policy`. The standard
+   `Last-Event-ID` header exists for browsers' `EventSource`, which can't set
+   headers and reconnects to the same URL; no client of the mTLS API is a
+   browser, so the header can be added later if one ever is.
+7. **Host row updates are rate-limited per host.** The proxy aggregates the
+   host table and sends a host's update at most every few hundred
+   milliseconds, so clients don't aggregate log entries themselves.
+
+Kept from today: hold deadlines sent as time remaining (`hold_left_ms`), so
+the proxy's and client's clocks don't need to agree; publishing that drops a
+slow subscriber instead of blocking; keepalive comments.
+
 ### 9. TUI
 
 - Logs tab: method, path (truncated, `tui.SanitizeText`), status, a
@@ -727,7 +775,12 @@ request path; the placeholder check is the only inspector.
   an origin that has a credential grant does change it (denies on that
   origin are part of the list), so the next startup asks for approval again;
   the prompt shows the grant narrowed.
-- The approve screen and host-level holds are unchanged.
+- The approve screen and host-level holds are unchanged in behavior.
+- At cutover, the feed (`cmd/feed.go`), the hosts tab, and the prompt are
+  rebuilt on the new event stream (section 8): they apply the snapshot and
+  changes instead of polling `/hosts` and merging, and drop their local
+  guesses about allows, denies, and rejections. This removes most of
+  `cmd/monitor_hosts.go`'s merge logic.
 - Draft rules view (section 7).
 
 ### 10. CLI and control API
@@ -736,7 +789,9 @@ request path; the placeholder check is the only inspector.
   produce object entries.
 - New commands: `vibepit secret refresh`, `vibepit trust`.
 - Control API: allow and deny endpoints accept object entries; a new endpoint
-  receives secret values; `GET /config` never includes them.
+  receives secret values; `GET /config` never includes them. `/events` is the
+  versioned state stream (section 8); `GET /hosts` returns its snapshot
+  without the `X-Vibepit-Last-Log-ID` header.
 
 ### 11. Packaging: the `netproxy` module
 
@@ -849,6 +904,12 @@ in a `when` condition on `request.path`.
   connection close, cancellation, hop-by-hop headers, malformed targets,
   certificates, and timeouts. The suite also runs under the race detector.
 - A coalesced HTTP/2 request for another host gets a 421.
+- Event stream: a client that applies the snapshot and then every change
+  ends with the same state as a fresh snapshot; a policy change from one
+  client reaches every other subscriber; a restarted proxy (new instance ID)
+  and a resume point past the ring buffer both produce an explicit gap and a
+  fresh snapshot; a dropped slow subscriber resumes with a gap, not missing
+  entries; topics filter what a subscriber receives.
 - Hosts without request rules or secrets are tunneled, not terminated.
 - Older-format configs produce identical decisions.
 - Deny wins over every allow, including preset and secret rules.
