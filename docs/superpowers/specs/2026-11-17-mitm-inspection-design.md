@@ -152,11 +152,29 @@ terminates TLS for the `host:port` if any of these holds:
   would break, so in audit mode they stay tunneled and are logged at the
   connection level.
 
-Otherwise it tunnels as today. Rule changes at runtime apply to new
-connections; open tunnels stay as they are. Rule hosts with pinned clients are
+Otherwise it tunnels as today. Rule hosts with pinned clients are
 unsupported and documented as such. Request rules or secrets on
 `host.vibepit` are a config error: no public CA certifies it, and upstream
 verification has no skip option.
+
+**Policy changes and open connections.** A tunnel is decided once, at
+`CONNECT`, and clients keep tunnels open for a long time (HTTP/2,
+keep-alive), so a later rule would never reach them. After every policy
+change (a decision, a rule add, `ApplyConfig`) the proxy runs host admission
+again, without holds, for each open connection and closes those whose
+outcome became stricter:
+
+- a tunnel whose target would now be refused or terminated;
+- a terminated connection whose target would now be refused.
+
+The client reconnects and gets the new decision. Each closure is a flow
+record on the connection's kind with its own code. A terminated connection
+that stays open needs nothing more: its requests are authorized one by one,
+so a new rule applies to the next request. A request already in flight, and
+a connection already upgraded (WebSocket), run to their end unless the host
+itself is now refused. A change that only loosens policy closes nothing.
+The re-check uses the rules only; alias and CIDR results stay as they were
+at the connection's dial.
 
 **MITM CA.** A separate per-session CA, not the control-API CA (whose key is
 discarded after signing). The CLI generates it with the other session
@@ -234,6 +252,12 @@ host admission.
 - The client must speak TLS. Only `tls.Server` reads a terminated connection,
   so cleartext and h2c are never served; a non-TLS first byte closes the
   connection.
+- A failed handshake with the client is recorded. A client that doesn't
+  trust the session CA (pinned certificates, bundled roots) ends the
+  handshake with an alert or just closes. Either way the proxy writes a flow
+  record on the `http-connect` with its own code and, when the client sent
+  one, the alert in the reason. The monitor then shows which hosts can't be
+  terminated, where otherwise the tool would only fail.
 - Blocked requests get a real `403` with an explanatory body (today a blocked
   HTTPS host only shows a failed connection).
 - HTTP/1.1 and HTTP/2 are both served. WebSocket upgrade requests are
@@ -245,7 +269,8 @@ host admission.
   can differ from the one checked; a terminated connection can also open
   several upstream connections over its life. The dialer resolves the
   hostname once per dial, getting both the CNAME chain and the addresses
-  (the proxy already queries upstream DNS directly for aliases), checks the
+  (through the resolver the embedder supplies, section 11; the proxy
+  already queries upstream DNS directly for aliases), checks the
   chain against deny rules and every address against the CIDR rules, and
   dials one of those addresses, keeping the hostname for TLS verification.
   This applies to tunnels and ordinary requests too.
@@ -420,6 +445,19 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   rejected if either interpretation contains `.`, `..`, `//`, or NUL, and the
   condition is evaluated once per interpretation. An allow matches only if it
   is true for every interpretation; a deny matches if it is true for any.
+- `request.param(name)` and `request.header(name)` must be unambiguous.
+  Upstreams disagree on which value they use when a name is repeated (the
+  first, the last, or all joined). A request is ambiguous for a condition
+  when a parameter or header the condition references appears more than
+  once, or when the condition references a parameter and the query string
+  doesn't parse cleanly (for example `;` separators or invalid escapes). An
+  ambiguous request counts as an evaluation error: an allow rule does not
+  match; a deny rule matches.
+- `request.json` is parsed strictly, for the same reason: parsers disagree
+  on duplicate keys (Go's `encoding/json` takes the last one). A body with a
+  duplicate key in any object, invalid UTF-8, or data after the JSON value
+  is unparseable. `request.graphql` reads the `query` field from this strict
+  parse.
 - `request.graphql.queryOnly` is true only when the body is a single GraphQL
   request (not a batched JSON array) whose document, parsed with a real
   GraphQL parser (`gqlparser`), contains only query operations. A text check
@@ -723,6 +761,16 @@ request path; the placeholder check is the only inspector.
   allow. What it shares with future scanning is the broad termination scope
   (section 6).
 - Secret injection works as in normal mode.
+- **Excluding hosts.** Audit mode terminates hosts that no rule asked to
+  terminate, so a pinned client on an allowed host stops working while it is
+  on. A host-controlled list (`audit-exclude` in the global config and a
+  matching flag; host patterns as in `allow-http`) takes hosts out of audit
+  mode: they are not terminated because of it and their path allows are not
+  relaxed. A host that request rules or a secret already terminate stays
+  terminated. Excluded hosts are logged at the connection level, like other
+  tunnels. In a project config the list is a config error, like `audit`.
+- The monitor marks failed client handshakes (section 1) and, in audit
+  mode, names the exclusion list as the fix.
 - Monitor "draft rules" action: from selected request entries, generate
   object-form `allow-http` YAML grouped by host and method with path
   patterns, for the user to edit into a preset.
@@ -746,7 +794,8 @@ request path; the placeholder check is the only inspector.
   finding is not enough, since the request entry itself carries those
   fields.
 - New block codes for request-rule refusals, host mismatch, placeholder
-  misuse, and missing secret values. `AllowFixes` is false for all except a
+  misuse, missing secret values, failed client handshakes, and connections
+  closed by a policy change. `AllowFixes` is false for all except a
   request-level "not allowlisted".
 - `http-request` flows go into their own ring buffer (10k), so floods don't
   push out host-level blocks. `/events` carries both.
@@ -872,11 +921,13 @@ watch" stream:
 
 1. **Snapshot, then changes, on one sequence.** The proxy keeps the state
    itself: the target table, open holds, the effective policy of every kind
-   including runtime allows and denies, and the status section (below). A
-   stream starts with that state at sequence N, then
-   sends only changes on the same sequence. Clients apply changes to their
-   state; there is no separate poll and no merge. `GET /targets` returns the
-   same snapshot once, for scripts.
+   including runtime allows and denies, and the status section (below).
+   Every stream, resumed or not, starts with that state at sequence N, then
+   sends only changes on the same sequence. The snapshot holds only the
+   sections the subscription's topics cover: a `holds,policy` subscriber
+   gets open holds and the policy, not the target table. Clients apply
+   changes to their state; there is no separate poll and no merge.
+   `GET /targets` returns the same snapshot once, for scripts.
    A new subscription may ask for a bounded history tail (`tail=N`, at most
    the ring size): the most recent flow records with sequence up to the
    snapshot's, filtered by its topics and kinds, delivered before any live
@@ -905,9 +956,15 @@ watch" stream:
 4. **Proxy instance ID.** A random ID per proxy start is part of every
    snapshot and event. A resume point is instance plus sequence; a different
    instance means a restart, detected for certain.
-5. **Gap signal.** If the requested resume point is no longer available, or
-   the subscriber was dropped for falling behind, the proxy sends a `gap`
-   event and a fresh snapshot instead of silently skipping entries.
+5. **A resume replays flow records only.** Every stream starts with a
+   snapshot, so state is current after any reconnect, and the proxy keeps no
+   log of `policy`, `target`, hold, or `status` changes to replay. A resume
+   point (`after`) only selects flow records: those above it, up to the
+   snapshot's sequence, come from the ring buffers before any live change,
+   as with `tail`. If the resume point is from another instance or has
+   fallen out of a ring buffer, the proxy sends a `gap` event before the
+   replay instead of silently skipping entries. A subscriber dropped for
+   falling behind reconnects with `after` like any other.
 6. **Topics and kinds.** A subscriber filters by event type and, optionally,
    by kind: `?topics=holds,policy` for the prompt;
    `?topics=flows&kinds=http-request` for the monitor's request log. Flow
@@ -957,7 +1014,8 @@ slow subscriber instead of blocking; keepalive comments.
 
 - Logs tab: method, path (truncated, `tui.SanitizeText`), status, a
   tunnel/mitm marker, a secret-injected marker, a "would block" marker in
-  audit mode, and highlighted placeholder alerts.
+  audit mode, highlighted placeholder alerts, and failed client handshakes
+  (the client doesn't trust the session CA).
 - Hosts tab: tunnel/mitm marker; shadowed-rule warnings.
 - On a refused request entry the monitor offers: allow exact path, allow a
   prefix, deny the path. These write object entries with literal hosts and
@@ -1042,11 +1100,34 @@ embeddable.
   The embedder decides separately whether and where to serve the control API
   and guest DNS. This lets vvmm expose only the proxy port to the guest while
   the proxy resolves upstream names on the host.
+- **The embedder supplies the resolver.** The dialer needs a name's CNAME
+  chain and its addresses from one lookup (section 1), which `net.Resolver`
+  can't give: it never reports the chain. `netproxy` defines a small
+  interface for it (a name in; the chain and the addresses out) and ships
+  one implementation that queries a given DNS server directly, as today's
+  `lookupAliases` does. vibepit uses that one with `upstream-dns`. An
+  embedder on the host can point it at the host's own resolver address, so
+  VPN and split DNS keep working, or supply its own. The contract fails
+  closed, as today: an implementation returns the whole chain or an error,
+  never an empty chain for a lookup that failed.
 - **`ApplyConfig(cfg)`** replaces the whole policy atomically at runtime and
   publishes the changes as `policy` events, so an embedder can reload from
   any source without a restart.
 - **In-process subscriptions:** an embedder that wants to persist runtime
   decisions subscribes to `policy` events and stores them however it likes.
+- **`Close` leaves nothing behind.** vibepit's proxy process simply exits,
+  but an embedder keeps running, so being disposable needs a contract.
+  `Close` closes every listener given to the instance; ends open holds,
+  refusing their requests; closes every connection it owns (tunnels,
+  terminated connections, upgraded ones such as WebSockets, ordinary
+  requests, and idle upstream connections); ends every event subscription;
+  stops its timers; drops secret values; and returns once its goroutines
+  have ended. The serve methods (`ServeProxy` and the others) then return.
+  `Close` is immediate and may be called more than once; a graceful drain
+  can be added later without changing it. `http.Server` forgets a connection
+  once it is hijacked, so `netproxy` tracks tunnels and terminated
+  connections itself. The same bookkeeping closes connections after a
+  policy change (section 1) and feeds the status section.
 
 **Telemetry.** `netproxy` provides operational telemetry (how the proxy
 itself is doing) through standard APIs; domain events (flows, holds, policy
@@ -1188,6 +1269,11 @@ keeps running on `proxy/`. Then vibepit switches over in one go: the glue in
 `cmd/proxy.go`, config, CLI, monitor, and prompt move to `netproxy`'s API and
 wire types, and `proxy/` is deleted.
 
+Mixed versions are not supported, and that is accepted (vibepit is 0.x):
+the new CLI, monitor, and prompt can't talk to a proxy started by an older
+vibepit, or the other way round. Users end running sessions before they
+update; the changelog and the update docs say so.
+
 ### 12. Docs
 
 - `threat-model.md` (currently states the proxy does not inspect encrypted
@@ -1248,10 +1334,31 @@ in a `when` condition on `request.path`.
 - A coalesced HTTP/2 request for another host gets a 421.
 - Event stream: a client that applies the snapshot and then every change
   ends with the same state as a fresh snapshot; a policy change from one
-  client reaches every other subscriber; a restarted proxy (new instance ID)
-  and a resume point past the ring buffer both produce an explicit gap and a
-  fresh snapshot; a dropped slow subscriber resumes with a gap, not missing
-  entries; topics and kinds filter what a subscriber receives.
+  client reaches every other subscriber; every stream starts with a
+  snapshot, and a resume replays only the flow records after its point, each
+  exactly once; a restarted proxy (new instance ID) and a resume point past
+  the ring buffer both produce an explicit gap; a dropped slow subscriber
+  that reconnects gets the flow records it missed or a gap, never silently
+  fewer; topics and kinds filter what a subscriber receives, including the
+  sections of the snapshot.
+- Policy changes and open connections: a deny, or the first request rule or
+  secret for a host, added at runtime closes the open tunnels it covers, and
+  the reconnect is refused or terminated; a tunnel to another host stays
+  open; a terminated connection applies a new path deny to its next request
+  without being closed; a new allow closes nothing.
+- `when` ambiguity: a repeated query parameter or header that a condition
+  references, a query string that doesn't parse cleanly, and a JSON body
+  with a duplicate key each make an allow not match and a deny match.
+- A client that rejects the session CA produces a failed-handshake flow
+  record. In audit mode a host on the exclusion list is tunneled and its
+  pinned client works; a host that rules terminate stays terminated; the
+  exclusion list in a project config is an error.
+- `Close`: with an open tunnel, a terminated connection with a request in
+  flight, an upgraded WebSocket, an open hold, and a subscriber, `Close`
+  returns, all of them have ended, no goroutine of the instance is left,
+  and a new instance can serve on the same address at once.
+- Resolver: `netproxy` runs with a resolver the caller supplies; a resolver
+  error refuses the dial.
 - Generic protocol: every kind's flows, holds, target rows, and decisions go
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
@@ -1296,7 +1403,8 @@ in a `when` condition on `request.path`.
 - Inspectors run before secret injection and see the agent's original
   headers; findings never contain the matched value.
 - `request.graphql.queryOnly` is false for mutations, subscriptions, mixed
-  documents, mutations after comments or fragments, and batched arrays.
+  documents, mutations after comments or fragments, batched arrays, and
+  bodies with a duplicate `query` key.
 - Secrets never appear in flow records, events, snapshots, API responses, or
   errors.
 - Injection only within the service's host and path binding; placeholder
@@ -1375,8 +1483,9 @@ Recorded because the protocol already fits it.
 ## Left to the builder
 
 - CEL vs `expr`, decided by measured binary growth.
-- Exact names of new config keys for user-defined presets and the audit
-  setting, the new control API endpoint, and new block codes.
+- Exact names of new config keys for user-defined presets, the audit
+  setting, and its exclusion list, the new control API endpoint, and new
+  block codes.
 - The exact GitHub preset rule lists (verify paths against GitHub's git smart
   HTTP, REST, and LFS docs).
 - Leaf certificate cache size and lifetime; CA lifetime matching the existing
