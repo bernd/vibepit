@@ -30,7 +30,9 @@ TLS only where rules need it".
   observed requests.
 - Named sets and parameterized presets so a list of repos is written once,
   including built-in `github-read` and `github-write` presets.
-- Existing configs behave exactly as today.
+- Existing configs keep their decisions, with two announced breaks:
+  `host.vibepit` entries in HTTP rules (section 8) and a one-time approval of
+  each project config (section 5).
 
 ## Non-goals (first version)
 
@@ -54,6 +56,8 @@ TLS only where rules need it".
   approving grants on first use". This project uses `vibepit trust`.
 - Telemetry exporter configuration in vibepit. `netproxy` provides the
   telemetry APIs now; vibepit keeps exporting off.
+- Replacing the config of a running proxy (`ApplyConfig`); see "Future:
+  replacing the config at runtime".
 - OAuth flows run by agents (Claude Code `/login`, Codex login). Planned with
   the host daemon; see "Future: OAuth with the host daemon". Host CLIs that
   manage their own OAuth (`gh auth token`, `gcloud auth print-access-token`)
@@ -160,9 +164,9 @@ verification has no skip option.
 **Policy changes and open connections.** A tunnel is decided once, at
 `CONNECT`, and clients keep tunnels open for a long time (HTTP/2,
 keep-alive), so a later rule would never reach them. After every policy
-change (a decision, a rule add, `ApplyConfig`) the proxy runs host admission
-again, without holds, for each open connection and closes those whose
-outcome became stricter:
+change (a decision or a rule add) the proxy runs host admission again,
+without holds, for each open connection and closes those whose outcome
+became stricter:
 
 - a tunnel whose target would now be refused or terminated;
 - a terminated connection whose target would now be refused.
@@ -279,6 +283,21 @@ host admission.
   gateway, the dialer connects to exactly that gateway address without the
   CIDR check, as today. Any other name that resolves to the same private
   address stays blocked.
+- **A refused dial is reported on the flow that needed it,** with today's
+  codes (alias of a denied name, blocked CIDR range, resolution failed);
+  `AllowFixes` is false. The dialer returns a typed error and its caller
+  maps it:
+  - *Tunnel:* the proxy dials before it answers, so the `CONNECT` gets a 403
+    and the `http-connect` (or `host-port`) record carries the block, as
+    today.
+  - *Request* (ordinary `http://`, or inside a terminated connection, whose
+    `CONNECT` was answered before any dial): the request gets a 403 with the
+    block body, and its `http-request` record carries the code, with the
+    connection as `parent`. This also covers a reconnect late in a
+    long-lived terminated connection.
+
+  An upstream that can't be reached (connection refused, timeout, bad
+  certificate) is a 502, not a block.
 - The proxy never follows redirects; the client's follow-up request is checked
   again.
 
@@ -669,46 +688,64 @@ credential):
 
 **Where credential grants come from.** A credential grant is an allow rule
 or preset use with `secret`.
-- **Grants in the global config apply to every project.** That is their
-  definition, and the docs say so plainly: a grant for private repos in the
-  global config can be used from any checkout.
+- **Grants in the global config apply to every project the user has
+  approved** (below). That is their definition, and the docs say so plainly:
+  a grant for private repos in the global config can be used from any
+  approved checkout.
 - **Per-project grants go in the project config** (for example a project's
-  own list of private repos) and need project trust before they apply.
-  Secret values, sources, and service definitions never come from a project
-  config.
+  own list of private repos). Secret values, sources, and service
+  definitions never come from a project config.
 
-**Project trust (`vibepit trust`).** A project config may contribute
-credential grants after the user approves them, the way `direnv allow` and
-`mise trust` work.
-- **What is approved is the effective credential policy.** vibepit expands
-  the merged config (global plus project, sets and presets resolved,
-  built-in presets included) into a canonical list of credential grants:
-  per secret, the HTTPS origin, methods, path patterns, `when` conditions,
-  and every deny on that origin. Approval is needed when the project
-  contributes to that list: the list computed with the project config
-  differs from the list without it (its own grants, or entries it adds to a
-  set that a grant references).
-- **Approval identity.** The approval is bound to the project's resolved
-  root path and a hash of the canonical list, stored on the host outside the
-  repo. Anything that changes the list asks again: a project edit, a removed
-  deny that narrowed a grant, a new set entry, a vibepit upgrade whose
-  built-in preset widens a grant, or a global edit that changes a grant the
-  project contributes to. Changes that leave the list identical (such as
-  allows without `secret`) don't ask.
+**Project trust (`vibepit trust`).** A project config is written by whoever
+wrote the repo, and it decides where the sandbox may connect: hosts, DNS
+names, presets, ports on the user's own machine (`allow-host-ports`), and
+credential grants. The home volume, with the agents' logins in it, is shared
+by every project, and global credential grants work in every project, so
+the allow list of a freshly cloned repo is enough to send data out. vibepit
+therefore uses no project config the user hasn't approved, the way
+`direnv allow` and `mise trust` work. This covers the whole file, not only
+credential grants.
+- **What is approved.** Two things, both bound to the project's resolved
+  root path and stored on the host outside the repo:
+  1. *The project config,* as a hash of its parsed, canonical form, so
+     comments, order, and whitespace don't matter. Any other edit asks
+     again.
+  2. *The effective credential policy.* vibepit expands the merged config
+     (global plus project, sets and presets resolved, built-in presets
+     included) into a canonical list of credential grants: per secret, the
+     HTTPS origin, methods, path patterns, `when` conditions, and every deny
+     on that origin. It is hashed for the grants the project contributes to
+     (its own grants, or entries it adds to a set that a grant references).
+     This part can change without a project edit, and then asks again: a
+     vibepit upgrade whose built-in preset widens a grant, or a global edit
+     that changes a grant the project contributes to.
+- **vibepit's own writes keep the approval.** First-time setup,
+  `--reconfigure`, and rules saved from the CLI, monitor, or prompt are the
+  user's decisions on the host. Under the project config lock, vibepit
+  checks that the file it read is the approved one (or doesn't exist yet),
+  writes, and records the new approval. If something else changed the file
+  since it was approved, the write still happens but the approval is not
+  renewed, and the next start asks.
 - **What the user sees.** `vibepit trust`, run in the project directory,
-  lists the grants per secret and flags grants that paths can't limit (the
-  GraphQL presets) as "all repositories this token can access", then asks
-  for approval. `vibepit trust --revoke` removes the approval.
+  lists what the project config adds beyond the global config: allowed
+  hosts and DNS names, presets, host ports, and credential grants per
+  secret. Grants that paths can't limit (the GraphQL presets) are flagged as
+  "all repositories this token can access". It also lists the global grants
+  that become usable in this project. Then it asks for approval.
+  `vibepit trust --revoke` removes the approval.
 - **Where it's checked.** Where the project config is loaded: when `run`
-  starts a new session it shows the same list and asks if the hash is new or
-  changed; `up` refuses with a hint to run `vibepit trust`. `connect`, and
-  `run` attaching to a running session, don't load config and don't ask.
-- **Declining** aborts startup with a message naming the grants. There is no
-  "start without them" mode.
+  starts a new session it shows the same list and asks if there is no
+  approval or a hash changed; `up` refuses with a hint to run
+  `vibepit trust`. A project without a config goes through first-time
+  setup, which approves what the user just chose. `connect`, and `run`
+  attaching to a running session, don't load config and don't ask.
+- **Declining** aborts startup with a message naming what was not approved.
+  There is no mode that starts without the project config.
 - **The agent can't change the project config mid-session:** `.vibepit` is
-  hidden in the sandbox behind a read-only mount, and config is read only at
-  startup.
-- Project config without credential grants works exactly as today.
+  hidden in the sandbox behind a read-only mount, and config files are read
+  once, at session start (section 11).
+- **Upgrade.** Every existing project asks once after the upgrade (vibepit
+  is 0.x); the changelog says so.
 
 ### 6. Request inspectors
 
@@ -834,6 +871,16 @@ protocol-specific.
   `{kind, target, decision, code, reason, rule, detail, ...}`. It replaces
   `LogEntry` on the wire; the fields from section 8 above (method, path,
   status, mode, secret, audit marker) live in the `http-request` details.
+- **Rule identity.** Every rule in `netproxy`'s config has an ID that
+  `netproxy` assigns and an opaque `origin` label that the embedder sets and
+  `netproxy` never interprets. vibepit uses `global`, `project`,
+  `preset:<name>`, `cli`, and `runtime` (decisions made during the session).
+  A flow record's `rule` is the ID of the rule that decided it; the policy
+  in the snapshot and `policy` events list each rule with its ID, canonical
+  form, and origin, so a client shows "allowed by preset github-read" by
+  looking it up. An index into the expanded rule list would mean nothing to
+  a user, since sets and presets expand into many rules. IDs are stable for
+  one proxy instance.
 - **Parent flows.** A flow record has an optional `parent`: the ID of the
   flow it belongs to. An `http-request` names its `http-connect` (the
   terminated connection, or the admission of the ordinary `http://`
@@ -894,15 +941,31 @@ handling: a blocked `host.vibepit:3000` is held, and allowing it writes
   a matching `deny-host-ports`. Allowing from the prompt or monitor writes
   `allow-host-ports: [3000]`.
 - The prompt shows "sandbox wants host port 3000", not a hostname.
-- Every `allow-http`/`deny-http` entry is checked at startup against the
-  rewrite name by pattern, not only by literal name: an entry that matches
-  `host.vibepit:<port>` for any port (explicitly, or by wildcard such as
-  `*.vibepit:3000` or `**.vibepit:*`) is a startup error naming the entry and
-  the `allow-host-ports`/`deny-host-ports` rule to write instead (vibepit is
-  0.x). Today HTTP rules are decided before the gateway allowance
-  (`proxy/http.go`), so `deny-http: "*.vibepit:3000"` overrides
-  `allow-host-ports: [3000]`; silently moving host ports to their own rules
-  would drop that deny while the config keeps loading.
+- **HTTP rules never apply to `host.vibepit`.** Host admission routes the
+  rewrite name to the `host-port` kind before any HTTP rule is looked at, so
+  only `allow-host-ports` and `deny-host-ports` decide it. Broad patterns
+  such as `*.*:22` stay legal and simply don't cover it, in either
+  direction. This is a breaking change (vibepit is 0.x): today HTTP rules
+  are decided before the gateway allowance (`proxy/http.go`), an
+  `allow-http: host.vibepit:3000` entry opens the port, and that entry is
+  what allowing from the prompt saves.
+- Two cases are startup errors, so that nothing changes meaning silently.
+  Each names the entry and prints the `allow-host-ports`/`deny-host-ports`
+  lines to write instead:
+  - an `allow-http` or `deny-http` entry whose host pattern ends in the
+    `vibepit` label (`host.vibepit:3000`, `*.vibepit:*`): it can only mean
+    the host;
+  - a `deny-http` entry that matches `host.vibepit:P` for a port P in
+    `allow-host-ports` (for example `*.*:3000` next to
+    `allow-host-ports: [3000]`): today that deny wins, and dropping it would
+    open the port.
+- A wildcard allow that used to cover `host.vibepit` (such as `*.*:*`) no
+  longer grants host ports. That only narrows; the changelog says so.
+- Accepted risk: `deny-host-ports` is a new key, and an older binary ignores
+  it while still honouring `allow-host-ports`. That re-opens a port only
+  when the same config also allows it; otherwise the older binary merely
+  asks about the port again. Unlike a dropped `deny-http`, it takes a
+  contradictory config, so the new key stays.
 - `host-port` targets are never terminated (no public CA certifies
   `host.vibepit`), and their dial uses the gateway exception from section 1.
 - In `netproxy`, `host.vibepit` is the general host-rewrite configuration
@@ -947,7 +1010,7 @@ watch" stream:
      "kind":"http-request",
      "target":{"host":"api.github.com","port":"443"},
      "decision":"block","code":"request_not_allowlisted",
-     "rule":"allow-http[3]",
+     "rule":"r17",
      "detail":{"method":"POST","path":"/repos/acme/x/issues"}
    }}
    ```
@@ -1022,9 +1085,9 @@ slow subscriber instead of blocking; keepalive comments.
   paths to the project config. The monitor never writes `secret`, `{set}`
   references, sets, or presets, so it cannot widen where a secret goes. A
   saved allow never changes the approved credential policy. A saved deny on
-  an origin that has a credential grant does change it (denies on that
-  origin are part of the list), so the next startup of an approved project
-  asks again; the list shows the grant narrowed.
+  an origin that has a credential grant narrows it (denies on that origin
+  are part of the list). Either way the save is the user's own, so it keeps
+  the project's approval (section 5) and the next startup doesn't ask.
 - The approve screen and host-level holds are unchanged in behavior.
 - At cutover, the feed (`cmd/feed.go`), the hosts tab, and the prompt are
   rebuilt on the new event stream (section 8): they apply the snapshot and
@@ -1110,9 +1173,6 @@ embeddable.
   VPN and split DNS keep working, or supply its own. The contract fails
   closed, as today: an implementation returns the whole chain or an error,
   never an empty chain for a lookup that failed.
-- **`ApplyConfig(cfg)`** replaces the whole policy atomically at runtime and
-  publishes the changes as `policy` events, so an embedder can reload from
-  any source without a restart.
 - **In-process subscriptions:** an embedder that wants to persist runtime
   decisions subscribes to `policy` events and stores them however it likes.
 - **`Close` leaves nothing behind.** vibepit's proxy process simply exits,
@@ -1190,31 +1250,33 @@ TUI. Also where the proxy's config lives and what survives a restart:
 - New: the proxy config lives in the session directory next to the session
   credentials, so it survives a reboot. Unsaved decisions are lost on
   restart, as today.
-- **The session file is derived, never edited piecewise.** It is regenerated
-  from the durable inputs: the global and project config files as they are
-  now, plus the CLI inputs given at session start (`-a`, `-p`, and the like),
-  which vibepit stores in the session directory. Regenerating from the live
-  policy instead would persist `--no-save` decisions. Manual edits to the
-  config files mid-session therefore take effect on the next proxy restart;
-  the docs say so.
+- **Config files are read once, at session start.** The session's proxy
+  config is the config resolved and approved at startup (global and project
+  config, CLI inputs such as `-a` and `-p`, sets and presets expanded) plus
+  the rules saved during the session, appended in order. Nothing reads the
+  config files again mid-session. A re-read would pick up edits made since
+  startup, such as a `git pull` that adds credential grants, and a proxy
+  restart would then load them without the trust check (section 5). Manual
+  edits to the config files take effect in the next session; the docs say
+  so. `--no-save` decisions are never appended, so a restart drops them.
 - **Saving a rule** happens in this order: apply it live through the control
-  API; write the project config under its existing lock
-  (`withProjectConfigLock`); regenerate the session file under a
-  session-directory lock, written to a temp file and renamed into place.
-  Every regeneration reads the files inside the lock, so two concurrent saves
-  (CLI and monitor) can't drop each other's rules.
+  API, which returns the rule in canonical form; write the project config
+  under its existing lock (`withProjectConfigLock`), keeping the approval
+  (section 5); append the canonical rule to the session's proxy config
+  under a session-directory lock, written to a temp file and renamed into
+  place. Every append reads the file inside the lock, so two concurrent
+  saves (CLI and monitor) can't drop each other's rules.
 - **What the UI reports:**
   - both writes succeeded: "Saved";
   - the live change worked but the project write failed: "active for this
-    session, not saved", as today;
-  - the project write worked but regeneration failed: "saved to the project
-    config and active now, but a proxy restart won't load it yet", with the
-    error. Any later save regenerates the whole file and repairs it, and the
-    status section shows the session config as stale until then.
+    session, not saved", as today; nothing is appended;
+  - the project write worked but the append failed: "saved to the project
+    config and active now, but a proxy restart in this session won't load
+    it", with the error. The rule is in the project config, so the next
+    session has it.
 - `cmd/proxy.go` reads the file, translates it into `netproxy`'s config, sets
   up mTLS, adds the `host.vibepit` rewrite, and starts `netproxy` and the SSH
-  forwarder. Watching the file and calling `ApplyConfig` is possible but not
-  part of this project.
+  forwarder.
 
 **Carried over unchanged from today's proxy:**
 - The DNS server: filtering by `allow-dns`/`deny-dns`, the CNAME check, the
@@ -1230,6 +1292,91 @@ TUI. Also where the proxy's config lives and what survives a restart:
 - `block-cidr`/`allow-cidr`, now checked on every dial.
 - The control API's mTLS credentials: Ed25519, generated per session, valid
   for 30 days; `netproxy` receives the `tls.Config` from vibepit.
+
+**Behaviour carried over from `proxy/`.** goproxy's history is the checklist
+for the data path (section 1); vibepit's own proxy is the checklist for
+policy, holds, and DNS. Its fixes are easy to lose in a rewrite because many
+of them are orderings and spellings, not features. Each item names the tests
+that pin it today. Those tests are ported to `netproxy` on a small harness
+(start a proxy from a config; get its proxy address, DNS address, and a
+control client), with the control API calls translated to `/decisions` and
+the rules endpoint. There is no runtime opt-in, so the ported suites
+passing, together with the root `integration_test.go`, is the gate for the
+cutover.
+
+- **One spelling per target** (`TestCanonicalTarget`,
+  `TestConnectChecksDialedPort`, `TestPlainHTTPChecksDialedPort`,
+  `TestPlainHTTPForwardsToCanonicalTarget`, `TestPaddedAllowPortForwards`,
+  `TestEnforcedDenyZeroPaddedPortCannotReachUpstream`,
+  `TestEnforcedDenyTrailingDot`, `TestPlainHTTPUnknownSchemeBlocked`): hosts
+  are lowercased and lose trailing dots, ports are decimal without padding
+  and default to the scheme's, and IPv4-mapped IPv6 literals are unmapped.
+  Every check, hold, flow record, and the dial use that one form, so no
+  spelling gets around a deny. A target no dial could use (bad port, empty
+  host, stray colon) is refused before any check or hold.
+- **Deny wins, also in a race** (`TestEnforcedDenyFiltering`,
+  `TestAllowAndDenySerialize`, `TestDeniedBetweenFilterAndHoldAdmission`,
+  `TestDeniedConcurrentAllowRelease`,
+  `TestHoldDeniedStaysBlockedDespiteRacingAllow`): rule changes are
+  serialized, and a request the user denied never passes because an allow
+  raced the deny.
+- **An allow of a denied target is refused whole**
+  (`TestAllowOfEnforcedDeniedTargetRejected`,
+  `TestAllowRejectionNamesEveryDeniedEntry`,
+  `TestAllowValidatesBeforeDenyCheckAndErrorsAreJSON`): nothing is applied,
+  so the caller never saves an allow that can't take effect. The error is
+  JSON and names every denied entry, quoted, because the names are the
+  sandbox's choice and end up in a terminal.
+- **A decision is recorded before its holds end, and a new hold checks again
+  under its lock** (`TestHolds_AllowedBeforeRegistration`,
+  `TestHolds_AllowRaceNeverStrands`, `TestHolds_DeniedBeforeRegistration`,
+  `TestControlAPI_AllowHTTPEndsMatchingHolds`,
+  `TestControlAPI_DenyEndsHold`): no request is left waiting on a target
+  that was just decided.
+- **A released hold is checked again** (`TestHTTPProxy_HeldThenAllowed`,
+  `TestHTTPProxy_HeldThenCIDRBlocked`, `TestHTTPProxy_HeldCONNECTDenied`):
+  the deny rules and the dial checks still apply after an allow.
+- **Hold outcomes** (`TestHolds_ConcurrentRequestsShareOneHold`,
+  `TestHolds_CancelledRequestLeavesOthers`,
+  `TestHTTPProxy_AbandonedHoldNotLogged`,
+  `TestHTTPProxy_RejectedResponseSaysSo`, `TestHolds_Limits`,
+  `TestHTTPProxy_NoWatcherBlocksImmediately`, `TestHolds_NewHoldAfterEnd`):
+  requests for one target share a hold; a client that left is not logged as
+  a block; a target rejected for the session is never held again and the
+  response says so; past the limits, or with nobody watching, requests are
+  blocked at once.
+- **Watchers leaving** (`TestHolds_LastWatcherLeaving`,
+  `TestHolds_UnwatchedHookRechecksWatchers`,
+  `TestHolds_DroppedWatcherKeepsHolds`,
+  `TestEventHub_DropDoesNotFireOnEmpty`,
+  `TestControlAPI_ClosingStreamEndsHolds`): holds end as unwatched when the
+  last watcher leaves, but not when it was dropped for falling behind, since
+  it reconnects.
+- **Aliases and CIDR fail closed** (`TestHTTPRefusesAliasOfDeniedName`,
+  `TestDNSRefusesAliasOfDeniedName`, `TestHTTPSkipsAliasLookupWhenUseless`,
+  `TestAliasLookupAbandonedNotLogged`, `TestCheckRequestBlockCode`): a chain
+  or an address that can't be looked up blocks, with its own code; a lookup
+  that failed only because the client left is not logged as a DNS failure.
+  Today the alias lookup is a second query, skipped when there are no deny
+  rules and for IP literals. In `netproxy` the chain comes with the dial's
+  own lookup (section 1), so there is nothing left to skip, and that test
+  becomes "an IP literal needs no lookup".
+- **DNS** (`TestDNSRefusesMultipleQuestions`, `TestDNSHostVibepit`,
+  `TestDNSServerBlockedIPCode`): a message with more than one question is
+  refused, since only the first would be checked; `host.vibepit` answers an
+  A query with the proxy IP and other types with an empty answer.
+- **Stream order under load** (`TestControlAPI_EventsNoGapUnderLoad`,
+  `TestLogBuffer_OnAddInIDOrder`, `TestControlAPI_EventsReplayHoldOutcome`,
+  `TestControlAPI_EventsOutlivesServerTimeouts`,
+  `TestEventHoldDeadlineUsesReaderClock`): events leave in sequence order
+  with none lost between history and live; a hold's outcome is on its record
+  before the event goes out; the stream outlives the server's read and write
+  timeouts.
+- **Control API survives a handler panic** (`TestControlAPIPanicRecovery`):
+  the caller gets a 500 and the proxy keeps running.
+- **Saved denies survive a restart**
+  (`TestPersistentDenyReloadIntegration`): a deny saved during a session
+  still blocks after the proxy starts again from its config.
 
 **Things `netproxy` makes configurable instead of hard-coding:** block
 message text, host rewrites (`host.vibepit` becomes a general name → gateway
@@ -1308,13 +1455,16 @@ in a `when` condition on `request.path`.
   `..%2F` traversal is rejected; scoped npm names still pass under `/**`.
 - Flow records in the ring buffers and on `/events` contain no query values,
   placeholders, or secret values, including for blocked requests.
-- Project trust: a project with credential grants doesn't start (`run`
-  asks, `up` refuses) until approved; anything that changes the canonical
-  credential policy asks again (project edit, removed deny, added set entry,
-  built-in preset change), and changes that leave it identical don't; two
-  checkouts with different project grants each get only their own plus the
-  global ones; secret values or sources in a project config are startup
-  errors; `audit` in project config is an error.
+- Project trust: a project whose config is not approved doesn't start (`run`
+  asks, `up` refuses), with or without credential grants; a hand edit of
+  the project config asks again, and a change to comments or order doesn't;
+  a save made through vibepit (setup, CLI, monitor, prompt) keeps the
+  approval when the file was approved before it and doesn't when it wasn't;
+  a change to the canonical credential policy without a project edit
+  (built-in preset change, global edit to a grant the project contributes
+  to) asks again; two checkouts with different project grants each get only
+  their own plus the global ones; secret values or sources in a project
+  config are startup errors; `audit` in project config is an error.
 - Ordinary `http://` proxy requests get the same host admission as
   `CONNECT`: holds, host-level denies, and alias denies.
 - An ordinary proxy request with an absolute `https://` URL gets a 400 and
@@ -1363,9 +1513,20 @@ in a `when` condition on `request.path`.
   through the same event types and `/decisions`; a client built without
   knowledge of `host-port` can still show and allow a held host port.
 - `http-request` flows carry their `http-connect` as `parent`.
-- Saves: two simultaneous saves (CLI and monitor) both end up in the session
-  file; a failing session-file write reports the partial save and a later
-  save repairs it; a restart enforces a saved rule and drops an unsaved one.
+- Saves: two simultaneous saves (CLI and monitor) both end up in the
+  session's proxy config; a failing append reports the partial save; a
+  restart enforces a saved rule and drops an unsaved one; a project config
+  edited by hand mid-session (for example a new credential grant) is not
+  loaded by a save or by a proxy restart.
+- Dial refusals: a tunnel to a name that resolves into a blocked range gets
+  a 403 on `CONNECT` and a blocked `http-connect` record; the same name
+  inside a terminated connection, or as an ordinary request, gets a 403 on
+  the request and a blocked `http-request` record with its parent; an
+  unreachable upstream is a 502, not a block.
+- A flow record's `rule` resolves to a rule in the snapshot that carries the
+  origin the embedder set.
+- Every item in "Behaviour carried over from `proxy/`" (section 11) has a
+  ported test.
 - An ordinary `http://` request produces an `http-connect` and an
   `http-request` (`mode: plain`) record; a path refusal on it is a refused
   `http-request` the monitor can act on.
@@ -1386,17 +1547,19 @@ in a `when` condition on `request.path`.
   default.
 - Only subscribers of the `holds` topic enable holds; a subscriber to other
   topics alone gets no holds and no "unwatched" endings when it leaves.
-- `ApplyConfig` replaces the policy atomically and publishes `policy` events;
-  `netproxy` works without its HTTP control API through the Go API alone.
+- `netproxy` works without its HTTP control API through the Go API alone.
 - A rule saved during a session is in the session's proxy config file, and a
   restarted proxy container enforces it; the file survives a reboot.
 - `host-port`: traffic to `host.vibepit:<port>` produces `host-port` flows,
-  is held when not allowed, and allowing it writes `allow-host-ports`; any
-  `allow-http`/`deny-http` entry matching `host.vibepit:<port>`, including a
-  wildcard deny such as `*.vibepit:3000` next to `allow-host-ports: [3000]`,
-  fails at startup with a migration hint.
+  is held when not allowed, and allowing it writes `allow-host-ports`; HTTP
+  rules never decide it: a broad allow such as `*.*:*` loads and doesn't
+  open a host port; an entry whose host pattern ends in `vibepit`, and a
+  `deny-http` entry that matches an allowed host port (such as `*.*:3000`
+  next to `allow-host-ports: [3000]`), fail at startup with the lines to
+  write instead.
 - Hosts without request rules or secrets are tunneled, not terminated.
-- Older-format configs produce identical decisions.
+- Older-format configs produce identical decisions, apart from the
+  `host.vibepit` change above.
 - Deny wins over every allow, including preset and secret rules.
 - Path normalization rejections; case rules for allows vs denies.
 - Body cap and `when` error behavior for allows vs denies.
@@ -1479,6 +1642,39 @@ Recorded because the protocol already fits it.
 - **To decide then.** Whether a request after a rejected grant gets a 403 or
   goes out without the credential (placeholder stripped, so public reads keep
   working).
+
+## Future: replacing the config at runtime
+
+Not built in this project: nothing in vibepit would call it. Recorded with
+its open questions, because an embedder that reloads its config will want
+it.
+
+- **Idea.** `ApplyConfig(cfg)` replaces the whole policy of a running
+  instance atomically and publishes the change on the event stream, so an
+  embedder can reload from any source without dropping connections. vibepit
+  could later watch the session's proxy config and call it.
+- **Until then** an embedder reloads by calling `Close` and starting a new
+  instance with the new config. That drops connections, holds, history, and
+  loaded secret values, which the no-durable-state principle already allows
+  for.
+- **Open questions.**
+  - Runtime decisions that are not in the new config (unsaved allows and
+    denies, session rejections): kept on top of it, or dropped?
+  - Loaded secret values: kept when a secret's name and service binding are
+    unchanged, dropped when the binding changed?
+  - Open holds: evaluated again, released when the new policy allows the
+    target and ended when it denies it?
+  - Open connections: presumably the rule from section 1 (close those whose
+    outcome became stricter).
+  - Scope: policy only, or also host rewrites, CIDR ranges, the resolver,
+    the hold timeout, audit mode, and inspectors?
+  - Events: one `policy` event per rule that differs, or one event that
+    carries the new policy?
+  - A request that is being authorized during the swap must see the old
+    policy or the new one, never a mix.
+  - For vibepit's file watching: the config is a single-file bind mount, and
+    a rename on the host leaves the container with the old file. The
+    directory would have to be mounted instead.
 
 ## Left to the builder
 
