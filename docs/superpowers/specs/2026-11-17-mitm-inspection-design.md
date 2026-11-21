@@ -40,8 +40,9 @@ TLS only where rules need it".
 - GraphQL matching beyond "query only" (operation names, fields), and MCP or
   other protocol-aware matching.
 - Automatic refresh of expired secrets (manual `vibepit secret refresh`
-  only; a future host daemon will take this over). Pushing values again
-  after a proxy restart in `run` mode is built; see section 5. Proxy-side OAuth/GitHub App refresh.
+  only; a future host daemon will take this over). Proxy-side OAuth/GitHub
+  App refresh. Pushing values again after a proxy restart in `run` mode is
+  built; see section 5.
 - `bool` preset inputs and conditional (`if:`) rules.
 - Presets defined in project config.
 - Per-rule or per-preset audit mode.
