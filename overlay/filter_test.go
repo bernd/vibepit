@@ -21,7 +21,7 @@ func TestFilter(t *testing.T) {
 		{name: "bare LF gets a CR", in: "a\nb\r\nc\n\nd", want: "a\r\nb\r\nc\r\n\r\nd"},
 		{name: "other C0 and DEL dropped", in: "a\x07b\x0ec\x0fd\x00e\x7ff", want: "abcdef"},
 		{name: "cursor movement", in: "\x1b[3;4H\x1b[2A\x1b[B\x1b[5C\x1b[D\x1b[7G\x1b[2d\x1b[E\x1b[F", keep: true},
-		{name: "erasing and editing", in: "\x1b[2J\x1b[K\x1b[3X\x1b[2@\x1b[P\x1b[L\x1b[2M", keep: true},
+		{name: "erasing and editing", in: "\x1b[1J\x1b[K\x1b[3X\x1b[2@\x1b[P\x1b[L\x1b[2M", keep: true},
 		{name: "SGR", in: "\x1b[1;38;2;1;2;3m\x1b[4:3m\x1b[0m", keep: true},
 		{name: "scroll region", in: "\x1b[2;10r\x1b[r", keep: true},
 		{name: "renderer sequences", in: "x\x1b[5b\x1b[10`\x1b[2a\x1b[3e\x1b[I\x1b[Z\x1b[2S\x1b[T\x1bM\x1bD\x1bE", keep: true},
@@ -36,7 +36,13 @@ func TestFilter(t *testing.T) {
 		{name: "cursor style dropped", in: "\x1b[5 q"},
 		{name: "APC dropped", in: "\x1b_Gf=24;AAAA\x1b\\"},
 		{name: "resets dropped", in: "\x1bc\x1b[!p"},
-		{name: "erase display keeps the scrollback", in: "\x1b[J\x1b[0J\x1b[1J\x1b[2J\x1b[3J\x1b[2;3Jx", want: "\x1b[J\x1b[0J\x1b[1J\x1b[2Jx"},
+		{name: "erase display keeps the scrollback", in: "\x1b[J\x1b[0J\x1b[1J\x1b[2J\x1b[3J\x1b[2;3Jx", want: "\x1b[J\x1b[0J\x1b[1J\x1b[1J\x1b[Jx"},
+		// iTerm2 moves the screen into its scrollback on ED 2, and on ED 0
+		// in the top left corner, also on the alternate screen.
+		{name: "erase display at home clears in place", in: "\x1b[H\x1b[2Ja\x1b[1;1H\x1b[J", want: "\x1b[H" + clearScreen + "a\x1b[1;1H" + clearScreen},
+		{name: "pen and cursor visibility keep the cursor home", in: "\x1b[;H\x1b[0m\x1b[?25l\x1b[2J", want: "\x1b[;H\x1b[0m\x1b[?25l" + clearScreen},
+		{name: "edits keep the cursor home", in: "\x1b[H\x1b[K\x1b[2X\x1b[@\x1b[P\x1b[L\x1b[M\x1b[S\x1b[T\x1b[1J\x1b[J", want: "\x1b[H\x1b[K\x1b[2X\x1b[@\x1b[P\x1b[L\x1b[M\x1b[S\x1b[T\x1b[1J" + clearScreen},
+		{name: "erase display elsewhere", in: "\x1b[3;4H\x1b[2J\x1b[J\x1b[Hx\x1b[J", want: "\x1b[3;4H\x1b[1J\x1b[J\x1b[J\x1b[Hx\x1b[J"},
 		{name: "8-bit controls and invalid UTF-8 dropped", in: "\x9b?1049h\x9b6n\x9d2;t\x07\x90q\x9c\xffx", want: "x"},
 		{name: "replacement character kept", in: "a\uFFFDb", keep: true},
 	}
@@ -64,6 +70,43 @@ func TestFilterJoinsSplitWrites(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.Equal(t, "ab\x1b[31mcd€e", out.String())
+}
+
+// TestFilterClearsLikeTheRenderer checks that a rewritten erase clears the
+// same cells and leaves the cursor in the same place.
+func TestFilterClearsLikeTheRenderer(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		inPlace bool // the cursor is known, so no erase may reach the scrollback
+	}{
+		{name: "home, erase display", in: "\x1b[H\x1b[2Jframe", inPlace: true},
+		{name: "home, erase below", in: "\x1b[44m\x1b[H\x1b[Jframe", inPlace: true},
+		{name: "home, edits, erase below", in: "\x1b[H\x1b[K\x1b[L\x1b[2S\x1b[Jframe", inPlace: true},
+		{name: "erase display mid-screen", in: "\x1b[3;4H\x1b[2Jframe"},
+		{name: "erase display with a pending wrap", in: "\x1b[5;1H" + strings.Repeat("w", 20) + "\x1b[2J"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const before = "\x1b[?1049hfull\r\nscreen"
+			got, want := newVT(t, 20, 5), newVT(t, 20, 5)
+			feed(t, got, before)
+			feed(t, want, before+tt.in)
+			var out bytes.Buffer
+			f := NewFilter(&out)
+			for i := range len(tt.in) {
+				_, err := f.Write([]byte{tt.in[i]})
+				require.NoError(t, err)
+			}
+			if tt.inPlace {
+				follow := newVT(t, 20, 5)
+				feed(t, follow, before)
+				assert.Empty(t, scrollbackSaves(t, follow, out.String()))
+			}
+			feed(t, got, out.String())
+			assertSameTerminal(t, want, got)
+		})
+	}
 }
 
 func TestFilterDropsAnOversizedUnfinishedSequence(t *testing.T) {

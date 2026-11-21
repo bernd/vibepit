@@ -236,3 +236,48 @@ func TestResetLeave(t *testing.T) {
 	assert.Equal(t, "\x1b[<u\x1b[?1047l\x1bc", string(resetLeave(entered{kitty: true, promptScreen: true})))
 	assert.Equal(t, "\x1bc", string(resetLeave(entered{})))
 }
+
+func TestClearScreenKeepsTheScrollback(t *testing.T) {
+	tests := []struct{ name, before string }{
+		{"primary screen", "line1\r\nline2\x1b[2;3H"},
+		{"alternate screen", "\x1b[?1049hfull\r\nscreen"},
+		{"cursor in the top left corner", "text\x1b[H"},
+		{"pending wrap on the last row", "\x1b[5;1H" + strings.Repeat("w", 20)},
+		{"background color", "text\x1b[44m"},
+		{"origin mode", "\x1b[2;4r\x1b[?6htext"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, want := newVT(t, 20, 5), newVT(t, 20, 5)
+			feed(t, got, tt.before+penReset)
+			feed(t, want, tt.before+penReset+"\x1b[2J\x1b[H")
+			assert.Empty(t, scrollbackSaves(t, got, clearScreen))
+			assertSameTerminal(t, want, got)
+		})
+	}
+}
+
+func TestLeaveKeepsTheScrollback(t *testing.T) {
+	tests := []struct{ name, before, detached string }{
+		{"primary screen", "shell$ ls", "\r\nfile"},
+		{"alternate screen", "\x1b[?1049hclaude", "\x1b[2;1Hthinking"},
+		{"app leaves the alternate screen", "shell$ \x1b[?1049hclaude", "\x1b[?1049lbye"},
+		{"app enters the alternate screen", "shell$ claude", "\x1b[?1049hclaude"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shadow, realTerm := newVT(t, 20, 6), newVT(t, 20, 6)
+			feed(t, shadow, tt.before)
+			feed(t, realTerm, tt.before)
+			c := mustCut(t, shadow)
+			e := enterFor(c)
+			assert.Empty(t, scrollbackSaves(t, realTerm, enterSeq(e)), "enter")
+			feed(t, realTerm, promptDraw)
+			feed(t, shadow, tt.detached)
+			out, _, err := snapshotLeave(shadow, c, e)
+			require.NoError(t, err)
+			assert.Empty(t, scrollbackSaves(t, realTerm, string(out)), "snapshot leave")
+			assertSameTerminal(t, shadow, realTerm)
+		})
+	}
+}
