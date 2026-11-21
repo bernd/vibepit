@@ -325,6 +325,20 @@ host admission.
   chain against deny rules and every address against the CIDR rules, and
   dials one of those addresses, keeping the hostname for TLS verification.
   This applies to tunnels and ordinary requests too.
+- **The alias check covers request-level denies, for tunnels.** A name in
+  the chain that a host-level deny matches refuses the dial, as today. A
+  blind tunnel leaves a second way around a deny: through a tunnel to an
+  allowed name B that aliases A, the client can ask A's server for A's pages
+  (its own TLS, `Host: A`), and a path deny on A never sees the request. So
+  a tunnel's dial is also refused when a name in the chain matches the host
+  and port of a request-level deny. The refusal names A and says how to
+  reach B: give B a request rule of its own, which terminates it.
+  Terminated connections and ordinary `http://` requests need no such
+  check. Their authority is pinned to the name the client connected to (for
+  an ordinary request the URL's host overrides the `Host` header), so A's
+  pages can't be asked for through B. The check never applies A's path
+  rules to B's requests, and it never terminates a host because of what DNS
+  returned: whether a host is terminated depends on the config alone.
 - **The one exception is the authorized `host.vibepit` rewrite.** When host
   admission rewrites `host.vibepit` on an allowed port to the configured
   gateway, the dialer connects to exactly that gateway address without the
@@ -470,6 +484,13 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
 - Path allows on a host that a host-level allow already covers are shadowed;
   vibepit warns at startup and the monitor shows it.
 - A deny entry with `secret` is a config error.
+- Request rules bind a name, not a server. A rule on A restricts the
+  requests the proxy sends to A. An alias of A is covered for tunnels
+  (section 1). Another allowed, tunneled name that only shares A's frontend
+  is not: inside a tunnel the proxy can't see which site the client asks
+  for. No credential can travel that way, since injection needs a
+  terminated connection. A host that needs path rules should still not have
+  a tunneled neighbour on the same frontend; the threat model says so.
 
 **Path matching.**
 - `*` matches one segment; `**` matches zero or more whole segments
@@ -1498,7 +1519,8 @@ update; the changelog and the update docs say so.
 - `threat-model.md` (currently states the proxy does not inspect encrypted
   traffic) and `security-model.md`: TLS termination, the MITM CA, secret
   handling, global grants applying to every project, project trust, token
-  scope as the primary control for writes,
+  scope as the primary control for writes, request rules binding a name and
+  not a server (section 2),
   and that OAuth tokens from agent logins still live in the sandbox's home
   volume until the host daemon exists.
 - Configuration reference for object entries, sets, presets with inputs,
@@ -1602,6 +1624,12 @@ in a `when` condition on `request.path`.
   restart enforces a saved rule and drops an unsaved one; a project config
   edited by hand mid-session (for example a new credential grant) is not
   loaded by a save or by a proxy restart.
+- Alias check for request-level denies: a tunnel to an allowed name that
+  aliases a name with a path deny is refused, with a reason that names it;
+  the same name with a request rule of its own is terminated and reachable;
+  a terminated connection is not refused for its chain; an ordinary request
+  whose `Host` header names another host goes upstream under the URL's
+  host.
 - Dial refusals: a tunnel to a name that resolves into a blocked range gets
   a 403 on `CONNECT` and a blocked `http-connect` record; the same name
   inside a terminated connection, or as an ordinary request, gets a 403 on
