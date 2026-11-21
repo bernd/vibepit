@@ -154,9 +154,9 @@ terminates TLS for the `host:port` if any of these holds:
   matches the host and port;
 - an allow entry with `secret` matches the host and port;
 - audit mode is on and the target is an allowed host on port 443, other than
-  `host.vibepit`. Other ports may carry non-HTTP protocols that termination
-  would break, so in audit mode they stay tunneled and are logged at the
-  connection level.
+  `host.vibepit` and the hosts on the audit exclusion list (section 7).
+  Other ports may carry non-HTTP protocols that termination would break, so
+  in audit mode they stay tunneled and are logged at the connection level.
 
 Otherwise it tunnels as today. Rule hosts with pinned clients are
 unsupported and documented as such. Request rules or secrets on
@@ -1175,6 +1175,8 @@ slow subscriber instead of blocking; keepalive comments.
   produce object entries.
 - New commands: `vibepit secret refresh`; `vibepit trust` (and
   `--revoke`), run in the project directory.
+- New flags on `run`/`up`: `--audit` and the audit exclusion list
+  (section 7).
 - Control API: `POST /decisions` for allow, deny, and reject of a target of
   any kind; a rules endpoint for object-form rules (kind plus rule); a new
   endpoint receives secret values. `/events` is the versioned state stream
@@ -1501,6 +1503,12 @@ update; the changelog and the update docs say so.
   volume until the host daemon exists.
 - Configuration reference for object entries, sets, presets with inputs,
   secrets, audit mode.
+- Changelog and upgrade notes, collecting the breaks this design announces:
+  end running sessions before updating (section 11); every project config
+  asks for approval once (section 5); `host.vibepit` entries in HTTP rules
+  are startup errors and wildcard allows no longer open host ports
+  (section 8); sandbox tools verify with the proxy image's roots
+  (section 1).
 
 ### 13. Behavior the tests must pin
 
