@@ -963,7 +963,8 @@ credential grants.
   able to move it. It can write the project's `.git/config`, and
   `git rev-parse --show-toplevel` obeys a `core.worktree` set there: the
   lookup took a parent directory as the root and the next session mounted
-  it read-write. (Fixed in today's code alongside this design.) The root is
+  it read-write. (Fixed in today's code on its own, ahead of this design.)
+  The root is
   the nearest directory, from the start directory upwards, that holds a
   project config or a `.git` entry. No git command runs and no git
   configuration is read. The project config counts because the sandbox
