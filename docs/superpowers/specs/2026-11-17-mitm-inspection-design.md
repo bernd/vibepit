@@ -192,20 +192,55 @@ host, gets a random serial, and is valid for a short period well under
 browser and OS limits (Chrome rejects leaves valid longer than 398 days, as
 goproxy found in #432).
 
-**Sandbox trust.** The CA certificate is mounted read-only into the sandbox.
-The entrypoint concatenates the system bundle and the CA into a file under
-`/tmp` and the container env points these at it: `SSL_CERT_FILE`,
-`REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`,
-`CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE`, `DENO_CERT`; `NODE_EXTRA_CA_CERTS`
-points at the CA alone. For Java, a truststore setting replaces the JDK's
-default store, so it must contain the public roots too: when a JDK is found,
-the sandbox copies the JDK's `cacerts` into `/tmp`, imports the CA with
-`keytool`, and only then adds the `-Djavax.net.ssl.trustStore` flags to
-`JAVA_TOOL_OPTIONS` and the Maven settings. Without a JDK the flags are not
-set, because a truststore path that doesn't exist would break every Java TLS
-connection. The CA is installed
-in every session (rules can arrive at runtime). The CA never goes into the
-home volume.
+**Sandbox trust.** The CLI builds the sandbox's trust files once, at session
+start, and mounts them read-only at fixed paths. Nothing is generated inside
+the sandbox. After the proxy container starts, the CLI copies the proxy
+image's CA bundle out of it (the roots the proxy itself verifies upstream
+certificates with) and writes into the session directory:
+
+- **A PEM bundle** of those roots plus the session CA. Static container env
+  points these at it: `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`,
+  `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO`,
+  `AWS_CA_BUNDLE`, `DENO_CERT`. `NODE_EXTRA_CA_CERTS` points at the CA
+  alone, mounted as its own file.
+- **A Java truststore** (JKS) with the same certificates. A truststore
+  setting replaces the JDK's default store, so it must hold the public roots
+  too. `-Djavax.net.ssl.trustStore=<path>` and
+  `-Djavax.net.ssl.trustStoreType=JKS` go into the static
+  `JAVA_TOOL_OPTIONS`, next to the proxy flags vibepit sets there today.
+  Every JVM reads JKS, and the format is simple enough to write with the Go
+  standard library, so no JDK, `keytool`, or new dependency is involved. The
+  JVM reads the file without a password.
+
+Why on the host and not in the entrypoint:
+
+- Env and mounts are fixed when the container is created, so every way into
+  the sandbox gets them: the first shell, a second `run` through an exec,
+  daemon-mode shells, and `vibepit exec`. Env set by the entrypoint would
+  reach only the shell it starts.
+- The files always exist. The Java flags need no "is a JDK installed"
+  condition, and a JDK installed during the session (the base image has
+  none) works from its first start.
+- Maven needs nothing of its own: it runs in the JVM.
+
+What follows from it:
+
+- Tools in the sandbox verify with the proxy image's roots, not with the
+  sandbox image's or a JDK's own `cacerts`. Roots added to a custom sandbox
+  image, or imported into a JDK's store, no longer count for these tools.
+  The public roots are equivalent: Debian builds OpenJDK's `cacerts` from
+  the system roots the same way.
+- The roots are a snapshot from session start.
+- The Java flags reach the JVMs that read `JAVA_TOOL_OPTIONS`, as the proxy
+  flags do today. GraalVM native images are not among them.
+- Spike result (throwaway, not kept in the repo): a JKS file written by Go
+  from a system bundle plus a P-256 CA loaded in JDK 21 with all its
+  entries, with and without an explicit store type; a leaf signed by that CA
+  was accepted through `JAVA_TOOL_OPTIONS`; and a real HTTPS request
+  succeeded. Java 8 was not tried.
+
+The CA is installed in every session (rules can arrive at runtime). The CA
+never goes into the home volume.
 
 **Request forms.** The new proxy accepts exactly two:
 
@@ -1604,7 +1639,12 @@ in a `when` condition on `request.path`.
 - Injection only within the service's host and path binding; placeholder
   stripping and misuse blocking.
 - HTTP/2 and WebSocket requests through a terminated connection.
-- Sandbox trust env and bundle generation (BATS).
+- Sandbox trust: the PEM bundle and the Java truststore hold the proxy's
+  roots plus the session CA; the truststore loads in the oldest supported
+  JDK and a current one, with and without an explicit store type, and a
+  leaf signed by the session CA is accepted; the env and the mounts are
+  there in a first shell, an exec'd shell, a daemon-mode shell, and
+  `vibepit exec`.
 - `netproxy` imports no vibepit packages (its own `go.mod` enforces it).
 
 ## Future: OAuth with the host daemon
@@ -1717,6 +1757,8 @@ it.
   HTTP, REST, and LFS docs).
 - Leaf certificate cache size and lifetime; CA lifetime matching the existing
   session credentials.
+- Mount paths of the sandbox's trust files, and which JDK versions the
+  truststore test covers.
 - Where the trust record is stored (per `config/paths.go`) and the exact
   canonical form that is hashed.
 - The draft-rules output mechanism (view plus copy, or write to a file).
