@@ -198,11 +198,19 @@ the sandbox. After the proxy container starts, the CLI copies the proxy
 image's CA bundle out of it (the roots the proxy itself verifies upstream
 certificates with) and writes into the session directory:
 
-- **A PEM bundle** of those roots plus the session CA. Static container env
-  points these at it: `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`,
-  `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO`,
-  `AWS_CA_BUNDLE`, `DENO_CERT`. `NODE_EXTRA_CA_CERTS` points at the CA
-  alone, mounted as its own file.
+- **A PEM bundle** of those roots plus the session CA, mounted over the
+  sandbox's system bundle (`/etc/ssl/certs/ca-certificates.crt`; the image
+  is Ubuntu). A bind mount works on the read-only root filesystem. Tools
+  that read the system store (the system's OpenSSL and GnuTLS, and curl,
+  git, Go, and Python's `ssl` on top of them) then trust the session CA
+  with no setting at all, including tools that ignore the variables below.
+  Tools that bring their own roots still have to be pointed at the file:
+  bundled root lists (certifi, Node, Deno) and tools installed with
+  Homebrew, whose OpenSSL reads Homebrew's own bundle. So static container
+  env still sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`,
+  `GIT_SSL_CAINFO`, `PIP_CERT`, `CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE`, and
+  `DENO_CERT`, all to that same path. `NODE_EXTRA_CA_CERTS` points at the
+  CA alone, mounted as its own file.
 - **A Java truststore** (JKS) with the same certificates. A truststore
   setting replaces the JDK's default store, so it must hold the public roots
   too. `-Djavax.net.ssl.trustStore=<path>` and
@@ -226,8 +234,10 @@ Why on the host and not in the entrypoint:
 What follows from it:
 
 - Tools in the sandbox verify with the proxy image's roots, not with the
-  sandbox image's or a JDK's own `cacerts`. Roots added to a custom sandbox
-  image, or imported into a JDK's store, no longer count for these tools.
+  sandbox image's or a JDK's own `cacerts`. A root added to a custom sandbox
+  image is no longer in the bundle file, and one imported into a JDK's store
+  no longer counts. OpenSSL's hashed directory next to the bundle is left as
+  it is, so tools that also search it still find the image's roots there.
   The public roots are equivalent: Debian builds OpenJDK's `cacerts` from
   the system roots the same way.
 - The roots are a snapshot from session start.
@@ -1644,7 +1654,9 @@ in a `when` condition on `request.path`.
   JDK and a current one, with and without an explicit store type, and a
   leaf signed by the session CA is accepted; the env and the mounts are
   there in a first shell, an exec'd shell, a daemon-mode shell, and
-  `vibepit exec`.
+  `vibepit exec`; with the variables unset, the system's `curl` still
+  trusts a terminated host, because the bundle is mounted over the system
+  one.
 - `netproxy` imports no vibepit packages (its own `go.mod` enforces it).
 
 ## Future: OAuth with the host daemon
