@@ -30,9 +30,10 @@ TLS only where rules need it".
   observed requests.
 - Named sets and parameterized presets so a list of repos is written once,
   including built-in `github-read` and `github-write` presets.
-- Existing configs keep their decisions, with two announced breaks:
-  `host.vibepit` entries in HTTP rules (section 8) and a one-time approval of
-  each project config (section 5).
+- Existing configs keep their decisions, with three announced breaks:
+  `host.vibepit` entries in HTTP rules (section 8), a one-time approval of
+  each project config (section 5), and tunnels whose TLS server name is not
+  the host they were opened for (section 1).
 
 ## Non-goals (first version)
 
@@ -284,13 +285,44 @@ one place:
 
 **Structure.** `http.Server` accepts proxy requests. For `CONNECT` it runs
 host admission, then hijacks the connection and answers with the client's
-HTTP version. A tunnel is a copy loop with half-close. A terminated
+HTTP version. A tunnel is a copy loop with half-close, after the server-name
+check (below). A terminated
 connection is handed to `tls.Server` (leaf from the session CA, ALPN `h2` and
 `http/1.1`), then served by a one-connection `http.Server` whose single
 handler does request authorization for HTTP/1.1 and HTTP/2 alike, and
 forwards with `httputil.ReverseProxy` over a `http.Transport` that uses the
 pinned dialer. Ordinary `http://` requests use the same handler path after
 host admission.
+
+**Inside a tunnel.** The proxy relays a tunnel's bytes without reading them,
+with one exception: the client's first bytes.
+- **The TLS server name must be the `CONNECT` host.** If the client's first
+  bytes are a TLS ClientHello, its server name (SNI) must equal the host the
+  tunnel was opened for. The ClientHello travels in clear, so this needs no
+  termination. Without the check, one allowed host on a shared frontend
+  opens every site on that frontend: most CDNs serve all their customers
+  from the same addresses and pick the site by server name, so a client can
+  connect to the allowed name and ask for another one in its handshake. That
+  gets around path rules on a neighbour, and around the host allowlist
+  itself, which is how today's proxy behaves.
+- A mismatch closes the tunnel before any client byte reaches the upstream
+  and writes a flow record on the `http-connect` with its own code, naming
+  both hosts. A ClientHello without a server name is refused the same way.
+- IP-literal targets are not checked: allowing an address allows whatever it
+  serves.
+- First bytes that are not a TLS handshake pass as today, since a tunnel
+  also carries other protocols (SSH over `CONNECT`, host ports). A TLS
+  server expects the ClientHello first, so checking the start is enough to
+  cover HTTPS. Bytes from the upstream are relayed from the beginning, so
+  protocols where the server speaks first keep working; only the client's
+  first bytes are held until they are classified.
+- What begins like a TLS handshake but can't be read within a size and time
+  limit (a ClientHello may span several records) is refused, so splitting it
+  up is no way around the check.
+- Encrypted ClientHello shows the provider's name, not the site's, so it
+  doesn't match and is refused; such a tunnel could lead to any site of that
+  provider. A client behind an HTTP proxy normally leaves name resolution to
+  the proxy and never gets the ECH configuration, so this should be rare.
 
 **Inside a terminated connection.**
 - The request's authority must equal the `CONNECT` target (default port
@@ -485,12 +517,16 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   vibepit warns at startup and the monitor shows it.
 - A deny entry with `secret` is a config error.
 - Request rules bind a name, not a server. A rule on A restricts the
-  requests the proxy sends to A. An alias of A is covered for tunnels
-  (section 1). Another allowed, tunneled name that only shares A's frontend
-  is not: inside a tunnel the proxy can't see which site the client asks
-  for. No credential can travel that way, since injection needs a
+  requests the proxy sends to A. Two ways to A's server through a tunnel to
+  another allowed name are closed in section 1: an alias of A (the alias
+  check) and a handshake that names A (the server-name check). One remains.
+  A client can tunnel to an allowed name X honestly and then ask for A in
+  the encrypted request. Servers accept that when X's certificate also
+  covers A, which is how HTTP/2 connection reuse works, and a tunnel can't
+  see it. No credential can travel that way, since injection needs a
   terminated connection. A host that needs path rules should still not have
-  a tunneled neighbour on the same frontend; the threat model says so.
+  a tunneled neighbour under the same certificate; the built-in presets
+  follow that (section 4), and the threat model says so.
 
 **Path matching.**
 - `*` matches one segment; `**` matches zero or more whole segments
@@ -613,6 +649,7 @@ not in project config):
       paths: ["/{repos}.git/info/refs", "/{repos}/info/refs"]
       credentials: true
     - host: avatars.githubusercontent.com:443
+      methods: read-only
 ```
 
 - Input type: `list` only (substituted into paths like a set; accepts an
@@ -626,8 +663,15 @@ not in project config):
   `credentials: true`. If the secret's service doesn't cover a credential
   rule's host and paths, that's a startup error.
 - `replaces` removes the named preset wherever it appears, including inside
-  `default`. A replacing preset must include the whole-host entries it does
+  `default`. A replacing preset must include entries for the hosts it does
   not narrow.
+- **A narrowing preset leaves no host of its provider tunneled.** A tunneled
+  host under the same certificate as a restricted one would let a client ask
+  for the restricted host inside the tunnel (section 2). So every host in a
+  preset that restricts a provider by path gets a request rule and is
+  terminated: a real restriction where one fits (`methods: read-only` for
+  `avatars.githubusercontent.com` above), otherwise `paths: ["/**"]`. The
+  docs give the same advice for user-defined presets.
 - Existing `domains:` and `includes:` keep working.
 - The GitHub presets assume git over HTTPS. Outbound SSH (for example
   `github.com:22` through a `CONNECT`-based `ProxyCommand`) can't be
@@ -921,8 +965,8 @@ request path; the placeholder check is the only inspector.
   finding is not enough, since the request entry itself carries those
   fields.
 - New block codes for request-rule refusals, host mismatch, placeholder
-  misuse, missing secret values, failed client handshakes, and connections
-  closed by a policy change. `AllowFixes` is false for all except a
+  misuse, missing secret values, failed client handshakes, server-name
+  mismatches in tunnels, and connections closed by a policy change. `AllowFixes` is false for all except a
   request-level "not allowlisted".
 - `http-request` flows go into their own ring buffer (10k), so floods don't
   push out host-level blocks. `/events` carries both.
@@ -1519,8 +1563,9 @@ update; the changelog and the update docs say so.
 - `threat-model.md` (currently states the proxy does not inspect encrypted
   traffic) and `security-model.md`: TLS termination, the MITM CA, secret
   handling, global grants applying to every project, project trust, token
-  scope as the primary control for writes, request rules binding a name and
-  not a server (section 2),
+  scope as the primary control for writes, the server-name check on tunnels
+  and what it leaves open, request rules binding a name and not a server
+  (section 2),
   and that OAuth tokens from agent logins still live in the sandbox's home
   volume until the host daemon exists.
 - Configuration reference for object entries, sets, presets with inputs,
@@ -1530,7 +1575,8 @@ update; the changelog and the update docs say so.
   asks for approval once (section 5); `host.vibepit` entries in HTTP rules
   are startup errors and wildcard allows no longer open host ports
   (section 8); sandbox tools verify with the proxy image's roots
-  (section 1).
+  (section 1); a tunnel whose TLS server name differs from its `CONNECT`
+  host is closed (section 1).
 
 ### 13. Behavior the tests must pin
 
@@ -1624,6 +1670,17 @@ in a `when` condition on `request.path`.
   restart enforces a saved rule and drops an unsaved one; a project config
   edited by hand mid-session (for example a new credential grant) is not
   loaded by a save or by a proxy restart.
+- Tunnel server name: a tunnel whose ClientHello names another host is
+  closed with nothing sent upstream and a flow record naming both hosts; a
+  matching name passes, also when the ClientHello arrives in the same write
+  as `CONNECT` or split across several records; a ClientHello without a
+  server name is refused; an IP-literal target is not checked; a tunnel
+  whose first bytes are not TLS (SSH), and one where the server speaks
+  first, work as today; a handshake start that can't be read within the
+  limits is refused. Fuzz the ClientHello reading.
+- Every host in the built-in narrowing presets (`github-read`,
+  `github-write`, and the GraphQL presets) is terminated; none is left as a
+  whole-host entry.
 - Alias check for request-level denies: a tunnel to an allowed name that
   aliases a name with a path deny is refused, with a reason that names it;
   the same name with a request rule of its own is terminated and reachable;
@@ -1807,6 +1864,8 @@ it.
   session credentials.
 - Mount paths of the sandbox's trust files, and which JDK versions the
   truststore test covers.
+- How a tunnel's ClientHello is read (parsed by hand, or through
+  `crypto/tls` on a read-only connection) and its size and time limits.
 - Where the trust record is stored (per `config/paths.go`) and the exact
   canonical form that is hashed.
 - The draft-rules output mechanism (view plus copy, or write to a file).
