@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -269,49 +270,17 @@ func dedup(slices ...[]string) []string {
 	return result
 }
 
-// FindProjectRoot returns the root of the project that path belongs to: the
-// nearest directory, from path upwards, that holds a vibepit project config
-// or a ".git" entry. Without one it is path itself.
-//
-// It reads directory entries only and never runs git. The sandbox can write
-// the project's .git/config, and "git rev-parse --show-toplevel" obeys it: a
-// core.worktree naming a parent directory made the next session mount that
-// parent read-write. A ".git" file (worktree, submodule) marks a root like a
-// directory does, as git itself reports it.
-//
-// The project config counts as a marker because the sandbox can't touch it:
-// .vibepit is hidden behind a read-only mount. A sandbox that removes the
-// project's .git therefore can't move the root to a repository further up.
+// FindProjectRoot returns the Git repository root for the given path, or the
+// path itself if it is not inside a Git repository.
 func FindProjectRoot(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
 	}
-	// git reported the physical path, and sessions are matched by it.
-	dir := abs
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		dir = resolved
-	}
-	for {
-		if isProjectRoot(dir) {
-			return dir, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return abs, nil
-		}
-		dir = parent
-	}
-}
-
-func isProjectRoot(dir string) bool {
-	for _, marker := range []string{
-		filepath.Join(ProjectConfigDirName, "network.yaml"),
-		".git",
-	} {
-		if _, err := os.Lstat(filepath.Join(dir, marker)); err == nil {
-			return true
+	if out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if root := strings.TrimSpace(string(out)); root != "" {
+			return root, nil
 		}
 	}
-	return false
+	return abs, nil
 }

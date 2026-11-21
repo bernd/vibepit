@@ -56,10 +56,9 @@ $EDITOR "$(vibepit paths global-config)"
 
 ## Project config
 
-`.vibepit/network.yaml` lives in the project root: the nearest directory,
-from the project directory upwards, that already holds this file or a `.git`
-entry, or the directory itself when there is none. Inside a Git repository
-that is the repository root. The preset selector writes it on the first run, and
+`.vibepit/network.yaml` lives in the project root, which is the root of the
+Git repository that contains the project directory, or the directory itself
+outside a repository. The preset selector writes it on the first run, and
 `allow-http`, `allow-dns`, `deny-http`, and `deny-dns` add entries to it.
 [Configure Network Presets](../how-to/configure-presets.md) covers the format.
 
