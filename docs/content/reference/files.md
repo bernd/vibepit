@@ -11,6 +11,7 @@ resolves on your machine, run [`vibepit paths`](cli.md#paths):
 $ vibepit paths
 Global config   /home/user/.config/vibepit/config.yaml
 Project config  /home/user/my-project/.vibepit/network.yaml
+Projects        /home/user/.local/state/vibepit/projects
 Sessions        /home/user/.local/state/vibepit/sessions
 Cache           /home/user/.cache/vibepit (not found)
 ```
@@ -25,6 +26,7 @@ means Vibepit can't read the path, and commands that need it fail.
 |------|------|----------|
 | `global-config` | `$XDG_CONFIG_HOME/vibepit/config.yaml` | Settings for every project |
 | `project-config` | `<project root>/.vibepit/network.yaml` | Network settings for one project |
+| `projects` | `$XDG_STATE_HOME/vibepit/projects/` | Project records for the project roots Vibepit started sessions in |
 | `sessions` | `$XDG_STATE_HOME/vibepit/sessions/` | Credentials for running sessions |
 | `cache` | `$XDG_CACHE_HOME/vibepit/` | Data Vibepit can recreate |
 
@@ -56,14 +58,38 @@ $EDITOR "$(vibepit paths global-config)"
 
 ## Project config
 
-`.vibepit/network.yaml` lives in the project root, which is the root of the
-Git repository that contains the project directory, or the directory itself
-outside a repository. The preset selector writes it on the first run, and
-`allow-http`, `allow-dns`, `deny-http`, and `deny-dns` add entries to it.
+`.vibepit/network.yaml` lives in the project root. The project root is the
+nearest directory, from the project directory upwards, that holds a `.git`
+entry or has a [project record](#project-records). If there is none, or
+another user owns the `.git` entry, the project root is the project directory
+itself. Inside a Git repository the project root is the repository root,
+unless a directory between the two has a project record. The preset selector
+writes the file on the first run, and `allow-http`, `allow-dns`, `deny-http`,
+and `deny-dns` add entries to it.
 [Configure Network Presets](../how-to/configure-presets.md) covers the format.
 
-Inside the sandbox, Vibepit mounts an empty read-only directory over
-`.vibepit`, so code in the sandbox can't read or change the project config.
+Inside the sandbox, Vibepit mounts an empty read-only directory over the
+project root's `.vibepit`, so code in the sandbox can't read or change the
+project config. Code in the sandbox can still write a `.vibepit/network.yaml`
+in a subdirectory. When a project root has no project record yet but already
+has a project config, `run` and `up` show the file and ask before they use
+it.
+
+## Project records
+
+`$XDG_STATE_HOME/vibepit/projects/` holds one project record for each project
+root that `run` or `up` started a session in. `run` and `up` write the
+project record after you pick presets in the preset selector or confirm an
+existing project config. Each project record is a file named after the
+SHA-256 hash of the project root's path, and the file contains that path.
+
+The `projects` directory is outside every project, so code in the sandbox
+can't change it. A project root with a project record stays the project root
+after code in the sandbox deletes its `.git`. The next session then can't
+mount a repository further up.
+
+You can delete a project record. The next session in that project root then
+shows the project config and asks again before it uses it.
 
 ## Session credentials
 

@@ -32,3 +32,26 @@ func TestSanitizeText(t *testing.T) {
 		})
 	}
 }
+
+func TestEscapeText(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text", "presets:\n\t- default\n", "presets:\n\t- default\n"},
+		{"escape sequence", "a\x1b[2Kb", `a\x1b[2Kb`},
+		{"carriage return", "allow\rhidden", `allow\x0dhidden`},
+		{"C1 control", "a\u009bb", `a\x9bb`},
+		{"bidi override", "a\u202eb", `a\u202eb`},
+		{"zero width space", "a\u200bb", `a\u200bb`},
+		{"line separator", "a\u2028b", `a\u2028b`},
+		{"invalid utf-8", "a\xffb", `a\xffb`},
+		{"other unicode stays", "Gr\u00fc\u00dfe", "Gr\u00fc\u00dfe"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, EscapeText(tt.in))
+		})
+	}
+}

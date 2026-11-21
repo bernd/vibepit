@@ -44,6 +44,7 @@ func TestPathEntries(t *testing.T) {
 	assert.Equal(t, map[string]string{
 		"global-config":  filepath.Join(root, "config", "vibepit", "config.yaml"),
 		"project-config": filepath.Join(root, "project", ".vibepit", "network.yaml"),
+		"projects":       filepath.Join(root, "state", "vibepit", "projects"),
 		"sessions":       filepath.Join(root, "state", "vibepit", "sessions"),
 		"cache":          filepath.Join(root, "cache", "vibepit"),
 	}, got)

@@ -4,12 +4,13 @@ import (
 	"cmp"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/bernd/vibepit/proxy"
 	units "github.com/docker/go-units"
@@ -111,6 +112,22 @@ func Load(globalPath, projectPath string) (*Config, error) {
 	return cfg, nil
 }
 
+// LoadWithProjectData is Load with the project config given as its
+// contents, such as the bytes the user just reviewed, so a file changed
+// since can't be loaded in their place.
+func LoadWithProjectData(globalPath string, projectData []byte) (*Config, error) {
+	cfg := &Config{}
+
+	if err := loadFile(globalPath, &cfg.Global); err != nil {
+		return nil, err
+	}
+	if err := loadData(projectData, &cfg.Project); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
 // LoadGlobal loads only the global config, for settings no project can
 // change. A missing file gives the defaults.
 func LoadGlobal(path string) (*GlobalConfig, error) {
@@ -128,11 +145,28 @@ func loadFile(path string, target any) error {
 		return nil
 	}
 
+	return loadFrom(file.Provider(path), target)
+}
+
+func loadData(data []byte, target any) error {
+	return loadFrom(dataProvider(data), target)
+}
+
+func loadFrom(p koanf.Provider, target any) error {
 	k := koanf.New(".")
-	if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+	if err := k.Load(p, yaml.Parser()); err != nil {
 		return err
 	}
 	return k.Unmarshal("", target)
+}
+
+// dataProvider is a koanf.Provider for config contents already in memory.
+type dataProvider []byte
+
+func (d dataProvider) ReadBytes() ([]byte, error) { return d, nil }
+
+func (d dataProvider) Read() (map[string]any, error) {
+	return nil, errors.New("dataProvider needs a parser")
 }
 
 // Merge combines global config, project config, CLI flags, and expanded presets
@@ -270,17 +304,78 @@ func dedup(slices ...[]string) []string {
 	return result
 }
 
-// FindProjectRoot returns the Git repository root for the given path, or the
-// path itself if it is not inside a Git repository.
+// FindProjectRoot returns the root of the project that path belongs to: the
+// nearest directory, from path upwards, that is a recorded project root (see
+// RecordProject) or holds a ".git" entry the current user owns. Without one
+// it is path itself. Every result that exists has its symlinks resolved; a
+// path that doesn't exist comes back as given.
+//
+// Nothing the sandbox can write decides the root alone: it can write
+// anywhere in the project but the root's .vibepit, including .git/config,
+// whose core.worktree "git rev-parse --show-toplevel" would obey. So this
+// reads directory entries only, and the records live in the state directory.
 func FindProjectRoot(path string) (string, error) {
+	return findProjectRoot(path, defaultRecords())
+}
+
+func findProjectRoot(path string, records projectRecords) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
 	}
-	if out, err := exec.Command("git", "-C", abs, "rev-parse", "--show-toplevel").Output(); err == nil {
-		if root := strings.TrimSpace(string(out)); root != "" {
-			return root, nil
-		}
+	// Sessions are matched by the physical path, so every result is
+	// physical whether or not a marker exists yet: the first run records
+	// the root and must not move the session.
+	start, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// A missing path is not a project, and the caller reports it.
+		// Walking up would silently pick a parent project instead.
+		return abs, nil
 	}
-	return abs, nil
+	uid := os.Geteuid()
+	for dir := start; ; {
+		recorded, err := records.has(dir)
+		if err != nil {
+			return "", err
+		}
+		// A recorded root stays the root after the sandbox removes its
+		// .git, so the walk can't reach a repository further up.
+		if recorded {
+			return dir, nil
+		}
+		switch gitMarker(dir, uid) {
+		case markerOwned:
+			return dir, nil
+		case markerForeign:
+			// As git's safe.directory check: a .git planted in a shared
+			// parent such as /tmp must not mount that parent.
+			return start, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return start, nil
+		}
+		dir = parent
+	}
+}
+
+type markerKind int
+
+const (
+	markerNone markerKind = iota
+	markerOwned
+	markerForeign
+)
+
+// gitMarker reports whether dir holds a ".git" entry and whether uid owns
+// it.
+func gitMarker(dir string, uid int) markerKind {
+	fi, err := os.Lstat(filepath.Join(dir, ".git"))
+	if err != nil {
+		return markerNone
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != uid {
+		return markerForeign
+	}
+	return markerOwned
 }
