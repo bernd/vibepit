@@ -39,8 +39,9 @@ TLS only where rules need it".
 - Request-level holds (path refusals are immediate 403s).
 - GraphQL matching beyond "query only" (operation names, fields), and MCP or
   other protocol-aware matching.
-- Automatic secret refresh (manual `vibepit secret refresh` only; a future
-  host daemon will take this over). Proxy-side OAuth/GitHub App refresh.
+- Automatic refresh of expired secrets (manual `vibepit secret refresh`
+  only; a future host daemon will take this over). Pushing values again
+  after a proxy restart in `run` mode is built; see section 5. Proxy-side OAuth/GitHub App refresh.
 - `bool` preset inputs and conditional (`if:`) rules.
 - Presets defined in project config.
 - Per-rule or per-preset audit mode.
@@ -656,14 +657,36 @@ Sources: `env` and `command`.
   the proxy through a new mTLS control API endpoint. Values are held in proxy
   memory only, never in `ProxyConfig`, container env, or any response.
 - `vibepit secret refresh` resolves and pushes again (for expired tokens).
-- After a proxy restart (in `run` mode, which restarts automatically) no
-  values are loaded. Requests that need a secret get a 403: "secret `github`
-  not loaded, run `vibepit secret refresh`".
+- After a proxy restart no values are loaded. Requests that need a secret
+  get a 403: "secret `github` not loaded, run `vibepit secret refresh`".
+  Everything that needs only the placeholder keeps working (below).
+- In `run` mode, the only mode where the proxy restarts on its own, the
+  attached CLI brings the values back. When the session has secrets it
+  follows the stream's `status` topic, which doesn't enable holds; when it
+  sees a new instance ID it resolves the sources again and pushes.
+  `vibepit secret refresh` stays as the fallback: if the push fails, the 403
+  above and "secrets missing" in the status section say so.
 
 **Placeholders.** One random placeholder per secret per session (for example
 `vibepit-secret-github-<random>`), stable for the session, set in the sandbox
 env for each name in the service's `env`. It exists so tools like `gh` run;
 it carries no value.
+- **The CLI generates the placeholders at session start and writes them into
+  the session's proxy config,** next to the secret names and service
+  definitions. A placeholder is not a secret (the sandbox env already has
+  it), so this stores no secret value at rest. Placeholders never travel
+  with the values.
+- **The proxy knows them from its first request after any restart.**
+  Stripping the service's own header, the placeholder inspector, and
+  redaction in flow records, spans, and logs work without loaded values;
+  only injection waits for them. If placeholders arrived with the values, a
+  restarted proxy would forward the placeholder upstream as a credential (a
+  401 where an anonymous request used to succeed), miss placeholders sent
+  elsewhere, and write them into flow records.
+- **One literal match finds a placeholder.** It uses only URL-unreserved
+  characters (letters, digits, `-`, `.`, `_`, `~`), so it looks the same in
+  a header, a path, and a query; only Basic auth needs decoding first.
+  Secret names are limited to the same characters.
 
 **Injection.** For a request inside a terminated `CONNECT` connection that
 passes request authorization (the only request form that can carry a
@@ -1144,7 +1167,8 @@ the leaf certificate cache; the event sequence and instance ID. None of it
 survives a restart, which resets everything to the config it is started
 with: connections and holds break (clients retry), counters and history are
 observability, decisions that were never saved are meant to be temporary,
-secrets come back through `secret refresh` (later the daemon), and clients
+secrets come back through the attached `run` or `secret refresh` (later the
+daemon), and clients
 see the new instance ID and take a fresh snapshot. What must last belongs to
 the embedder. That makes `netproxy` disposable: it can be thrown away and
 started again with a new config at any time, which is what makes it
@@ -1474,6 +1498,12 @@ in a `when` condition on `request.path`.
   address is blocked.
 - A placeholder used as a query parameter name doesn't appear in the ring
   buffer entry or the `/events` output.
+- After a proxy restart, before any values are pushed: a request that needs
+  a secret gets the "not loaded" 403; a public request that carries the
+  placeholder in the service's header goes upstream without it; a
+  placeholder sent anywhere else is still blocked; no flow record contains
+  a placeholder. In `run` mode the attached CLI pushes the values again
+  after the restart, and injection works without `secret refresh`.
 - No redirect is followed by the proxy.
 - Every item in "Edge cases from goproxy's history" (section 1) has a test:
   early client bytes, `CONNECT` reply version, `100-continue`, WebSockets
