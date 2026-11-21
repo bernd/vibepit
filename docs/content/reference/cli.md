@@ -48,8 +48,10 @@ vibepit run [flags] [project-path]
 ### Behavior
 
 - If `project-path` is omitted, `vibepit` uses the current working directory.
-- If the directory is inside a Git repository, `vibepit` resolves to the
-  repository root and uses that as the project directory.
+- `vibepit` uses the nearest directory, from there upwards, that holds a
+  `.vibepit/network.yaml` or a `.git` entry as the project directory. Inside
+  a Git repository that is the repository root. It does not run `git` or
+  read the repository's configuration to find it.
 - `vibepit` refuses to run if the resolved project directory is your home
   directory.
 - If a session is already running for the same project directory, `vibepit`
@@ -728,8 +730,7 @@ vibepit paths [flags] [name]
 - With a name, prints only that path with no label or color, so scripts can
   use it.
 - Resolves the project config for `--project`, or the current working
-  directory, the same way [`run`](#run) finds the project root: the root of
-  the Git repository that contains the directory, or the directory itself.
+  directory, the same way [`run`](#run) finds the project root.
 - [Files and Directories](files.md) describes each path and its defaults.
 
 ### Examples
