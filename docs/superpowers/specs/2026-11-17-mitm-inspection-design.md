@@ -161,6 +161,8 @@ terminates TLS for the `host:port` if any of these holds:
 - an allow or deny entry in object form with `methods`, `paths`, or `when`
   matches the host and port;
 - an allow entry with `secret` matches the host and port;
+- the host and port are allowed and are a binding host of an active secret
+  (section 5), so a placeholder sent there can be stripped;
 - audit mode is on and the target is an allowed host on port 443, other than
   `host.vibepit` and the hosts on the audit exclusion list (section 7).
   Other ports may carry non-HTTP protocols that termination would break, so
@@ -187,10 +189,16 @@ that stays open needs nothing more: its requests are authorized one by one,
 so a new rule applies to the next request. A request already in flight, and
 a connection already upgraded (WebSocket), run to their end unless the host
 itself is now refused. A change that only loosens policy closes nothing.
-Each connection keeps the alias chain from its dial, and the re-check
-matches the new rules against that chain too: a deny on A also closes a
-tunnel to its alias B. No new lookup is made, and CIDR results stay as they
-were at the dial.
+Each tunnel keeps the alias chain from its dial, and the re-check matches
+the new rules against that chain too: a deny on A also closes a tunnel to
+its alias B. No new lookup is made, and CIDR results stay as they were at
+the dial.
+
+Upstream connections of terminated and ordinary requests are pooled and
+reused without a dial, so the dial checks would not see a new deny either.
+A deny therefore replaces the upstream transport: requests in flight finish
+on the old one, its idle connections are closed, and the next request dials
+and passes the alias and CIDR checks again.
 
 **MITM CA.** A separate per-session CA, not the control-API CA (whose key is
 discarded after signing). The CLI generates it with the other session
@@ -303,8 +311,9 @@ forwards with `httputil.ReverseProxy` over a `http.Transport` that uses the
 pinned dialer. Ordinary `http://` requests use the same handler path after
 host admission.
 
-**Inside a tunnel.** The proxy relays a tunnel's bytes without reading them,
-with one exception: the client's first bytes.
+**Inside a tunnel.** The proxy relays a tunnel's bytes without interpreting
+them, with one exception: the start of a TLS handshake, which it follows
+until the server has answered.
 - **The TLS server name must be the `CONNECT` host.** If the client's first
   bytes are a TLS ClientHello, its server name (SNI) must equal the host the
   tunnel was opened for. The ClientHello travels in clear, so this needs no
@@ -315,27 +324,48 @@ with one exception: the client's first bytes.
   gets around path rules on a neighbour, and around the host allowlist
   itself, which is how today's proxy behaves.
 - A mismatch closes the tunnel before any client byte reaches the upstream
-  and writes a flow record on the `http-connect` with its own code, naming
-  both hosts. A ClientHello without a server name is refused the same way.
-- IP-literal targets and `host-port` targets are not checked, here or in the
-  next two points: allowing an address or a host port allows whatever it
-  serves.
-- **Anything that starts with a TLS record must be a ClientHello.** The
-  check classifies the first bytes by TLS record type, not by "is this a
+  and writes a flow record with its own code, naming both hosts. A
+  ClientHello without a server name, with more than one name, or with the
+  extension twice is refused the same way: a proxy and a server that read
+  such a hello differently would disagree about the site.
+- IP-literal targets and `host-port` targets are not checked: allowing an
+  address or a host port allows whatever it serves.
+- **Anything that starts like TLS must be a ClientHello.** The check
+  classifies the first bytes by TLS record type, not by "is this a
   handshake". A tunnel whose first record is an alert, a ChangeCipherSpec,
-  or application data is refused. Passing those as "not a handshake" would
-  be a way around the check: a Go TLS server drops a warning alert and then
-  accepts the ClientHello that follows it, with whatever name it carries
-  (confirmed by experiment; OpenSSL refuses the same bytes).
-- **Cleartext HTTP inside a tunnel is refused.** A tunnel to port 80 has the
-  same problem without TLS: the client names the site in its `Host` header,
-  and can change it on every request. Plain HTTP goes through ordinary proxy
-  requests, where the URL's host is the authority and rules apply. This
-  includes `ws://` through `CONNECT` to a named host.
-- Other first bytes pass as today, since a tunnel also carries other
-  protocols (SSH over `CONNECT`). Bytes from the upstream are relayed from
-  the beginning, so protocols where the server speaks first keep working;
-  only the client's first bytes are held until they are classified.
+  or application data is refused, and so is an SSLv2-format hello. Passing
+  those as "not a handshake" would be a way around the check: a Go TLS
+  server drops a warning alert and then accepts the ClientHello that follows
+  it, with whatever name it carries (confirmed by experiment; OpenSSL
+  refuses the same bytes).
+- **The check follows the handshake until the server has answered.** In
+  TLS 1.3 a server may answer the first ClientHello with a HelloRetryRequest,
+  and the client then sends a second ClientHello, still in clear. A server
+  that takes the name from the second one lets a client name the allowed
+  host first and another site second (confirmed by experiment against
+  OpenSSL's test server; Go's server refuses a changed name). So the proxy
+  also reads the server's first handshake message while relaying it. If it
+  is a HelloRetryRequest, which its fixed random value shows, the client's
+  next handshake record must be a ClientHello that passes the same check
+  before it is forwarded; records of other types the client sends before it
+  (a compatibility ChangeCipherSpec, early data) are relayed. After an
+  ordinary ServerHello no further ClientHello can arrive in clear, and the
+  proxy stops reading.
+- **Cleartext inside a tunnel is not checked.** A tunnel that carries plain
+  HTTP lets the client name the site in its `Host` header and change it on
+  every request. The proxy does not refuse it, for two reasons. Node's
+  `fetch` sends `CONNECT` for `http://` URLs too (with the
+  `NODE_USE_ENV_PROXY` setting vibepit applies), and that is how a local
+  model server from `extra-hosts` is reached. And telling HTTP from other
+  protocols by its first bytes can be dodged, for example with a leading
+  blank line that some servers skip. This matters only where a user allows a
+  cleartext port on an address that serves several sites; no built-in preset
+  does. The threat model says so.
+- First bytes that are not TLS pass as today, since a tunnel also carries
+  other protocols (SSH over `CONNECT`). Bytes from the upstream are relayed
+  from the beginning, so protocols where the server speaks first keep
+  working; only the client's ClientHello records are held until they are
+  checked.
 - What begins like TLS but can't be read within a size and time limit (a
   ClientHello may span several records) is refused, so splitting it up is no
   way around the check.
@@ -343,6 +373,12 @@ with one exception: the client's first bytes.
   doesn't match and is refused; such a tunnel could lead to any site of that
   provider. A client behind an HTTP proxy normally leaves name resolution to
   the proxy and never gets the ECH configuration, so this should be rare.
+- **Built first, against real servers.** Three review rounds each found a
+  way past this check on paper, because it reads a protocol the proxy
+  doesn't terminate and servers differ in what they accept. It is the first
+  piece of `netproxy` to build, with a harness that runs every known case
+  against OpenSSL, Go, and Node servers (section 13). A new case found later
+  is added there first.
 
 **Inside a terminated connection.**
 - The request's authority must equal the `CONNECT` target (default port
@@ -385,6 +421,8 @@ with one exception: the client's first bytes.
   does not. vibepit passes them to `netproxy` as a name-to-address table
   that the dialer consults before the resolver. The CIDR check applies to
   those addresses as it does today, and a static entry has no alias chain.
+  An entry whose value is `host-gateway` gets the gateway's address, resolved
+  as below. An IPv6 value is a startup error for now.
 - **The alias check covers request-level denies, for tunnels.** A name in
   the chain that a host-level deny matches refuses the dial, as today. A
   blind tunnel leaves a second way around a deny: through a tunnel to an
@@ -564,9 +602,11 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   it matches a whole segment, and `*.git` matches `api.git`. `**` matches
   zero or more whole segments (`/repos/x/**` covers `/repos/x`) and stands
   alone in its segment. No `?` or character classes.
-- There is no escape. A path that itself contains `*`, `{`, or `}` can't be
-  written as a literal pattern in this version, and nothing that turns an
-  observed path into a rule may treat one as a literal (section 9).
+- Patterns are written in decoded form and matched against the decoded
+  path; a pattern's own text is never percent-decoded. There is no escape. A
+  path whose decoded form contains `*`, `{`, or `}` can't be written as a
+  literal pattern in this version, and nothing that turns an observed path
+  into a rule may treat one as a literal (section 9).
 - A single trailing slash is ignored on both the pattern and the path:
   `/repos/*` matches `/repos/x/`, and a deny on `/admin` matches `/admin/`.
   Servers commonly treat the two as the same page, so a deny has to cover
@@ -749,6 +789,12 @@ not in project config):
     `when: request.graphql.queryOnly`, so `gh` works for reads.
   - `github-graphql-write`: `POST /graphql` with credentials, mutations
     included.
+- Only `github-read` and `github-write` carry `replaces` and the hosts of the
+  presets they replace. The GraphQL presets add one rule on `api.github.com`
+  and nothing else; they are used next to `github-read`, `github-write`, or
+  `default`. With `default`, `api.github.com` keeps its whole-host entry, so
+  the GraphQL rule restricts nothing there and only decides where the
+  credential goes.
 - `repos` stays an honest limit: every rule of a `github-read`/`github-write`
   instance that carries a credential or reaches repository content is
   scoped by it. Rules for hosts without repository paths (avatars, the
@@ -840,14 +886,23 @@ Sources: `env` and `command`.
 `vibepit-secret-github-<random>`), stable for the session, set in the sandbox
 env for each name in the service's `env`. It exists so tools like `gh` run;
 it carries no value.
-- **Only where a grant applies.** A secret gets a placeholder, and the env
-  gets it, only when the session's config has a grant for that secret. A
-  secret that is configured globally but not granted in this project leaves
-  the env alone. Its hosts would stay tunneled, so a tool would send the
-  placeholder through the tunnel as if it were a token, get a 401, and lose
-  a login it had in the home volume. Grants don't appear at runtime (the CLI
-  and the monitor never write `secret`), so what is decided at session start
-  holds for the session.
+- **Only for active secrets.** A secret is *active* in a session when the
+  session's config has a grant for it, or when audit mode is on. An active
+  secret gets a placeholder, the env gets it, and every allowed binding host
+  of the secret is terminated (section 1), whether a grant names that host
+  or not. Both parts are needed. Without the placeholder a tool has nothing
+  to send, and without termination on all binding hosts the placeholder
+  would travel through a tunnel as if it were a token: a grant on
+  `api.github.com` alone would leave git sending it to a tunneled
+  `github.com` and getting a 401.
+- A secret that is configured globally but not active leaves the env alone
+  and terminates nothing, so a login the tool has in the home volume keeps
+  working. Audit mode activates every configured secret so that an
+  authenticated flow can be observed before its first grant exists; a secret
+  with a binding host on the audit exclusion list is not activated by audit
+  mode alone. Grants don't appear at runtime (the CLI and the monitor never
+  write `secret`), so what is decided at session start holds for the
+  session.
 - **The CLI generates the placeholders at session start and writes them into
   the session's proxy config,** next to the secret names and service
   definitions. A placeholder is not a secret (the sandbox env already has
@@ -889,8 +944,10 @@ credential). A secret's *binding hosts* are the host and port of its
   absent nor the placeholder, a real credential for that service is in the
   sandbox, for example a token from an earlier login in the shared home
   volume. A header of the same name on any other host is not looked at: the
-  agent's own API key for another service raises nothing. That is what secrets are meant to end, so it must
-  not pass silently. If a grant matches, the header is overwritten as above:
+  agent's own API key for another service raises nothing. Neither does a
+  secret that is not active in the session, where a login in the sandbox is
+  the intended way. For an active secret, a credential in the sandbox is
+  what secrets are meant to end, so it must not pass silently. If a grant matches, the header is overwritten as above:
   a matching grant decides the credential. If none matches, the header is
   forwarded unchanged, as today. Either way the proxy raises an alert
   finding (not a block) that doesn't contain the value.
@@ -972,8 +1029,11 @@ credential grants.
   the root to a repository further up.
 - **The prompt names what will be mounted.** The trust prompt and first-time
   setup show the root path. If that root contains a project that is already
-  approved, the prompt says so and names it: a root above a known project
-  is either a deliberate outer project or a sign that the root moved.
+  approved, or lies inside one, the prompt says so and names it. A root
+  above a known project is either a deliberate outer project or a sign that
+  the root moved. A root inside one can be planted: the sandbox can create
+  `sub/.git` or `sub/.vibepit/network.yaml`, and a session started in `sub`
+  would then run without the approved project's config.
 - **Declining** aborts startup with a message naming what was not approved.
   There is no mode that starts without the project config.
 - **The agent can't change the project config mid-session:** `.vibepit` is
@@ -1042,7 +1102,9 @@ hash of the value.
   withheld" marker (section 5), the monitor shows it next to "would block",
   and the draft-rules view notes for such entries that the drafted rule
   needs `secret:` to work. Drafting rules for an authenticated flow can
-  therefore take more than one run.
+  therefore take more than one run. Audit mode makes every configured secret
+  active (section 5), so the placeholder is there to be sent and withheld
+  even before a first grant exists.
 - **Excluding hosts.** Audit mode terminates hosts that no rule asked to
   terminate, so a pinned client on an allowed host stops working while it is
   on. A host-controlled list (`audit-exclude` in the global config and a
@@ -1063,9 +1125,9 @@ hash of the value.
 
 - Request-level records gain method, path, query parameter names, status,
   mode (tunnel/mitm), secret injected or withheld (name only), and an audit
-  marker. On the wire
-  they are the details of `http-request` flows (see "A generic protocol"
-  below).
+  marker. The path is recorded as it was sent, percent-encoding included.
+  On the wire they are the details of `http-request` flows (see "A generic
+  protocol" below).
 - Query strings: parameter names only, in every mode including audit. Signed
   download URLs carry credentials vibepit doesn't know about. Draft rules
   need only host, method, and path.
@@ -1080,14 +1142,15 @@ hash of the value.
   fields.
 - New block codes for request-rule refusals, host mismatch, placeholder
   misuse, missing secret values, failed client handshakes, server-name
-  mismatches in tunnels, cleartext HTTP in tunnels, and connections closed
-  by a policy change. None of them can be fixed by allowing the target. A
+  mismatches in tunnels, and connections closed by a policy change. None of them can be fixed by allowing the target. A
   request-level "not allowlisted" can be fixed, but only by a rule with a
   method and a path (below), never by allowing its target.
 - `http-request` flows go into their own ring buffer (10k), so floods don't
   push out host-level blocks. `/events` carries both.
 - Target rows count flows per kind (connections for `http-connect`, requests
   for `http-request`, queries for `dns-query`, connections for `host-port`).
+  Only a connection's first record counts; records that name a `parent` are
+  later events on a connection already counted.
 
 **A generic protocol: kinds, targets, flows.** The control API and event
 stream are not written per protocol, so future network use cases don't need
@@ -1126,9 +1189,11 @@ protocol-specific.
   written at once. A forwarded request is written when the response status
   arrives or the upstream fails, not when the body ends, so a long download
   or an event stream shows up while it runs. A connection gets one
-  `http-connect` record at admission; later events on it (a failed client
-  handshake, a server-name mismatch, a closure after a policy change) are
-  records of their own that name it as `parent`.
+  `http-connect` record when its admission is decided: for a terminated
+  connection that is at `CONNECT`, before any dial; for a tunnel it is after
+  the dial, so a refused dial is that record's block. Later events on the
+  connection (a failed client handshake, a server-name mismatch, a closure
+  after a policy change) are records of their own that name it as `parent`.
 - **Rule identity.** Every rule in `netproxy`'s config has an ID that
   `netproxy` assigns and an opaque `origin` label that the embedder sets and
   `netproxy` never interprets. vibepit uses `global`, `project`,
@@ -1160,9 +1225,10 @@ protocol-specific.
 - **`http-request` targets are not allowable.** Their target is
   `{host, port}`, so allowing one through `/decisions` could only produce a
   whole-host rule, which would remove the very path restriction that
-  refused the request. The proxy marks them `allowable: false` and
-  `/decisions` refuses them. A request is allowed by a rule with its method
-  and path, through the rules endpoint.
+  refused the request. The proxy marks them `allowable: false`, and
+  `/decisions` refuses them for every action: a deny or reject of a whole
+  host is made on its `http-connect` target. A request is allowed or denied
+  by a rule with its method and path, through the rules endpoint.
 - **Unknown kinds degrade cleanly.** A client that doesn't know a kind shows
   the kind, the target as a string, and the decision. Each target carries an
   `allowable` flag from the proxy; an older client can still allow it through
@@ -1349,9 +1415,12 @@ slow subscriber instead of blocking; keepalive comments.
 - On a refused request entry the monitor offers: allow exact path, allow a
   prefix, deny the path. These write object entries with literal hosts and
   paths to the project config. The sandbox chooses the path, and the pattern
-  language has no escape, so a path that contains `*`, `{`, or `}` gets no
-  such action: saved as it is, `/api/*/x` or `/**` would be a wildcard the
-  user never meant. Today's monitor has the same rule for hosts (a host
+  language has no escape, so a path whose decoded form contains `*`, `{`, or
+  `}` gets no such action: saved as it is, `/api/*/x` or `/**` would be a
+  wildcard the user never meant. The check uses the decoded path, so
+  `/%2A%2A` is caught as well, and a path with an encoded separator (`%2F`,
+  `%5C`) gets no action either. What is saved is the decoded path, which is
+  the form patterns are written in (section 2). Today's monitor has the same rule for hosts (a host
   with a `*` is never allowable), and it carries over. The monitor never
   writes `secret`, `{set}`
   references, sets, or presets, so it cannot widen where a secret goes. A
@@ -1365,7 +1434,8 @@ slow subscriber instead of blocking; keepalive comments.
   changes instead of polling `/hosts` and merging, and drop their local
   guesses about allows, denies, and rejections. This removes most of
   `cmd/monitor_hosts.go`'s merge logic. The hosts tab shows the target table,
-  all kinds included; decisions go through `/decisions`.
+  all kinds included; decisions on targets go through `/decisions`, path
+  actions through the rules endpoint.
 - The prompt and monitor render the four known kinds specifically (e.g.
   "sandbox wants host port 3000") and any unknown kind generically: kind,
   target as a string, decision, and allow if the target is allowable.
@@ -1713,8 +1783,9 @@ update; the changelog and the update docs say so.
   traffic) and `security-model.md`: TLS termination, the MITM CA, secret
   handling, global grants applying to every project, project trust, token
   scope as the primary control for writes, the server-name check on tunnels
-  and what it leaves open, request rules binding a name and not a server
-  (section 2),
+  and what it leaves open (cleartext inside a tunnel, and whatever a server
+  accepts that the check doesn't know yet), request rules binding a name and
+  not a server (section 2),
   and that OAuth tokens from agent logins still live in the sandbox's home
   volume until the host daemon exists.
 - Configuration reference for object entries, sets, presets with inputs,
@@ -1724,13 +1795,17 @@ update; the changelog and the update docs say so.
   asks for approval once (section 5); `host.vibepit` entries in HTTP rules
   are startup errors and wildcard allows no longer open host ports
   (section 8); sandbox tools verify with the proxy image's roots
-  (section 1); a tunnel whose TLS server name differs from its `CONNECT`
-  host is closed, and so is cleartext HTTP inside a tunnel to a named host,
-  `ws://` included (section 1); an ordinary proxy request with an
-  `https://` URL gets a 400 (section 1); an unknown preset name is a startup
-  error (section 4); upstream addresses are IPv4 only (section 1); the
-  project root is found without git, so `GIT_DIR`, `GIT_WORK_TREE`, and
-  `core.worktree` no longer move it (section 5).
+  (section 1); a TLS tunnel is closed when its server name is missing or is
+  not the `CONNECT` host, when its first record is not a ClientHello, and
+  when it uses Encrypted ClientHello (section 1); an ordinary proxy request
+  with an `https://` URL gets a 400, and an ordinary request goes upstream
+  under its URL's host, whatever its `Host` header says (section 1); an
+  unknown preset name is a startup error (section 4); a `deny-http` entry
+  that matches an allowed host port is a startup error (section 8);
+  upstream addresses are IPv4 only, and an IPv6 value in `extra-hosts` is a
+  startup error (section 1); the project root is found without git, so
+  `GIT_DIR`, `GIT_WORK_TREE`, and `core.worktree` no longer move it
+  (section 5).
 
 ### 13. Behavior the tests must pin
 
@@ -1803,7 +1878,9 @@ in a `when` condition on `request.path`.
   reconnect is refused or terminated; a deny on a name also closes a tunnel
   to an alias of it, from the chain kept at the dial; a tunnel to another
   host stays open; a terminated connection applies a new path deny to its
-  next request without being closed; a new allow closes nothing.
+  next request without being closed; a new allow closes nothing. After a
+  deny on a name, a request to an alias of it is refused even though an
+  upstream connection to that server was still pooled.
 - `when` ambiguity: a repeated query parameter or header that a condition
   references, a query string that doesn't parse cleanly, and a JSON body
   with a duplicate key each make an allow not match and a deny match.
@@ -1819,25 +1896,37 @@ in a `when` condition on `request.path`.
   error refuses the dial. A name from `extra-hosts` is reached through the
   static table without a DNS query, and its address still passes the CIDR
   check. `host.vibepit` works with the gateway given as an address.
-- Generic protocol: every kind's flows, holds, target rows, and decisions go
-  through the same event types and `/decisions`; a client built without
-  knowledge of `host-port` can still show and allow a held host port.
+- Generic protocol: every kind's flows, holds, and target rows go through
+  the same event types, and decisions on allowable targets through
+  `/decisions`; a client built without knowledge of `host-port` can still
+  show and allow a held host port.
 - `http-request` flows carry their `http-connect` as `parent`; a forwarded
   request's record appears when the response status arrives, before a long
-  body ends; `/decisions` refuses an `http-request` target, and the rules
-  endpoint allows the same request by method and path.
-- Paths with pattern syntax: a refused request whose path contains `*`,
-  `{`, or `}` offers no path action in the monitor and is left out of
-  drafted rules.
-- Placeholders in the env: a secret without a grant in the session sets no
-  env variable and gets no placeholder; with a grant it does.
+  body ends; `/decisions` refuses an `http-request` target for allow, deny,
+  and reject, and the rules endpoint allows the same request by method and
+  path. A tunnel whose dial is refused has one `http-connect` record, the
+  block; later events on a connection name it as `parent` and don't count
+  as connections in the target row.
+- Paths with pattern syntax: a refused request whose decoded path contains
+  `*`, `{`, or `}` (sent literally or as `%2A`, `%7B`, `%7D`), or an encoded
+  separator, offers no path action in the monitor and is left out of
+  drafted rules; "allow exact path" on `/a%20b` saves `/a b` and that rule
+  matches the same request.
+- Active secrets: a configured secret without a grant sets no env variable
+  and terminates nothing; with a grant on one binding host, the env has the
+  placeholder and every allowed binding host is terminated, so a
+  placeholder sent to another binding host is stripped, not tunneled; audit
+  mode activates a secret that has no grant, except when one of its binding
+  hosts is on the exclusion list; the client-credential alert fires for
+  active secrets only.
 - Placeholder scope: the service's header with the placeholder is stripped
   on a binding host and blocked on any other host, ordinary `http://`
   requests included; a different credential in that header raises the
   alert on a binding host and nothing elsewhere.
 - Project root: a `core.worktree` in the project's git config, and a
   removed `.git` inside an outer repository, don't move the root; the trust
-  prompt shows the root path and names an approved project inside it.
+  prompt and first-time setup show the root path and name an approved
+  project that the root contains or lies inside.
 - Saves: two simultaneous saves (CLI and monitor) both end up in the
   session's proxy config; a failing append reports the partial save; a
   restart enforces a saved rule and drops an unsaved one; a project config
@@ -1847,20 +1936,26 @@ in a `when` condition on `request.path`.
   closed with nothing sent upstream and a flow record naming both hosts; a
   matching name passes, also when the ClientHello arrives in the same write
   as `CONNECT` or split across several records; a ClientHello without a
-  server name is refused; a tunnel whose first record is an alert, a
-  ChangeCipherSpec, or application data is refused, including a warning
-  alert followed by a ClientHello that names another host; cleartext HTTP
-  in a tunnel to a named host is refused; IP-literal and `host-port`
-  targets are not checked; a tunnel whose first bytes are another protocol
-  (SSH), and one where the server speaks first, work as today; a TLS start
-  that can't be read within the limits is refused. Fuzz the reading of the
-  first bytes.
-- Every host in the built-in narrowing presets (`github-read`,
-  `github-write`, and the GraphQL presets) is terminated; none is left as a
-  whole-host entry, also when `default` is active next to them
-  (`cdn-github` is replaced). Homebrew installs a bottle through the
-  terminated `ghcr.io`. A whole-host entry next to a restricted host under
-  the same parent domain produces the startup warning.
+  server name, with two names, or with the extension twice is refused; a
+  tunnel whose first record is an alert, a ChangeCipherSpec, or application
+  data is refused, including a warning alert followed by a ClientHello that
+  names another host, and so is an SSLv2-format hello; after a
+  HelloRetryRequest a second ClientHello that names another host is refused
+  and one that keeps the name passes, also with a ChangeCipherSpec or early
+  data before it; IP-literal and `host-port` targets are not checked;
+  cleartext HTTP in a tunnel passes (Node's `fetch` to an `extra-hosts`
+  name works); a tunnel whose first bytes are another protocol (SSH), and
+  one where the server speaks first, work as today; a TLS start that can't
+  be read within the limits is refused. These cases run against OpenSSL,
+  Go, and Node servers, not only against the proxy's own parser, and the
+  reading of the handshake is fuzzed.
+- Every host in `github-read` and `github-write` is terminated; none is
+  left as a whole-host entry, also when `default` is active next to them
+  (`vcs-github` and `cdn-github` are replaced). The GraphQL presets add
+  their one rule and replace nothing. A whole-host entry next to a
+  restricted host under the same parent domain produces the startup
+  warning. Checked by hand before the presets ship, since it needs the live
+  network: Homebrew installs a bottle through the terminated `ghcr.io`.
 - Alias check for request-level denies: a tunnel to an allowed name that
   aliases a name with a path deny is refused, with a reason that names it;
   the same name with a request rule of its own is terminated and reachable;
