@@ -373,12 +373,12 @@ until the server has answered.
   doesn't match and is refused; such a tunnel could lead to any site of that
   provider. A client behind an HTTP proxy normally leaves name resolution to
   the proxy and never gets the ECH configuration, so this should be rare.
-- **Built first, against real servers.** Three review rounds each found a
+- **Built early, against real servers.** Three review rounds each found a
   way past this check on paper, because it reads a protocol the proxy
-  doesn't terminate and servers differ in what they accept. It is the first
-  piece of `netproxy` to build, with a harness that runs every known case
-  against OpenSSL, Go, and Node servers (section 13). A new case found later
-  is added there first.
+  doesn't terminate and servers differ in what they accept. It is built
+  right after the first acceptance test (section 13), with a harness that
+  runs every known case against OpenSSL, Go, and Node servers. A new case
+  found later is added to that harness first.
 
 **Inside a terminated connection.**
 - The request's authority must equal the `CONNECT` target (default port
