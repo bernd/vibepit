@@ -96,7 +96,7 @@ func resolveConfigPath(path string) (string, error) {
 func writeProjectConfigFile(path string, data []byte) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return replaceProjectConfig(path, data, 0o600, -1)
+		return replaceFile(path, data, 0o600, -1)
 	}
 	if err != nil {
 		return err
@@ -111,7 +111,7 @@ func writeProjectConfigFile(path string, data []byte) error {
 		gid = int(st.Gid)
 	}
 	if !rewriteInPlace(path, info) {
-		err := replaceProjectConfig(path, data, info.Mode().Perm(), gid)
+		err := replaceFile(path, data, info.Mode().Perm(), gid)
 		if !errors.Is(err, errKeepGroup) {
 			return err
 		}
@@ -138,11 +138,11 @@ func rewriteInPlace(path string, info fs.FileInfo) bool {
 // the save falls back to rewriting the file in place.
 var errKeepGroup = errors.New("replacement can't keep the config's group")
 
-// replaceProjectConfig atomically replaces path with data. gid is the group
+// replaceFile atomically replaces path with data. gid is the group
 // the old file had, or -1 for none: a new file's group depends on the
 // directory (setgid, BSD semantics), so it is compared, not assumed.
-func replaceProjectConfig(path string, data []byte, mode fs.FileMode, gid int) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".network-*.tmp")
+func replaceFile(path string, data []byte, mode fs.FileMode, gid int) error {
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*.tmp")
 	if err != nil {
 		return err
 	}

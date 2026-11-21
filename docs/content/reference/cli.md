@@ -48,10 +48,15 @@ vibepit run [flags] [project-path]
 ### Behavior
 
 - If `project-path` is omitted, `vibepit` uses the current working directory.
-- `vibepit` uses the nearest directory, from there upwards, that holds a
-  `.vibepit/network.yaml` or a `.git` entry as the project directory. Inside
-  a Git repository that is the repository root. It does not run `git` or
-  read the repository's configuration to find it.
+- `vibepit` walks up from there and uses the first directory that holds a
+  `.git` entry or that it started a session in before. That directory is the
+  project directory. Inside a Git repository it is the repository root,
+  unless `vibepit` started a session in a directory between the two. It does
+  not run `git` or read the repository's configuration to find it.
+- If another user owns that `.git` entry, `vibepit` uses the starting
+  directory as the project directory.
+- [Files and Directories](files.md#project-records) explains how `vibepit`
+  records the project directories it started sessions in.
 - `vibepit` refuses to run if the resolved project directory is your home
   directory.
 - If a session is already running for the same project directory, `vibepit`
@@ -59,6 +64,10 @@ vibepit run [flags] [project-path]
   a session starts, so `vibepit` warns that it ignores any that are set.
 - On first run in a project, `vibepit` launches an interactive setup flow to
   select network presets. Pass `--reconfigure` to re-run this selector later.
+- If the project directory already has a `.vibepit/network.yaml` that
+  `vibepit` didn't create, `vibepit` shows the file and asks before it uses
+  it. Code in a sandbox can write such a file. Without a terminal to ask in,
+  `vibepit` refuses to start.
 - `vibepit` merges entries passed with `--allow` and `--preset` with the
   entries saved in the project configuration file.
 - With `--prompt`, blocked connections open an allow/deny prompt over the

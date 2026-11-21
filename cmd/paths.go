@@ -27,7 +27,7 @@ func PathsCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "paths",
 		Usage:     "Show where vibepit keeps its files",
-		ArgsUsage: "[global-config|project-config|sessions|cache]",
+		ArgsUsage: "[global-config|project-config|projects|sessions|cache]",
 		Description: "Without an argument, lists every file and directory vibepit uses for the\n" +
 			"project in the current directory, or in --project. With a name, prints\n" +
 			"only that path, for use in scripts, e.g.\n" +
@@ -59,7 +59,7 @@ func PathsCommand() *cli.Command {
 }
 
 // pathEntries takes the project root as a function so that printing a path
-// which doesn't depend on it skips the git call that finds it.
+// which doesn't depend on it skips the directory walk that finds it.
 func pathEntries(projectRoot func() (string, error)) []pathEntry {
 	fixed := func(p string) func() (string, error) {
 		return func() (string, error) { return p, nil }
@@ -73,6 +73,7 @@ func pathEntries(projectRoot func() (string, error)) []pathEntry {
 			}
 			return config.DefaultProjectPath(root), nil
 		}},
+		{"projects", "Projects", fixed(config.ProjectsDir())},
 		{"sessions", "Sessions", fixed(sessionBaseDir())},
 		{"cache", "Cache", fixed(config.CacheDir())},
 	}

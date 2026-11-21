@@ -22,6 +22,7 @@ import (
 	"github.com/bernd/vibepit/proxy"
 	"github.com/bernd/vibepit/tui"
 	"github.com/urfave/cli/v3"
+	"golang.org/x/term"
 )
 
 const (
@@ -65,7 +66,7 @@ type infraOptions struct {
 }
 
 // resolveProjectRoot determines the project root from the first CLI argument
-// or the current working directory, then finds the Git root if available.
+// or the current working directory, then finds the enclosing project root.
 func resolveProjectRoot(cmd *cli.Command) (string, error) {
 	projectRoot := cmd.Args().First()
 	if projectRoot == "" {
@@ -74,10 +75,6 @@ func resolveProjectRoot(cmd *cli.Command) (string, error) {
 			return "", err
 		}
 		projectRoot = wd
-	}
-	projectRoot, err := filepath.Abs(projectRoot)
-	if err != nil {
-		return "", err
 	}
 	return config.FindProjectRoot(projectRoot)
 }
@@ -187,7 +184,13 @@ func resolveProjectAndUser(cmd *cli.Command) (string, *userInfo, error) {
 		return "", nil, err
 	}
 
-	if projectRoot == u.HomeDir {
+	// FindProjectRoot resolves symlinks, so compare against the physical
+	// home, or a symlinked home directory (/home -> /var/home) passes.
+	physicalHome, err := filepath.EvalSymlinks(u.HomeDir)
+	if err != nil {
+		physicalHome = u.HomeDir
+	}
+	if projectRoot == physicalHome {
 		return "", nil, fmt.Errorf("refusing to run in your home directory — point me to a project folder")
 	}
 
@@ -233,7 +236,27 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 	globalPath := config.DefaultGlobalPath()
 	projectPath := config.DefaultProjectPath(projectRoot)
 
-	cfg, err := config.Load(globalPath, projectPath)
+	// Ask before loading anything from a config at an unrecorded root,
+	// since its memory limit counts too.
+	recorded, err := config.IsRecordedProject(projectRoot)
+	if err != nil {
+		return nil, cleanups, err
+	}
+	var reviewed []byte
+	if !recorded {
+		interactive := term.IsTerminal(int(os.Stdin.Fd()))
+		reviewed, err = confirmProjectConfig(projectPath, os.Stdin, os.Stdout, interactive)
+		if err != nil {
+			return nil, cleanups, err
+		}
+	}
+
+	var cfg *config.Config
+	if reviewed != nil {
+		cfg, err = config.LoadWithProjectData(globalPath, reviewed)
+	} else {
+		cfg, err = config.Load(globalPath, projectPath)
+	}
 	if err != nil {
 		return nil, cleanups, fmt.Errorf("config: %w", err)
 	}
@@ -261,6 +284,14 @@ func startSessionInfra(ctx context.Context, cmd *cli.Command, client *ctr.Client
 		cfg, err = config.Load(globalPath, projectPath)
 		if err != nil {
 			return nil, cleanups, fmt.Errorf("config: %w", err)
+		}
+	}
+
+	// Recorded only now that the user has chosen the config, by setup or
+	// by confirming it.
+	if !recorded {
+		if err := config.RecordProject(projectRoot); err != nil {
+			return nil, cleanups, fmt.Errorf("record project: %w", err)
 		}
 	}
 
