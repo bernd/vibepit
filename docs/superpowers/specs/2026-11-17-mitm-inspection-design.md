@@ -531,6 +531,12 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
 **Path matching.**
 - `*` matches one segment; `**` matches zero or more whole segments
   (`/repos/x/**` covers `/repos/x`). No `?` or character classes.
+- A single trailing slash is ignored on both the pattern and the path:
+  `/repos/*` matches `/repos/x/`, and a deny on `/admin` matches `/admin/`.
+  Servers commonly treat the two as the same page, so a deny has to cover
+  both, and for an allow the path stays under the same prefix. `request.path`
+  in a `when` condition has it removed as well (the root stays `/`). The
+  original bytes are forwarded, and `//` is still rejected.
 - Normalization applies only when a decision depends on a path pattern for
   that host (path rules, or a secret's inject paths). Other terminated
   requests, such as audit-mode traffic on hosts without rules, are forwarded
@@ -812,7 +818,18 @@ credential):
 - If two different secrets would set the same header on one request, block
   it and log the conflict.
 - Otherwise, if the service's header carries the placeholder (decoding Basic
-  auth), strip the header and forward unauthenticated.
+  auth), strip the header and forward unauthenticated. The flow record is
+  marked "secret withheld" with the secret's name: the client tried to use
+  the secret and no grant matched. Without the marker the user only sees
+  the upstream's 401 or 404.
+- **A credential the client sent itself is reported.** When the service's
+  header carries a value that is neither absent nor the placeholder, a real
+  credential is in the sandbox, for example a token from an earlier login in
+  the shared home volume. That is what secrets are meant to end, so it must
+  not pass silently. If a grant matches, the header is overwritten as above:
+  a matching grant decides the credential. If none matches, the header is
+  forwarded unchanged, as today. Either way the proxy raises an alert
+  finding (not a block) that doesn't contain the value.
 - A placeholder found anywhere else the proxy looks (other headers, path,
   query) blocks the request and raises an alert in the monitor. Bodies are
   not scanned. Placeholders sent to tunneled hosts are invisible; they are
@@ -885,7 +902,11 @@ credential grants.
 
 An extension point for detecting exfiltration attempts, so secret scanners
 can be added later. This project builds the interface and its place in the
-request path; the placeholder check is the only inspector.
+request path; the placeholder check is the only inspector. Injection raises
+one finding of the same type itself, for a credential the client sent
+(section 5): it knows which grant and header are in play, which an
+inspector running before it does not. That finding carries no prefix or
+hash of the value.
 
 - **Position in the pipeline:** rule evaluation, then inspectors, then
   secret injection, then forwarding. Inspectors see the request exactly as
@@ -931,7 +952,13 @@ request path; the placeholder check is the only inspector.
   and inspectors may only add alerts or blocks, never turn a block into an
   allow. What it shares with future scanning is the broad termination scope
   (section 6).
-- Secret injection works as in normal mode.
+- Secret injection works as in normal mode. A "would block" request matched
+  no grant, so it goes out without a credential: audit mode must not widen a
+  grant to the service's whole binding. Its flow record carries the "secret
+  withheld" marker (section 5), the monitor shows it next to "would block",
+  and the draft-rules view notes for such entries that the drafted rule
+  needs `secret:` to work. Drafting rules for an authenticated flow can
+  therefore take more than one run.
 - **Excluding hosts.** Audit mode terminates hosts that no rule asked to
   terminate, so a pinned client on an allowed host stops working while it is
   on. A host-controlled list (`audit-exclude` in the global config and a
@@ -949,7 +976,8 @@ request path; the placeholder check is the only inspector.
 ### 8. Logging and events
 
 - Request-level records gain method, path, query parameter names, status,
-  mode (tunnel/mitm), secret (name only), and an audit marker. On the wire
+  mode (tunnel/mitm), secret injected or withheld (name only), and an audit
+  marker. On the wire
   they are the details of `http-request` flows (see "A generic protocol"
   below).
 - Query strings: parameter names only, in every mode including audit. Signed
@@ -1210,9 +1238,10 @@ slow subscriber instead of blocking; keepalive comments.
 ### 9. TUI
 
 - Logs tab: method, path (truncated, `tui.SanitizeText`), status, a
-  tunnel/mitm marker, a secret-injected marker, a "would block" marker in
-  audit mode, highlighted placeholder alerts, and failed client handshakes
-  (the client doesn't trust the session CA).
+  tunnel/mitm marker, a secret-injected or secret-withheld marker, a "would
+  block" marker in audit mode, highlighted alerts (a placeholder outside its
+  binding, a credential the client sent itself), and failed client
+  handshakes (the client doesn't trust the session CA).
 - Hosts tab: tunnel/mitm marker; shadowed-rule warnings.
 - On a refused request entry the monitor offers: allow exact path, allow a
   prefix, deny the path. These write object entries with literal hosts and
@@ -1730,7 +1759,9 @@ in a `when` condition on `request.path`.
 - Older-format configs produce identical decisions, apart from the
   `host.vibepit` change above.
 - Deny wins over every allow, including preset and secret rules.
-- Path normalization rejections; case rules for allows vs denies.
+- Path normalization rejections; case rules for allows vs denies; a single
+  trailing slash is ignored on pattern and path for allows and denies, and
+  `//` is still rejected.
 - Body cap and `when` error behavior for allows vs denies.
 - Inspectors run before secret injection and see the agent's original
   headers; findings never contain the matched value.
@@ -1740,7 +1771,11 @@ in a `when` condition on `request.path`.
 - Secrets never appear in flow records, events, snapshots, API responses, or
   errors.
 - Injection only within the service's host and path binding; placeholder
-  stripping and misuse blocking.
+  stripping and misuse blocking. A stripped placeholder marks the flow
+  record as secret withheld, also for a "would block" request in audit mode,
+  which goes out without a credential. A credential the client sent itself
+  is replaced when a grant matches and forwarded when none does, with an
+  alert finding either way that doesn't contain it.
 - HTTP/2 and WebSocket requests through a terminated connection.
 - Sandbox trust: the PEM bundle and the Java truststore hold the proxy's
   roots plus the session CA; the truststore loads in the oldest supported
