@@ -1,71 +1,144 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#171b18"><title>Vibepit · Desktop workspace</title><style>:root{color-scheme:dark;--bg:#141816;--term:#181d1a;--bar:#202722;--line:#354038;--line2:#49564b;--fg:#e6ece5;--mute:#a1b0a4;--dim:#829488;--leaf:#cde49f;--warm:#f1c48c;--blue:#9ec4d6;--mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg)}
-*{box-sizing:border-box}body{margin:0;height:100vh;height:100dvh;min-height:340px;display:flex;flex-direction:column;overflow:hidden}button,input,select{font:inherit;color:inherit}button{cursor:pointer;background:var(--bar);border:1px solid var(--line);border-radius:5px;padding:5px 11px}button:hover{background:#303a32}button:disabled{opacity:.45;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--leaf);outline-offset:-2px}button,select{touch-action:manipulation}input,select{background:#111713;border:1px solid var(--line2);padding:6px 8px;border-radius:4px}input{min-width:0}button[aria-pressed=true],.selected{color:var(--leaf)}[hidden]{display:none!important}.spacer{flex:1}.appbar,footer,.tabbar,.tab,.tools,.gin,.phead,.minihead,.dialoghead,.chips{display:flex;align-items:center}.appbar{height:65px;flex:none;padding:0 20px;gap:14px;background:#1d231f;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:10px;font-weight:660;font-size:19px;letter-spacing:-.7px}.slash{color:#667669;font-size:23px;font-weight:300}.sandbox{display:grid;line-height:1.3}.sandbox b{font-weight:580}.path{font:11px var(--mono);color:var(--mute);margin-top:4px}.quiet{font-size:12px;background:transparent}.attention{color:var(--warm)}.tabbar{min-height:44px;flex:none;background:#171c19;border-bottom:1px solid var(--line);padding:0 8px;overflow-x:auto;scrollbar-width:thin}.tabbar,.tab,.gin,.phead{user-select:none}#strip{display:flex;align-self:stretch}.tab{gap:7px;border:0;border-right:1px solid #2f3932;padding:0 7px 0 10px;background:transparent;white-space:nowrap;border-radius:0}.tab.on{background:#283128;box-shadow:inset 0 -2px var(--leaf)}.tab.reveal{outline:1px dashed var(--leaf)}.tab:before{content:none}.tab-name,.tabmenu{border:0;background:transparent;padding:7px 1px;font-size:13px;display:flex;align-items:center;gap:7px;color:var(--mute);min-height:41px}.tab.on .tab-name{color:var(--fg)}.tabmenu{font-size:17px;padding:3px 5px}.icon,.grip,.more{background:transparent;border:0;min-width:29px;padding:3px 6px}.icon{font-size:20px}.glyph{width:16px;height:16px;stroke:currentColor;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.6;flex:none}.badge{font:11px/1.4 system-ui;border-radius:3px;padding:2px 5px;color:var(--leaf);background:#304030}.badge.warn{background:#403628;color:var(--warm)}.badge.err{color:#ffaeaa;background:#422d2e}.ins{box-shadow:inset 3px 0 var(--leaf)!important}.endins{box-shadow:inset -3px 0 var(--leaf)!important}
-#stage{flex:1;min-height:0;padding:10px;position:relative;overflow:auto;display:flex}#stage>.node{width:100%;height:100%}.node{min-width:0;min-height:0}.group{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line2);border-radius:5px;background:var(--bg)}.gin{padding:3px 7px;gap:6px;min-height:28px;background:#252d27;font-size:11px;color:var(--mute)}.gin b{font-weight:500}.gin button{font-size:11px;padding:1px 6px;color:var(--mute)}.grab{cursor:grab;touch-action:none;user-select:none}.grip{color:var(--dim);font-size:13px;line-height:1}.split{display:flex;flex:1;min-height:0;min-width:0}.split.rows{flex-direction:column}.split>.node{flex-basis:0}.divider{width:7px;flex:none;background:var(--bg);cursor:col-resize;touch-action:none;border-inline:1px solid var(--line)}.rows>.divider{height:7px;width:auto;cursor:row-resize;border-inline:0;border-block:1px solid var(--line)}.divider:hover,.divider:focus{background:#718761}.pane{display:flex;flex-direction:column;background:var(--term);overflow:hidden}.pane:only-child{border-radius:5px}#stage>.pane{border:1px solid var(--line)}.phead{gap:7px;padding:4px 10px;min-height:38px;background:#222923;border-bottom:1px solid var(--line);color:var(--mute)}.phead strong{font-size:13px;font-weight:560;color:var(--fg)}.pane.focus .phead{box-shadow:inset 2px 0 #b6ce91}.more{margin-left:auto;color:var(--mute);font-weight:bold}.body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto}.scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:17px 17px 8px;scrollbar-width:thin;scrollbar-color:#465447 transparent}.terminal{font:13px/1.65 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}.terminal .cmd{color:var(--fg)}.terminal .mut,.mut{color:var(--mute)}.terminal .accent,.accent{color:var(--leaf)}.terminal .code{color:var(--blue)}.terminal .patch{color:#b7d9a8;background:#27372b;display:block;padding:2px 7px}.terminal .tagline{color:var(--leaf);font-weight:650}.prompt{margin:6px 12px 12px;padding:6px 9px;display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:4px;color:var(--leaf);background:#161c18;font-family:var(--mono)}.prompt input{flex:1;border:0;background:transparent;padding:4px;color:var(--fg);font:12px var(--mono)}.prompt button{color:var(--mute);padding:1px 6px;background:transparent}.tools{gap:6px;flex-wrap:wrap;padding:10px;border-bottom:1px solid var(--line);background:#1d241f}.tools>*{font-size:12px}.tools input{flex:1;min-width:85px}.chips{gap:2px;padding:5px;flex-wrap:wrap;border-bottom:1px solid var(--line)}.chips button{border:0;background:transparent;font-size:12px}.chips .selected{box-shadow:inset 0 -2px var(--leaf)}.netrow{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:8px 0;font:12px/1.5 var(--mono)}.netrow code{color:var(--fg);overflow-wrap:anywhere}.netrow small{color:var(--mute)}.netrow .kind{color:var(--blue)}.netrow .held{color:var(--warm)}.hold{padding:14px 0;border-bottom:1px solid var(--line)}.hold h3{font:15px var(--mono);margin:0 0 5px}.hold p{color:var(--mute);font-size:12px}.choices{display:flex;gap:5px;flex-wrap:wrap}.choices button{font-size:12px}.primary{background:var(--leaf);color:#202e1b;border-color:var(--leaf)}.primary:hover{background:#dcecbb}.empty{margin:auto;padding:22px;color:var(--mute);text-align:center}.empty button{display:block;margin:14px auto}footer{height:31px;flex:none;gap:8px;padding:0 14px;color:var(--mute);font-size:11px;border-top:1px solid var(--line)}.dot{height:6px;width:6px;border-radius:50%;background:var(--leaf)}.footdiv{height:11px;width:1px;background:var(--line2)}.footbutton{background:none;border:0;font-size:11px;color:var(--mute)}kbd{font:10px var(--mono);border:1px solid var(--line2);padding:1px 4px;border-radius:3px}
-#pop,dialog{background:#242d26;border:1px solid var(--line2);color:var(--fg);box-shadow:0 12px 35px #0005;border-radius:7px}#pop{position:fixed;z-index:9;min-width:190px;padding:5px;max-height:75vh;overflow:auto}#pop button{display:block;width:100%;border:0;text-align:left;background:transparent;padding:8px 10px;font-size:13px}#pop button:hover{background:#344035}.poplabel{font-size:11px;color:var(--mute);padding:6px 10px}.danger{color:#ffada6}dialog{width:min(490px,95vw);max-height:90vh;padding:18px}dialog::backdrop{background:#080e0abe}.dialoghead{justify-content:space-between}.dialoghead h2{font-size:17px;margin:0}.dialoghead button{font-size:16px}.formline{display:grid;gap:4px;margin:12px 0;color:var(--mute);font-size:12px}.formline select{width:100%;color:var(--fg)}.dialogfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:15px}.note{font-size:12px;color:var(--mute)}#toast{position:fixed;bottom:42px;left:50%;transform:translateX(-50%);background:#344237;color:var(--fg);border-radius:5px;padding:7px 14px;pointer-events:none;font-size:12px;z-index:12}#toast:empty{display:none}.projection{display:flex;flex:1;min-width:0;min-height:0}#projection{position:fixed;z-index:5;background:#172019f5;border:2px dashed var(--leaf);border-radius:4px;pointer-events:none;padding:5px;display:flex}.schematic{flex:1;display:flex;min-width:0;min-height:0;gap:4px}.schematic.rows{flex-direction:column}.schematic.groupmini{padding:3px;border:1px solid var(--line2)}.leafmini{min-height:0;min-width:0;display:grid;place-content:center;text-align:center;padding:5px;border:1px solid #56645a;background:#252f27;color:var(--mute);overflow:hidden;font:12px var(--mono);overflow-wrap:anywhere}.incoming{background:#35472d;border:2px dashed var(--leaf);color:var(--leaf)}.miniwrap{display:flex;height:140px;margin:12px 0;background:#151b17;border-radius:4px;padding:5px}.targetmark{outline:2px solid var(--warm);outline-offset:-2px}#projection.invalid{color:var(--warm);align-items:center;justify-content:center;border-color:var(--warm)}.detachrow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}.guide li{padding:4px 0}.attentionlist button{width:100%;text-align:left;margin-top:5px}
-@media(max-width:680px){.appbar{padding:0 8px;height:54px;gap:8px}.brand{font-size:16px}.brand svg{width:25px}.path{display:none}.quiet{font-size:11px;padding:5px 7px}.tabbar{padding-left:2px}.tab{padding-left:6px}.tab-name{font-size:12px}.scroll{padding:10px}.terminal{font-size:12px}.phead{padding:4px;gap:3px}#stage{padding:4px}.prompt{margin:4px}.gin{padding:2px 4px}.sandbox b{font-size:12px}}@media(max-width:410px){.slash,.sandbox{display:none}.appbar{gap:5px}.tab .glyph{display:none}}@media(pointer:coarse){.tab-name,.tabmenu,.quiet,.more,.grip,.gin button,.icon{min-height:36px}}
-
-.phead .zoom-toggle{margin-left:auto;padding:3px 7px;background:transparent;color:var(--mute);font-size:12px;white-space:nowrap}.phead .zoom-toggle:hover{color:var(--fg);background:var(--bar)}.phead .more{margin-left:0}.phead .zoom-toggle[hidden]+.more{margin-left:auto}
-.countdown{display:block;color:var(--warm);font:12px var(--mono);margin:4px 0 10px}.recovery{justify-content:space-between}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#171b18"><title>Vibepit · Desktop workspace</title><style>:root{color-scheme:dark;--bg:#141816;--term:#181d1a;--bar:#202722;--line:#354038;--line2:#49564b;--edge:#647567;--fg:#e6ece5;--mute:#a1b0a4;--dim:#829488;--leaf:#cde49f;--warm:#f1c48c;--blue:#9ec4d6;--bad:#ffaeaa;--appbar:48px;--mono:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg);caret-color:var(--leaf);scrollbar-color:#465447 transparent}
+::selection{background:#4c6340;color:#f3f8ee}
+*{box-sizing:border-box}body{margin:0;height:100vh;height:100dvh;min-height:340px;display:flex;flex-direction:column;overflow:hidden}button,input,select{font:inherit;color:inherit}button{cursor:pointer;background:var(--bar);border:1px solid var(--line);border-radius:5px;padding:5px 11px}button:hover{background:#303a32}button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--leaf);outline-offset:-2px}button,select{touch-action:manipulation}input,select{background:#111713;border:1px solid var(--edge);padding:6px 8px;border-radius:4px}input{min-width:0}button[aria-pressed=true],.selected{color:var(--leaf)}[hidden]{display:none!important}.spacer{flex:1}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}.appbar,footer,.tabbar,.tab,.tools,.gin,.phead,.minihead,.dialoghead,.chips,.conn,.readout{display:flex;align-items:center}.appbar{height:var(--appbar);flex:none;padding:0 14px;gap:12px;background:#1d231f;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:9px;font-weight:660;font-size:16px;letter-spacing:-.4px}.slash{color:#667669;font-size:19px;font-weight:300}.sandbox{display:flex;align-items:baseline;gap:9px;min-width:0}.sandbox b{font-weight:580}.path{font:11px var(--mono);color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.conn{gap:6px;font-size:12px;color:var(--mute);white-space:nowrap}.dot{height:8px;width:8px;border-radius:50%;background:var(--leaf);flex:none}body:not([data-conn=connected]) .dot{background:transparent;border:1.5px solid var(--warm)}body:not([data-conn=connected]) .conn{color:var(--warm)}
+.readout{gap:8px;font-size:12px;background:transparent;padding:5px 8px;min-width:0;max-width:62vw}.readout code{font:12px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.readout.pending{border-color:#7a6038;background:#2b261d;color:var(--warm)}.readout.pending:hover{background:#372f22}.rtime{font-variant-numeric:tabular-nums;white-space:nowrap}
+.tabbar{min-height:44px;flex:none;background:#171c19;border-bottom:1px solid var(--line);padding:0 8px}.tabbar,.tab,.gin,.phead{user-select:none}#strip{display:flex;align-self:stretch;min-width:0;overflow-x:auto;scrollbar-width:thin}.tab{gap:4px;flex:none;border:0;border-right:1px solid #2f3932;padding:0 5px 0 10px;background:transparent;white-space:nowrap;border-radius:0}.tab.on{background:#283128;box-shadow:inset 0 -2px var(--leaf)}.tab.reveal{outline:1px dashed var(--leaf)}.tab-name,.tabmenu{border:0;background:transparent;padding:7px 1px;font-size:13px;display:flex;align-items:center;gap:7px;color:var(--mute);min-height:41px}.tab.on .tab-name{color:var(--fg)}.tablabel{max-width:22ch;overflow:hidden;text-overflow:ellipsis}.icon,.grip,.more,.tabmenu{background:transparent;border:0;min-width:28px;padding:3px 6px;display:inline-flex;align-items:center;justify-content:center;color:var(--mute)}.icon:hover,.more:hover,.tabmenu:hover{color:var(--fg)}.glyph{width:16px;height:16px;stroke:currentColor;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.6;flex:none}.glyph.dots{stroke-width:2.6}.badge{font:11px/1.4 system-ui;border-radius:3px;padding:2px 5px;color:var(--leaf);background:#304030;white-space:nowrap}.badge.warn{background:#403628;color:var(--warm)}.badge.err{color:var(--bad);background:#422d2e}.badge.off{color:var(--mute);background:#2e3531}.ins{box-shadow:inset 3px 0 var(--leaf)!important}.endins{box-shadow:inset -3px 0 var(--leaf)!important}
+#stage{flex:1;min-height:0;padding:10px;position:relative;overflow:auto;display:flex}#stage>.node{width:100%;height:100%}.node{min-width:0;min-height:0}.group{display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--line2);border-radius:5px;background:var(--bg)}.group.root{border-color:var(--line)}.gin{padding:2px 4px 2px 7px;gap:6px;min-height:28px;background:#252d27;font-size:11px;color:var(--mute)}.gin b{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.grab{cursor:grab;touch-action:none;user-select:none}.tab-name.grab{cursor:pointer}.grip{color:var(--dim);min-width:0;padding:0}.split{display:flex;flex:1;min-height:0;min-width:0}.split.rows{flex-direction:column}.split>.node{flex-basis:0}.divider{width:7px;flex:none;background:var(--bg);cursor:col-resize;touch-action:none;border-inline:1px solid var(--line)}.rows>.divider{height:7px;width:auto;cursor:row-resize;border-inline:0;border-block:1px solid var(--line)}.divider:hover,.divider:focus{background:#718761}.pane{display:flex;flex-direction:column;background:var(--term);overflow:hidden}#stage>.pane{border:1px solid var(--line);border-radius:5px}.phead{gap:7px;padding:4px 6px 4px 10px;min-height:36px;background:#222923;border-bottom:1px solid var(--line);color:var(--mute)}.phead strong{font-size:13px;font-weight:560;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pane.focus{outline:1px solid #8aa46f;outline-offset:-1px}.pane.focus .phead{background:#2a3429}.pane.focus .phead strong{color:var(--leaf)}.more{margin-left:auto}.body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto}.scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:14px 16px 8px;scrollbar-width:thin}.terminal{font:13px/1.65 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}.terminal .cmd{color:var(--fg)}.terminal .mut,.mut{color:var(--mute)}.terminal .accent,.accent{color:var(--leaf)}.terminal .code{color:var(--blue)}.terminal .patch{color:#b7d9a8;background:#27372b;display:block;padding:2px 7px}.terminal .tagline{color:var(--leaf);font-weight:650}.prompt{margin:6px 12px 12px;padding:6px 9px;display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:4px;color:var(--leaf);background:#161c18;font-family:var(--mono)}.prompt input{flex:1;border:0;background:transparent;padding:4px;color:var(--fg);font:12px var(--mono)}.prompt button{color:var(--mute);padding:1px 7px;background:transparent;font:11px system-ui}.tools{gap:6px;flex-wrap:wrap;padding:10px;border-bottom:1px solid var(--line);background:#1d241f}.tools>*{font-size:12px}.tools input{flex:1;min-width:85px}.chips{gap:2px;padding:5px;flex-wrap:wrap;border-bottom:1px solid var(--line)}.chips button{border:0;background:transparent;font-size:12px}.chips .selected,.chips [aria-pressed=true]{box-shadow:inset 0 -2px var(--leaf)}.netrow{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:8px 0;font:12px/1.5 var(--mono)}.netrow code{color:var(--fg);overflow-wrap:anywhere}.netrow small{color:var(--mute)}.netrow .kind{color:var(--blue)}.netrow .held{color:var(--warm)}.netrow .refused{color:var(--bad)}.choices{display:flex;gap:5px;flex-wrap:wrap}.choices button{font-size:12px}.primary{background:var(--leaf);color:#202e1b;border-color:var(--leaf)}.primary:hover{background:#dcecbb}.empty{margin:auto;padding:22px;color:var(--mute);text-align:center}.empty .choices{justify-content:center;margin-top:14px}footer{height:31px;flex:none;gap:10px;padding:0 14px;color:var(--mute);font-size:11px;border-top:1px solid var(--line)}.footdiv{height:11px;width:1px;background:var(--line2)}.footbutton{background:none;border:0;font-size:11px;color:var(--mute);padding:4px 6px}kbd{font:10px var(--mono);border:1px solid var(--edge);padding:1px 4px;border-radius:3px;white-space:nowrap}
+.holdrow{padding:11px 0;border-top:1px solid var(--line)}.holdrow:focus{outline:0}.holdrow:focus-visible{outline:2px solid var(--leaf);outline-offset:3px;border-radius:2px}.holdhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}.holdhead code{font:13px var(--mono);overflow-wrap:anywhere}.countdown{color:var(--warm);font:12px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}.decide{display:grid;grid-template-columns:1fr 1fr;gap:6px}.scroll .decide{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));max-width:760px}.choice{display:flex;gap:8px;align-items:flex-start;text-align:left;padding:6px 8px}.choice b{display:block;font-weight:600;font-size:12px}.choice small{display:block;font-size:11px;line-height:1.35;color:var(--mute)}.choice kbd{margin-top:2px}.choice.primary small{color:#3a4c31}.choice.primary kbd{border-color:#5c7350}.holdrow.settled code{color:var(--mute)}.result{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0;font-size:12px;color:var(--mute)}.result button{font-size:11px;padding:2px 8px}
+#pop,dialog,#holdlist{background:#242d26;border:1px solid var(--line2);color:var(--fg);box-shadow:0 12px 35px #0005;border-radius:7px}#pop{position:fixed;z-index:9;min-width:190px;padding:5px;max-height:75vh;overflow:auto}#pop button{display:block;width:100%;border:0;text-align:left;background:transparent;padding:8px 10px;font-size:13px}#pop button:hover,#pop button:focus-visible{background:#344035}#pop hr{border:0;border-top:1px solid var(--line);margin:4px 0}.poplabel{font-size:11px;color:var(--mute);padding:6px 10px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.danger{color:var(--bad)}
+#holdlist{position:fixed;z-index:8;top:calc(var(--appbar) + 5px);right:10px;width:min(410px,calc(100vw - 20px));max-height:calc(100dvh - var(--appbar) - 46px);overflow:auto;overscroll-behavior:contain;padding:12px 14px 10px}#holdlist h2{font-size:14px;margin:0}#holdlist h3{font-size:11px;font-weight:500;color:var(--mute);margin:12px 0 2px}#holdlist .note{margin:2px 0 10px}#holdlist .empty{padding:14px 0;text-align:left;border-top:1px solid var(--line)}.attentionlist button{width:100%;text-align:left;margin-top:5px;font-size:12px}
+dialog{width:min(490px,95vw);max-height:90vh;padding:18px}dialog::backdrop{background:#080e0abe}.dialoghead{justify-content:space-between;gap:10px}.dialoghead h2{font-size:17px;margin:0}.formline{display:grid;gap:4px;margin:12px 0;color:var(--mute);font-size:12px}.formline select,.formline input,.wide{width:100%;color:var(--fg)}.dialogfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:15px;flex-wrap:wrap}.note{font-size:12px;color:var(--mute)}.cmdlist{max-height:46vh;overflow:auto;margin-top:8px}.cmdrow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:7px 9px;border-radius:4px;font-size:13px;cursor:pointer}.cmdrow.on{background:#344035}.cmdrow[aria-disabled=true]{color:var(--dim);cursor:default}#toast{position:fixed;bottom:42px;left:50%;transform:translateX(-50%);max-width:min(560px,92vw);background:#344237;color:var(--fg);border:1px solid var(--line2);border-radius:5px;padding:7px 14px;pointer-events:none;font-size:12px;z-index:12}#toast:empty{display:none}#projection{position:fixed;z-index:5;background:#172019f5;border:2px dashed var(--leaf);border-radius:4px;pointer-events:none;padding:5px;display:flex}.schematic{flex:1;display:flex;min-width:0;min-height:0;gap:4px}.schematic.rows{flex-direction:column}.schematic.groupmini{padding:3px;border:1px solid var(--line2)}.leafmini{min-height:0;min-width:0;display:grid;place-content:center;text-align:center;padding:5px;border:1px solid #56645a;background:#252f27;color:var(--mute);overflow:hidden;font:12px var(--mono);overflow-wrap:anywhere}.incoming{background:#35472d;border:2px dashed var(--leaf);color:var(--leaf)}.miniwrap{display:flex;height:140px;margin:12px 0;background:#151b17;border-radius:4px;padding:5px}.targetmark{outline:2px solid var(--warm);outline-offset:-2px}#projection.invalid{color:var(--warm);align-items:center;justify-content:center;border-color:var(--warm)}.detachrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}.detachrow div{flex:1;min-width:0}.detachrow small{display:block;color:var(--mute);font:11px var(--mono)}.detachrow button{font-size:12px}.guide{padding-left:18px}.guide li{padding:4px 0}.recovery{justify-content:space-between}
+@media(max-width:680px){.appbar{padding:0 8px;gap:8px}.brand{font-size:15px}.brand svg{width:24px}.path,.slash{display:none}.tabbar{padding-left:2px}.tab{padding-left:6px}.tab-name{font-size:12px}.scroll{padding:10px}.terminal{font-size:12px}.phead{padding:4px;gap:3px}#stage{padding:4px}.prompt{margin:4px}.gin{padding:2px 4px}}@media(max-width:470px){#connText,.brand span{display:none}.tab .glyph{display:none}.decide{grid-template-columns:1fr}}@media(pointer:coarse){.tab-name,.tabmenu,.more,.grip,.icon,.footbutton{min-height:36px}}
+.phead .zoom-toggle{margin-left:auto;padding:3px 7px;background:transparent;color:var(--mute);font-size:12px;white-space:nowrap;display:flex;align-items:center;gap:6px}.phead .zoom-toggle:hover{color:var(--fg);background:var(--bar)}.phead .more{margin-left:0}.phead .zoom-toggle[hidden]+.more{margin-left:auto}
 </style></head><body>
-<header class="appbar"><div class="brand"><svg width="31" height="31" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#d4e7a8"/><path d="m5 9 11 6 11-6M5 15l11 6 11-6M9 21l7 4 7-4" fill="none" stroke="#243223" stroke-width="2.4" stroke-linejoin="round"/></svg>Vibepit</div><span class="slash">/</span><div class="sandbox"><b>vibepit</b><span class="path">~/projects/vibepit</span></div><span class="spacer"></span><button id="attention" class="quiet"></button><button id="demobtn" class="quiet">Demo controls</button></header>
-<nav class="tabbar" aria-label="Workspace tabs"><div id="strip"></div><button id="plus" class="icon" aria-label="New session">+</button><button id="types" class="icon" aria-label="Choose tab type">⌄</button></nav>
-<main id="stage" aria-label="Active tab layout"></main><div id="projection" hidden></div>
-<footer><span class="dot"></span><span id="conn">Connected</span><span class="footdiv"></span><span>Simulated sandbox</span><span class="spacer"></span><button id="help" class="footbutton">Workspace guide <kbd>?</kbd></button></footer>
-<div id="pop" hidden></div><dialog id="dlg"><div id="dialogBody"></div></dialog><div id="toast" role="status"></div>
+<header class="appbar"><div class="brand"><svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#d4e7a8"/><path d="m5 9 11 6 11-6M5 15l11 6 11-6M9 21l7 4 7-4" fill="none" stroke="#243223" stroke-width="2.4" stroke-linejoin="round"/></svg><span>Vibepit</span></div><span class="slash" aria-hidden="true">/</span><div class="sandbox"><b>vibepit</b><span class="path">~/projects/vibepit</span></div><span class="conn"><span class="dot" aria-hidden="true"></span><span id="connText"></span></span><span class="spacer"></span><button id="readout" class="readout" aria-haspopup="dialog" aria-expanded="false" aria-controls="holdlist"></button></header>
+<nav class="tabbar" aria-label="Workspace tabs"><div id="strip" role="tablist" aria-label="Tabs"></div><button id="plus" class="icon"></button><button id="types" class="icon" aria-haspopup="menu"></button></nav>
+<main id="stage" role="tabpanel" aria-label="Active tab layout"></main><div id="projection" hidden></div>
+<section id="holdlist" role="dialog" aria-labelledby="holdtitle" hidden><div class="dialoghead"><h2 id="holdtitle">Held connections</h2><button id="holdclose" class="icon" aria-label="Close held connections"></button></div><p class="note">A decision applies to the whole sandbox, whichever pane asked.</p><div id="holdrows"></div><div id="otherrows" class="attentionlist"></div></section>
+<footer><span>Simulated sandbox</span><span class="footdiv"></span><button id="demobtn" class="footbutton" aria-haspopup="menu">Demo controls</button><span class="spacer"></span><button id="commands" class="footbutton"></button></footer>
+<div id="pop" role="menu" hidden></div><dialog id="dlg"><div id="dialogBody"></div></dialog><div id="toast" role="status"></div><div id="announce" class="sr" aria-live="polite"></div>
 <script>'use strict';
 const $=s=>document.querySelector(s), el=(tag,cls='',txt='')=>{const x=document.createElement(tag);x.className=cls;x.textContent=txt;return x};
 const escapeText=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const uid=()=>Math.random().toString(36).slice(2,11), copy=x=>JSON.parse(JSON.stringify(x));
+const uid=()=>Math.random().toString(36).slice(2,11), cap=s=>s[0].toUpperCase()+s.slice(1);
 const names={session:'Session',monitor:'Monitor',logs:'Logs'};
-const paths={session:'M3 5h18v14H3z M7 9l3 3-3 3 M13 15h4',logs:'M4 6h16 M4 12h16 M4 18h11',monitor:'M12 3l8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6z M8 12l3 2 5-6',group:'M3 5h18v14H3z M12 5v14'};
-function icon(k){return '<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="'+paths[k]+'"/></svg>'}
-const networkKey='vp.mock.v3.network',sessionsKey='vp.mock.v3.sessions';
-const windowId=new URLSearchParams(location.search).get('window')||'primary',layoutKey='vp.mock.v3.layout.'+windowId;
+const paths={session:'M3 5h18v14H3z M7 9l3 3-3 3 M13 15h4',logs:'M4 6h16 M4 12h16 M4 18h11',monitor:'M12 3l8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6z M8 12l3 2 5-6',shield:'M12 3l8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6z',group:'M3 5h18v14H3z M12 5v14',hold:'M12 3l9 9-9 9-9-9z M12 8v5 M12 16h.01',chevron:'M6 9l6 6 6-6',close:'M6 6l12 12 M18 6L6 18',plus:'M12 5v14 M5 12h14',more:'M5 12h.01 M12 12h.01 M19 12h.01',grip:'M9 6h.01 M15 6h.01 M9 12h.01 M15 12h.01 M9 18h.01 M15 18h.01'};
+function icon(k){return '<svg class="glyph'+(k==='more'||k==='grip'?' dots':'')+'" viewBox="0 0 24 24" aria-hidden="true"><path d="'+paths[k]+'"/></svg>'}
+const networkKey='vp.mock.v4.network',sessionsKey='vp.mock.v4.sessions',layoutKey='vp.mock.v4.layout';
 function load(k){try{return JSON.parse(localStorage.getItem(k))}catch{return null}}
 function store(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 const entry=(style,text)=>({style,text});
-const holdDuration=20000;
+// The mockup uses a short deadline and a low session limit so both can be exercised.
+const holdDuration=20000,sessionLimit=8;
 const makeHold=host=>({id:uid(),host,deadline:Date.now()+holdDuration});
 const clock=()=>new Date().toLocaleTimeString('en-GB');
 function starterSession(name){
  const lines=name==='Codex'?[entry('mut','~/projects/vibepit  ·  experiment/desktop'),entry('cmd','$ codex'),entry('tagline','Codex'),entry('cmd','› Add coverage for reconnecting the proxy stream.'),entry('mut','Inspecting the event subscription and replay path.'),entry('code','  read  proxy/events.go\n  read  proxy/events_test.go'),entry('cmd','Adding a test for a subscriber reconnecting after a hold.'),entry('patch','+ func TestReplayAfterReconnect(t *testing.T) {\n+     stream := newTestSubscription(t)\n+     stream.Reconnect()\n+     assertHoldDeliveredOnce(t, stream)\n+ }'),entry('accent','Working · checking the existing test harness…')]:name==='Tests'?[entry('mut','~/projects/vibepit  ·  experiment/desktop'),entry('cmd','$ git status --short'),entry('code',' M proxy/events_test.go'),entry('cmd','$ go test ./proxy/... -v'),entry('mut','=== RUN   TestHoldRequest\n--- PASS: TestHoldRequest (0.01s)\n=== RUN   TestEventReplay\n--- PASS: TestEventReplay (0.02s)'),entry('accent','PASS'),entry('cmd','ok    vibepit/proxy    0.42s')]:[entry('mut','~/projects/vibepit  ·  experiment/desktop'),entry('cmd','Type help for simulated commands.')];
- return {name,lines,status:name==='Codex'?'Working':'',ended:false}
+ return {name,lines,status:name==='Codex'?'Working':'',program:name==='Codex'?'codex':'',created:Date.now(),ended:false}
 }
-let sessions=load(sessionsKey)||{},net=load(networkKey)||{holds:['registry.npmjs.org:443'],rules:[{host:'github.com:443',action:'Allow',scope:'Project'}],events:[['12:41:18','HTTP','Held','registry.npmjs.org:443'],['12:41:12','DNS','Allowed','github.com'],['12:41:11','HTTP','Allowed','github.com:443'],['12:39:08','DNS','Blocked','telemetry.example.net']]};
-let layout=load(layoutKey),online=true,drag=null,pending=null,toastTimer=0;
+function seedNetwork(){const h=makeHold('registry.npmjs.org:443');return {holds:[h],outcomes:{},rules:[{host:'github.com:443',action:'Allow',scope:'Saved'}],events:[[clock(),'HTTP','Held',h.host,h.id],['12:41:12','DNS','Allowed','github.com'],['12:41:11','HTTP','Allowed','github.com:443'],['12:39:08','DNS','Blocked','telemetry.example.net']]}}
+let sessions=load(sessionsKey)||{},net=load(networkKey)||seedNetwork();
+let layout=load(layoutKey),conn='connecting',online=false,drag=null,pending=null,toastTimer=0,stickyToast=false;
+let shellIntegration=true,failNextSave=false,passNext=false;
 const pane=(type,sid)=>({id:uid(),type,sid,query:'',action:'All',proto:'All',follow:true,page:'Requests',scroll:0,draft:''});
 const group=(dir,children)=>({id:uid(),dir,children,weights:children.map(()=>1)});
 const leaves=n=>n.children?n.children.flatMap(leaves):[n];
 const all=n=>n.children?[n,...n.children.flatMap(all)]:[n];
 const find=(n,id)=>all(n).find(x=>x.id===id);
-const title=n=>n.children?leaves(n).map(title).join(' + '):n.type==='session'?(sessions[n.sid]?.name||'Unavailable'):names[n.type];
-function newSession(name){const id=uid();sessions[id]=starterSession(name);store(sessionsKey,sessions);return pane('session',id)}
-function newTab(root){return {id:uid(),root,focus:leaves(root)[0].id}}
-if(!layout){const pair=group('cols',[newSession('Codex'),newSession('Tests')]),t=newTab(pair);layout={tabs:[t,newTab(pane('logs')),newTab(pane('monitor'))],active:t.id};store(layoutKey,layout)}
-// Upgrade holds saved by the earlier mockup without resetting the sandbox.
-net.holds=net.holds.map(h=>typeof h==='string'?makeHold(h):h);
+function title(n){if(!n.children)return n.type==='session'?(sessions[n.sid]?.name||'Unavailable'):names[n.type];const l=leaves(n).map(title);return l.length>2?l[0]+' + '+(l.length-1):l.join(' + ')}
+const liveCount=()=>Object.values(sessions).filter(s=>!s.ended).length;
+function shellName(){const used=new Set(Object.values(sessions).filter(s=>!s.ended).map(s=>s.name));let n=1;while(used.has('Shell '+n))n++;return 'Shell '+n}
+function newSession(name){const id=uid();sessions[id]=starterSession(name||shellName());store(sessionsKey,sessions);return pane('session',id)}
+function newTab(root,focus){return {id:uid(),root,focus:focus||leaves(root)[0].id}}
+function exampleLayout(){sessions={};const t=newTab(group('cols',[newSession('Codex'),newSession('Tests')]));return {tabs:[t,newTab(pane('logs')),newTab(pane('monitor'))],active:t.id}}
+if(!layout){layout=exampleLayout();store(layoutKey,layout)}
 store(networkKey,net);
 const tabs=()=>layout.tabs,active=()=>tabs().find(t=>t.id===layout.active),owner=id=>tabs().find(t=>find(t.root,id));
-const rank={'Needs input':4,Error:3,Working:2,Done:1};
-function statuses(n){return leaves(n).map(p=>({p,status:sessions[p.sid]?.status})).filter(o=>rank[o.status]&&(o.status!=='Done'||o.p.seenDone!==sessions[o.p.sid].turn)).sort((a,b)=>rank[b.status]-rank[a.status])}
+const current=()=>{const t=active();return t&&find(t.root,t.focus)};
+const viewCount=sid=>tabs().reduce((n,t)=>n+leaves(t.root).filter(p=>p.sid===sid).length,0);
+const rank={'Needs input':5,Error:4,Exited:3,Working:2,Done:1};
+function statusOf(p){if(p.type!=='session')return '';const s=sessions[p.sid];return !s||s.ended?'Exited':s.status||''}
+function statuses(n){return leaves(n).map(p=>({p,status:statusOf(p)})).filter(o=>rank[o.status]&&(o.status!=='Done'||o.p.seenDone!==sessions[o.p.sid].turn)).sort((a,b)=>rank[b.status]-rank[a.status])}
+const attentionItems=()=>tabs().flatMap(t=>statuses(t.root).filter(o=>rank[o.status]>=3).map(o=>({...o,t})));
 function save(){store(layoutKey,layout)}
-function tell(msg){$('#toast').textContent=msg;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').textContent='',2500)}
-function badge(status){return '<span class="badge '+(status==='Needs input'||status.includes('held')?'warn':status==='Error'?'err':'')+'">'+escapeText(status)+'</span>'}
-function updateHeader(){const a=$('#attention');a.textContent=net.holds.length?net.holds.length+' held request'+(net.holds.length===1?'':'s'):'Attention';a.classList.toggle('attention',net.holds.length>0);$('#conn').textContent=online?'Connected':'Reconnecting…'}
-function renderTabs(){
- const strip=$('#strip');strip.replaceChildren();for(const t of tabs()){
-  const b=el('div','tab'+(t===active()?' on':''));b.dataset.tab=t.id;
-  const name=el('button','tab-name grab'),s=statuses(t.root),label=title(t.root);
-  const hasMonitor=leaves(t.root).some(p=>p.type==='monitor');
-  name.innerHTML=icon(t.root.children?'group':t.root.type)+escapeText(label)+(s[0]?badge(s[0].status):'')+(hasMonitor&&net.holds.length?badge(net.holds.length+' held'):'');
-  name.setAttribute('aria-label',[label,...s.map(o=>title(o.p)+' '+o.status)].join(', '));name.title=name.getAttribute('aria-label');name.setAttribute('aria-pressed',String(t===active()));name.dataset.grab=t.root.id;name.dataset.unit='tab';name.onclick=()=>selectTab(t.id);
-  const more=el('button','tabmenu','⋮');more.setAttribute('aria-label','Tab actions for '+label);more.onclick=()=>tabMenu(t,more);b.append(name,more);strip.append(b)
+function tell(msg,sticky=false){$('#toast').textContent=msg;clearTimeout(toastTimer);stickyToast=sticky;if(!sticky)toastTimer=setTimeout(()=>$('#toast').textContent='',4500)}
+function clearSticky(){if(stickyToast){stickyToast=false;$('#toast').textContent=''}}
+function badge(status){return '<span class="badge '+(status==='Needs input'?'warn':status==='Error'?'err':status==='Exited'?'off':'')+'">'+escapeText(status)+'</span>'}
+function btn(label,fn,cls=''){const b=el('button',cls,label);b.type='button';b.onclick=fn;return b}
+function iconBtn(kind,label,fn,cls='icon'){const b=btn('',fn,cls);b.innerHTML=icon(kind);b.setAttribute('aria-label',label);b.title=label;return b}
+
+// Keyboard commands. A browser keeps some of these chords for itself, so the palette runs them all.
+const mac=/Mac|iPhone|iPad/.test(navigator.platform);
+const chords=mac?{palette:'⌘⇧P',holds:'⌘⇧H',left:'⌘⌥←',right:'⌘⌥→',up:'⌘⌥↑',down:'⌘⌥↓',nextTab:'⌃Tab',prevTab:'⌃⇧Tab',newTab:'⌘T',splitRight:'⌘D',splitBelow:'⌘⇧D',zoom:'⌘⇧M',close:'⌘W',hide:'⌘⇧W'}:{palette:'Ctrl+Shift+P',holds:'Ctrl+Shift+H',left:'Ctrl+Shift+←',right:'Ctrl+Shift+→',up:'Ctrl+Shift+↑',down:'Ctrl+Shift+↓',nextTab:'Ctrl+Tab',prevTab:'Ctrl+Shift+Tab',newTab:'Ctrl+Shift+T',splitRight:'Ctrl+Shift+D',splitBelow:'Ctrl+Shift+E',zoom:'Ctrl+Shift+M',close:'Ctrl+Shift+W',hide:'Ctrl+Shift+Alt+W'};
+function chordOf(e){
+ const k=e.key.length===1?e.key.toUpperCase():e.key,digit=/^Digit[1-9]$/.test(e.code)?Number(e.code.slice(5)):0;
+ const arrows={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down'};
+ if(e.ctrlKey&&!e.metaKey&&!e.altKey&&k==='Tab')return e.shiftKey?'prevTab':'nextTab';
+ if(mac){
+  if(!e.metaKey||e.ctrlKey)return null;
+  if(e.altKey)return e.shiftKey?null:arrows[k]||null;
+  if(e.shiftKey)return {P:'palette',H:'holds',D:'splitBelow',M:'zoom',W:'hide'}[k]||null;
+  return digit||{T:'newTab',D:'splitRight',W:'close'}[k]||null
  }
- updatePlusLabel();updateHeader()
+ if(!e.ctrlKey||!e.shiftKey||e.metaKey)return null;
+ if(e.altKey)return k==='W'?'hide':null;
+ return digit||arrows[k]||{P:'palette',H:'holds',T:'newTab',D:'splitRight',E:'splitBelow',M:'zoom',W:'close'}[k]||null
 }
-function plusType(){const t=tabs().at(-1);return t?(find(t.root,t.focus)||leaves(t.root)[0]).type:'session'}
-function updatePlusLabel(){const b=$('#plus');b.title=b.ariaLabel='New '+names[plusType()].toLowerCase()+' tab'}
-function setFocus(id,seen=true){const t=active();if(!t||!find(t.root,id))return;t.focus=id;updatePlusLabel();const p=find(t.root,id),s=sessions[p.sid];if(seen&&s?.status==='Done'&&p.seenDone!==s.turn){p.seenDone=s.turn;renderTabs()}save();$('#stage').querySelectorAll('.pane').forEach(x=>x.classList.toggle('focus',x.dataset.node===id))}
+function stepTab(d){const i=tabs().indexOf(active());if(tabs().length>1)selectTab(tabs()[(i+d+tabs().length)%tabs().length].id)}
+function focusDir(dir){
+ const t=active();if(!t||zoomedPane)return;const here=cache.get(t.focus)?.getBoundingClientRect();if(!here)return;
+ let best=null;
+ for(const p of leaves(t.root)){
+  if(p.id===t.focus||!cache.get(p.id)?.isConnected)continue;const r=cache.get(p.id).getBoundingClientRect();
+  const side={left:r.right<=here.left+1,right:r.left>=here.right-1,up:r.bottom<=here.top+1,down:r.top>=here.bottom-1}[dir];if(!side)continue;
+  const across=dir==='left'||dir==='right',overlap=across?Math.min(r.bottom,here.bottom)-Math.max(r.top,here.top):Math.min(r.right,here.right)-Math.max(r.left,here.left);if(overlap<=0)continue;
+  const gap={left:here.left-r.right,right:r.left-here.right,up:here.top-r.bottom,down:r.top-here.bottom}[dir];
+  if(!best||gap<best.gap-1||Math.abs(gap-best.gap)<=1&&overlap>best.overlap)best={p,gap,overlap}
+ }
+ if(best){setFocus(best.p.id);focusPane(best.p.id)}
+}
+const act={
+ palette:()=>palette(),holds:()=>toggleHolds(),newTab:()=>addTab('session'),
+ splitRight:()=>{const p=current();if(p)splitShell(p,'cols')},splitBelow:()=>{const p=current();if(p)splitShell(p,'rows')},
+ zoom:()=>{const t=active();if(t?.root.children)toggleZoom(t.focus)},close:()=>{const p=current();if(p)requestClose(p.id)},
+ left:()=>focusDir('left'),right:()=>focusDir('right'),up:()=>focusDir('up'),down:()=>focusDir('down'),
+ nextTab:()=>stepTab(1),prevTab:()=>stepTab(-1),hide:()=>tell('Hide window. The mockup has no native window to hide.')
+};
+function deliverKey(e){
+ const desc=[e.ctrlKey&&'Ctrl',e.metaKey&&(mac?'Command':'Meta'),e.altKey&&(mac?'Option':'Alt'),e.shiftKey&&'Shift',e.key.length===1?e.key.toUpperCase():e.key].filter(Boolean).join('+');
+ const p=current(),s=p&&sessions[p.sid];
+ if(p?.type==='session'&&s&&!s.ended){s.lines.push(entry('mut','Program received '+desc));updateSessions(p.sid)}else tell('Sent '+desc+' to the focused pane.')
+}
+
+// Connection state and the header readout.
+function setConn(state){conn=state;online=state==='connected';document.body.dataset.conn=state;$('#plus').disabled=$('#types').disabled=!online;refreshTerminals();redrawNet()}
+const blocksIn=(h,now=Date.now())=>'blocks in '+Math.max(0,Math.ceil((h.deadline-now)/1000))+'s';
+function updateHeader(){
+ const r=$('#readout'),holds=online?[...net.holds].sort((a,b)=>a.deadline-b.deadline):[],others=attentionItems();
+ $('#connText').textContent={connecting:'Connecting…',connected:'Connected',reconnecting:'Reconnecting…',lost:'Connection lost',unsupported:'Sandbox too old'}[conn];
+ let html,label;
+ if(!online){html=icon('shield')+'<span>Holds withdrawn</span>';label='Held connections are withdrawn until the window is connected'}
+ else if(holds.length){const h=holds[0];html=icon('hold')+'<code>'+escapeText(h.host)+'</code><span class="rtime">'+blocksIn(h)+'</span>'+(holds.length>1?'<span class="badge warn">+'+(holds.length-1)+'</span>':'');label=holds.length+' held connection'+(holds.length===1?'':'s')+'. Next: '+h.host}
+ else{html=icon('shield')+'<span>Holding enabled</span>';label='Holding is enabled for this sandbox. No connections are held'}
+ if(others.length){html+='<span class="badge '+(others[0].status==='Needs input'?'warn':others[0].status==='Error'?'err':'off')+'">'+others.length+(others.length===1?' pane needs':' panes need')+' attention</span>';label+='. '+others.map(o=>title(o.p)+' '+o.status.toLowerCase()).join(', ')}
+ html+=icon('chevron');if(r.dataset.html!==html){r.innerHTML=html;r.dataset.html=html}
+ r.setAttribute('aria-label',label);r.title='Held connections ('+chords.holds+')';r.classList.toggle('pending',holds.length>0)
+}
+
+function renderTabs(){
+ const strip=$('#strip'),af=document.activeElement,keep=strip.contains(af)&&{tab:af.closest('.tab')?.dataset.tab,menu:af.classList.contains('tabmenu')};
+ strip.replaceChildren();for(const t of tabs()){
+  const b=el('div','tab'+(t===active()?' on':''));b.dataset.tab=t.id;
+  const name=el('button','tab-name grab'),s=statuses(t.root),label=title(t.root);name.type='button';
+  name.innerHTML=icon(t.root.children?'group':t.root.type)+'<span class="tablabel">'+escapeText(label)+'</span>'+(s[0]?badge(s[0].status):'');
+  const full=t.root.children?leaves(t.root).map(title).join(' + '):label;
+  name.setAttribute('aria-label',[full,...s.map(o=>title(o.p)+' '+o.status.toLowerCase())].join(', '));name.title=name.getAttribute('aria-label');name.setAttribute('role','tab');name.setAttribute('aria-selected',String(t===active()));name.dataset.grab=t.root.id;name.dataset.unit='tab';name.onclick=()=>selectTab(t.id);
+  const more=iconBtn('more','Tab actions for '+full,()=>tabMenu(t,more),'tabmenu');more.setAttribute('aria-haspopup','menu');b.append(name,more);strip.append(b)
+ }
+ if(keep)strip.querySelector('[data-tab="'+keep.tab+'"] '+(keep.menu?'.tabmenu':'.tab-name'))?.focus({preventScroll:true});
+ updateHeader()
+}
+function setFocus(id,seen=true){const t=active();if(!t||!find(t.root,id))return;t.focus=id;const p=find(t.root,id),s=sessions[p.sid];if(seen&&s?.status==='Done'&&p.seenDone!==s.turn){p.seenDone=s.turn;renderTabs()}save();$('#stage').querySelectorAll('.pane').forEach(x=>x.classList.toggle('focus',x.dataset.node===id))}
 function selectTab(id){if(id!==layout.active||active()?.focus!==zoomedPane)zoomedPane=null;layout.active=id;save();render();const t=active();if(t){setFocus(t.focus);renderTabs();focusPane(t.focus)}}
 function focusPane(id){const n=document.getElementById('view-'+id);(n?.querySelector('.prompt input:not(:disabled)')||n?.querySelector('.phead button:not([hidden])'))?.focus({preventScroll:true})}
 const cache=new Map();
@@ -76,102 +149,147 @@ function toggleZoom(id){
  zoomedPane=zoomedPane===id?null:id;
  setFocus(id);render();focusPane(id)
 }
+// Restore layout carries the status of the siblings that zoom hides.
+function paintZoom(n,t){
+ const z=cache.get(n.id)?.querySelector('.zoom-toggle');if(!z)return;const on=zoomedPane===n.id&&!drag,hidden=on?statuses(t.root).filter(o=>o.p.id!==n.id):[];
+ z.hidden=!t.root.children;z.innerHTML=(on?'Restore layout':'Zoom')+(hidden[0]?badge(hidden[0].status):'');
+ z.setAttribute('aria-label',on?['Restore layout',...hidden.map(o=>title(o.p)+' '+o.status.toLowerCase())].join(', '):'Zoom pane · '+title(n));z.title=(on?'Restore layout':'Zoom pane')+' ('+chords.zoom+')'
+}
 function scrollRemember(){for(const [id,item] of cache){if(!item.isConnected)continue;const p=owner(id)&&find(owner(id).root,id),v=item.querySelector('.scroll');if(p&&v)p.scroll=v.scrollTop}}
-function render(reveal=null){const selection=window.getSelection(),a=selection?.anchorNode,f=selection?.focusNode,ao=selection?.anchorOffset,fo=selection?.focusOffset;const restore=a&&f&&!selection.isCollapsed&&a.parentElement?.closest('.terminal')===f.parentElement?.closest('.terminal')&&a.parentElement?.closest('.terminal');scrollRemember();const t=reveal?tabs().find(a=>a.id===reveal):active();renderTabs();const stage=$('#stage');if(t){const zoomTarget=!drag&&t.root.children&&zoomedPane&&find(t.root,zoomedPane);const visible=zoomTarget||t.root;stage.replaceChildren(build(visible,t));const mn=minSize(visible);stage.firstElementChild.style.minWidth=mn.w+'px';stage.firstElementChild.style.minHeight=mn.h+'px';for(const p of leaves(t.root)){const s=cache.get(p.id)?.querySelector('.scroll');if(s)s.scrollTop=p.scroll||0}}else{const d=el('div','empty','No tabs open in this sandbox.');d.append(btn('Open a session',()=>addTab('session')));stage.replaceChildren(d)}if(restore&&a.isConnected&&f.isConnected)selection.setBaseAndExtent(a,ao,f,fo)}
-function btn(label,fn,cls=''){const b=el('button',cls,label);b.type='button';b.onclick=fn;return b}
-function build(n,t){
- if(!n.children){let v=cache.get(n.id);if(!v){v=makePane(n);cache.set(n.id,v)}v.classList.toggle('focus',t.focus===n.id);
- const z=v.querySelector('.zoom-toggle'),isZoomed=zoomedPane===n.id&&!drag;
- z.hidden=!t.root.children;z.textContent=isZoomed?'Restore layout':'Zoom';z.ariaLabel=(isZoomed?'Restore layout':'Zoom pane')+' · '+title(n);z.title=z.ariaLabel+' (Ctrl+Shift+Enter or ⌘⇧Enter)';
- return v}
- const v=el('section','node group');v.dataset.node=n.id;const h=el('div','gin');h.dataset.grab=n.id;h.classList.add('grab');h.innerHTML='<span class="grip" aria-hidden="true">⠿</span>'+icon('group')+'<b>'+escapeText(title(n))+'</b>';
- const m=btn('Group actions',()=>menu(m,[title(n),['Move group…',()=>moveDialog(n.id)],['Equalize sizes',()=>{
-  n.weights=n.children.map(()=>1);save();render();focusPane(t.focus)
- }]]),'more');m.ariaLabel='Group actions for '+title(n);h.append(m);const split=el('div','split '+n.dir);
- n.children.forEach((c,i)=>{if(i)split.append(divider(n,i-1,split));const box=build(c,t),minimum=minSize(c);box.style.minWidth=minimum.w+'px';box.style.minHeight=minimum.h+'px';box.style.flexGrow=n.weights[i];split.append(box)});v.append(h,split);return v
+function render(reveal=null){const selection=window.getSelection(),a=selection?.anchorNode,f=selection?.focusNode,ao=selection?.anchorOffset,fo=selection?.focusOffset;const restore=a&&f&&!selection.isCollapsed&&a.parentElement?.closest('.terminal')===f.parentElement?.closest('.terminal')&&a.parentElement?.closest('.terminal');scrollRemember();const t=reveal?tabs().find(a=>a.id===reveal):active();renderTabs();const stage=$('#stage');if(t){const zoomTarget=!drag&&t.root.children&&zoomedPane&&find(t.root,zoomedPane);const visible=zoomTarget||t.root;stage.replaceChildren(build(visible,t,true));const mn=minSize(visible,true);stage.firstElementChild.style.minWidth=mn.w+'px';stage.firstElementChild.style.minHeight=mn.h+'px';for(const p of leaves(t.root)){const s=cache.get(p.id)?.querySelector('.scroll');if(s)s.scrollTop=p.scroll||0}}else{const d=el('div','empty','No tabs are open in this sandbox.'),row=el('div','choices');const first=btn('Open a session',()=>addTab('session'),'primary');first.disabled=!online;row.append(first,btn('Open Monitor',()=>addTab('monitor')),btn('Attach session…',detachedList));d.append(row);stage.replaceChildren(d)}if(restore&&a.isConnected&&f.isConnected)selection.setBaseAndExtent(a,ao,f,fo)}
+// The root group of a tab has no header: the tab is its handle.
+function build(n,t,top=false){
+ if(!n.children){let v=cache.get(n.id);if(!v){v=makePane(n);cache.set(n.id,v)}v.classList.toggle('focus',t.focus===n.id);paintZoom(n,t);return v}
+ const v=el('section','node group'+(top?' root':''));v.dataset.node=n.id;
+ if(!top){const h=el('div','gin grab');h.dataset.grab=n.id;h.innerHTML='<span class="grip" aria-hidden="true">'+icon('grip')+'</span>'+icon('group')+'<b>'+escapeText(title(n))+'</b>';
+  const m=iconBtn('more','Group actions for '+title(n),()=>menu(m,[title(n),['Move group…',()=>moveDialog(n.id)],['Equalize sizes',()=>equalize(n,t)]]),'more');m.setAttribute('aria-haspopup','menu');h.append(m);v.append(h)}
+ const split=el('div','split '+n.dir);
+ n.children.forEach((c,i)=>{if(i)split.append(divider(n,i-1,split));const box=build(c,t),minimum=minSize(c);box.style.minWidth=minimum.w+'px';box.style.minHeight=minimum.h+'px';box.style.flexGrow=n.weights[i];split.append(box)});v.append(split);return v
 }
-function minSize(n){if(!n.children)return {w:124,h:86};const c=n.children.map(minSize),g=7*(c.length-1);return {w:n.dir==='cols'?c.reduce((s,x)=>s+x.w,0)+g+2:Math.max(...c.map(x=>x.w))+2,h:32+(n.dir==='rows'?c.reduce((s,x)=>s+x.h,0)+g:Math.max(...c.map(x=>x.h)))}}
+function equalize(n,t){n.weights=n.children.map(()=>1);save();render();focusPane(t.focus)}
+function minSize(n,top=false){if(!n.children)return {w:124,h:86};const c=n.children.map(x=>minSize(x)),g=7*(c.length-1);return {w:n.dir==='cols'?c.reduce((s,x)=>s+x.w,0)+g+2:Math.max(...c.map(x=>x.w))+2,h:(top?2:32)+(n.dir==='rows'?c.reduce((s,x)=>s+x.h,0)+g:Math.max(...c.map(x=>x.h)))}}
 function divider(n,i,parent){
- const d=el('div','divider');d.tabIndex=0;d.setAttribute('role','separator');d.setAttribute('aria-label','Resize adjacent panes');d.setAttribute('aria-orientation',n.dir==='cols'?'vertical':'horizontal');
- function sizing(){const a=d.previousElementSibling,b=d.nextElementSibling,cols=n.dir==='cols',key=cols?'width':'height',x=a.getBoundingClientRect()[key],y=b.getBoundingClientRect()[key],w=n.weights[i]+n.weights[i+1],min=cols?'w':'h';return delta=>{const first=Math.max(minSize(n.children[i])[min],Math.min(x+y-minSize(n.children[i+1])[min],x+delta));n.weights[i]=w*first/(x+y);n.weights[i+1]=w-n.weights[i];a.style.flexGrow=n.weights[i];b.style.flexGrow=n.weights[i+1]}}
- d.onpointerdown=e=>{const adjust=sizing(),k=n.dir==='cols'?'clientX':'clientY',start=e[k];d.setPointerCapture(e.pointerId);d.onpointermove=f=>adjust(f[k]-start);d.onpointerup=d.onpointercancel=()=>{d.onpointermove=null;save()};e.preventDefault()};
- d.onkeydown=e=>{const delta={ArrowLeft:-20,ArrowRight:20,ArrowUp:-20,ArrowDown:20}[e.key];if(delta){e.preventDefault();sizing()(delta);save()}};return d
+ const d=el('div','divider'),cols=n.dir==='cols';d.tabIndex=0;d.setAttribute('role','separator');d.setAttribute('aria-label','Resize adjacent panes');d.setAttribute('aria-orientation',cols?'vertical':'horizontal');
+ const report=()=>d.setAttribute('aria-valuenow',Math.round(100*n.weights[i]/(n.weights[i]+n.weights[i+1])));report();
+ function sizing(){const a=d.previousElementSibling,b=d.nextElementSibling,key=cols?'width':'height',x=a.getBoundingClientRect()[key],y=b.getBoundingClientRect()[key],w=n.weights[i]+n.weights[i+1],min=cols?'w':'h';return delta=>{const first=Math.max(minSize(n.children[i])[min],Math.min(x+y-minSize(n.children[i+1])[min],x+delta));n.weights[i]=w*first/(x+y);n.weights[i+1]=w-n.weights[i];a.style.flexGrow=n.weights[i];b.style.flexGrow=n.weights[i+1];report()}}
+ d.onpointerdown=e=>{const adjust=sizing(),k=cols?'clientX':'clientY',start=e[k];d.setPointerCapture(e.pointerId);d.onpointermove=f=>adjust(f[k]-start);d.onpointerup=d.onpointercancel=()=>{d.onpointermove=null;save()};e.preventDefault()};
+ d.onkeydown=e=>{const delta=(cols?{ArrowLeft:-20,ArrowRight:20}:{ArrowUp:-20,ArrowDown:20})[e.key];if(delta&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();sizing()(delta);save()}};return d
 }
-function makePane(p){const v=el('section','node pane');v.id='view-'+p.id;v.dataset.node=p.id;v.onfocusin=()=>{if(!drag)setFocus(p.id)};v.addEventListener('pointerdown',()=>{if(!drag)setFocus(p.id)},true);
- const head=el('div','phead grab');head.dataset.grab=p.id;head.innerHTML='<span class="grip" aria-hidden="true">⠿</span>'+icon(p.type)+'<strong>'+escapeText(title(p))+'</strong><span class="pstatus"></span>';const more=btn('⋯',()=>paneMenu(p,more),'more');more.ariaLabel='Pane actions for '+title(p);head.append(btn('Zoom',()=>toggleZoom(p.id),'zoom-toggle'),more);
+function makePane(p){const v=el('section','node pane');v.id='view-'+p.id;v.dataset.node=p.id;v.setAttribute('role','group');v.setAttribute('aria-label',title(p));v.addEventListener('focusin',()=>{if(!drag)setFocus(p.id)});v.addEventListener('pointerdown',()=>{if(!drag)setFocus(p.id)},true);
+ const head=el('div','phead grab');head.dataset.grab=p.id;head.innerHTML='<span class="grip" aria-hidden="true">'+icon('grip')+'</span>'+icon(p.type)+'<strong>'+escapeText(title(p))+'</strong><span class="pstatus"></span>';const more=iconBtn('more','Pane actions for '+title(p),()=>paneMenu(p,more),'more');more.setAttribute('aria-haspopup','menu');head.append(btn('Zoom',()=>toggleZoom(p.id),'zoom-toggle'),more);
  const body=el('div','body');v.append(head,body);if(p.type==='session')terminal(p,v);else network(p,v);return v}
-function terminal(p,v){const body=v.querySelector('.body'),scroll=el('div','scroll terminal'),form=el('form','prompt'),input=document.createElement('input');input.ariaLabel='Command in '+title(p);input.placeholder='Enter a command';input.value=p.draft||'';input.autocomplete='off';input.spellcheck=false;input.oninput=()=>{p.draft=input.value;save()};const enter=el('button','','↵');enter.ariaLabel='Run simulated command';form.append(el('span','','❯'),input,enter);form.onsubmit=e=>{e.preventDefault();if(!input.value.trim()||!online||!sessions[p.sid]||sessions[p.sid].ended)return;const cmd=input.value.trim();p.draft=input.value='';command(p,cmd);save()};body.append(scroll,form);paintSession(p,v)}
+function terminal(p,v){const body=v.querySelector('.body'),scroll=el('div','scroll terminal'),form=el('form','prompt'),input=document.createElement('input');input.placeholder='Enter a command';input.value=p.draft||'';input.autocomplete='off';input.spellcheck=false;input.oninput=()=>{p.draft=input.value;save()};const enter=el('button','','Run');enter.setAttribute('aria-label','Run simulated command');const mark=el('span','','❯');mark.setAttribute('aria-hidden','true');form.append(mark,input,enter);form.onsubmit=e=>{e.preventDefault();if(!input.value.trim()||!online||!sessions[p.sid]||sessions[p.sid].ended)return;const cmd=input.value.trim();p.draft=input.value='';command(p,cmd);save()};body.append(scroll,form);paintSession(p,v)}
 function paintSession(p,v){const s=sessions[p.sid],name=title(p);
- v.querySelector('.phead strong').textContent=name;
- v.querySelector('.phead .more').ariaLabel='Pane actions for '+name;
- v.querySelector('.prompt input').ariaLabel='Command in '+name;
+ v.setAttribute('aria-label',name);v.querySelector('.phead strong').textContent=name;
+ const more=v.querySelector('.phead .more');more.setAttribute('aria-label','Pane actions for '+name);more.title='Pane actions for '+name;
+ v.querySelector('.prompt input').setAttribute('aria-label','Command in '+name);
  let recovery=v.querySelector('.recovery');
  if(!s||s.ended){
-  if(!recovery){recovery=el('div','tools recovery');recovery.append(el('span','',s?'Session exited':'Session unavailable'),btn('Open replacement shell',()=>replaceExited(p)));v.querySelector('.body').append(recovery)}
+  if(!recovery){recovery=el('div','tools recovery');recovery.append(el('span','',s?'Session exited. Its output above stays until you close the pane.':'Session exited. Its output is no longer available.'),btn('Open replacement shell',()=>replaceExited(p)));v.querySelector('.body').append(recovery)}
   recovery.querySelector('button').disabled=!online
  }else recovery?.remove();
- v.querySelector('.scroll').innerHTML=(s?.lines||[entry('mut','Session unavailable')]).map(l=>'<div class="'+l.style+'">'+escapeText(l.text)+'</div>').join('<div style="height:7px"></div>');v.querySelector('input').disabled=!online||!s||s.ended;v.querySelector('.pstatus').innerHTML=s?.ended?badge('Exited'):s?.status?badge(s.status):''}
+ v.querySelector('.scroll').innerHTML=(s?.lines||[]).map(l=>'<div class="'+l.style+'">'+escapeText(l.text)+'</div>').join('<div style="height:7px"></div>');v.querySelector('.prompt input').disabled=!online||!s||s.ended;v.querySelector('.pstatus').innerHTML=!s||s.ended?badge('Exited'):s.status?badge(s.status):''}
+function canCreate(){
+ if(!online){tell('Reconnect to open a session.');return false}
+ if(liveCount()<sessionLimit)return true;
+ const b=modal('Session limit reached'),foot=el('div','dialogfoot');
+ b.append(el('p','note','This sandbox allows '+sessionLimit+' sessions and all are in use. End a session you no longer need to open another.'));
+ foot.append(btn('Cancel',()=>dlg.close()),btn('Manage sessions',detachedList,'primary'));b.append(foot);return false
+}
 function replaceExited(p){
- if(!online||sessions[p.sid]&&!sessions[p.sid].ended)return;
- p.sid=newSession('Shell').sid;p.draft='';p.scroll=0;delete p.seenDone;
- cache.delete(p.id);save();render();focusPane(p.id)
+ if(sessions[p.sid]&&!sessions[p.sid].ended||!canCreate())return;
+ const old=p.sid;p.sid=newSession().sid;p.draft='';p.scroll=0;delete p.seenDone;if(!viewCount(old))delete sessions[old];
+ cache.delete(p.id);store(sessionsKey,sessions);save();render();focusPane(p.id)
 }
 function renameSession(p){
  const box=modal('Rename session'),form=el('form'),input=el('input');
  input.value=title(p);input.maxLength=64;input.required=true;input.autocomplete='off';
  const actions=el('div','dialogfoot'),cancel=btn('Cancel',()=>dlg.close()),submit=el('button','primary','Rename');
- cancel.type='button';actions.append(cancel,submit);form.append(field('Session name',input),actions);box.append(form);
+ actions.append(cancel,submit);form.append(field('Session name, up to 64 characters',input),actions);box.append(form);
  input.oninput=()=>input.setCustomValidity('');
  form.onsubmit=e=>{e.preventDefault();const name=input.value.trim();
-  if(!name){input.setCustomValidity('Enter a session name.');input.reportValidity();return}
+  if(!name||/\p{C}/u.test(name)){input.setCustomValidity(name?'Use printable characters only.':'Enter a session name.');input.reportValidity();return}
   if(!sessions[p.sid])return;
   sessions[p.sid].name=name;dlg.close();updateSessions(p.sid);render();focusPane(p.id)
  };
  input.focus();input.select()
 }
 function splitShell(p,dir){
- if(!online){tell('Reconnect to open a shell');return}
  const t=owner(p.id),view=cache.get(p.id);if(!t||!view)return;
- const rect=view.getBoundingClientRect(),splitMin=minSize(group(dir,[p,p]));
- if(rect.width<splitMin.w||rect.height<splitMin.h){tell('Too little space to split this pane.');return}
- const trial=substitute(cloneNode(t.root),p.id,group(dir,[p,p]));
- const extent=minSize(trial),stage=$('#stage').getBoundingClientRect();
- if(extent.w>stage.width-10||extent.h>stage.height-10){tell('Too little space in the tiled layout.');return}
- const fresh=newSession('Shell');t.root=substitute(t.root,p.id,group(dir,[p,fresh]));
+ const rect=view.getBoundingClientRect(),splitMin=minSize(group(dir,[p,p]),true);
+ if(rect.width<splitMin.w||rect.height<splitMin.h){tell('Too little space to split '+title(p)+'. Enlarge the pane or the window.',true);return}
+ const trial=normalize(substitute(cloneNode(t.root),p.id,group(dir,[p,p])));
+ const extent=minSize(trial,true),stage=$('#stage').getBoundingClientRect();
+ if(extent.w>stage.width-10||extent.h>stage.height-10){tell('Too little space in this tab for another pane.',true);return}
+ if(!canCreate())return;
+ const fresh=newSession();t.root=normalize(substitute(t.root,p.id,group(dir,[p,fresh])));
  t.focus=fresh.id;commit(layout)
 }
-function updateSessions(id){store(sessionsKey,sessions);for(const t of tabs())for(const p of leaves(t.root))if(p.sid===id&&cache.has(p.id))paintSession(p,cache.get(p.id));renderTabs()}
-function stateFor(p,status){const s=sessions[p.sid];if(!s||s.ended)return;s.status=status;s.turn=uid();s.lines.push(entry(status==='Error'?'cmd':'accent',{'Working':'Working · inspecting the workspace…','Done':'Done · turn completed.','Needs input':'Waiting for your input.','Error':'Agent reported an error.'}[status]||status));updateSessions(p.sid)}
-function command(p,cmd){const s=sessions[p.sid];s.lines.push(entry('cmd','$ '+cmd));const k=cmd.toLowerCase();if(k==='clear')s.lines=[];else if(['codex','claude','work'].includes(k))stateFor(p,'Working');else if(k==='done')stateFor(p,'Done');else if(k==='ask')stateFor(p,'Needs input');else{s.lines.push(entry('mut',k==='pwd'?'/home/dev/projects/vibepit':k==='ls'?'cmd/  docs/  experiments/  proxy/  go.mod':k.startsWith('go test')?'PASS\nok    vibepit/proxy    0.42s':k==='git status'?'On branch experiment/desktop\n M proxy/events_test.go':k==='help'?'Demo commands: pwd, ls, git status, go test, codex, claude, ask, done, clear':'Simulated shell. Type help to list commands.'))}updateSessions(p.sid);const sc=cache.get(p.id).querySelector('.scroll');sc.scrollTop=sc.scrollHeight}
-function selectBox(items,value,fn,label){const s=el('select');s.ariaLabel=label;for(const x of items){const [val,name]=Array.isArray(x)?x:[x,x];const o=el('option','',name);o.value=val;s.append(o)}s.value=value;s.onchange=()=>fn(s.value);return s}
-function network(p,v){const body=v.querySelector('.body');body.replaceChildren();
- if(p.type==='monitor'){const bar=el('div','chips');for(const pg of ['Requests','Logs','Hosts','Rules'])bar.append(btn(pg,()=>{p.page=pg;network(p,v);save()},p.page===pg?'selected':''));body.append(bar)}
- const isLog=p.type==='logs'||p.page==='Logs',sc=el('div','scroll');sc.setAttribute('aria-label',title(p)+' content');
- if(isLog){const tools=el('div','tools'),input=el('input');input.placeholder='Filter hosts…';input.ariaLabel='Filter hosts';input.value=p.query;
-  const filter=()=>{paintNetwork(p,v);save()};input.oninput=()=>{p.query=input.value;filter()};
-  tools.append(input,selectBox(['All','HTTP','DNS'],p.proto,x=>{p.proto=x;filter()},'Protocol filter'),selectBox(['All','Allowed','Blocked','Held','Denied','Expired'],p.action,x=>{p.action=x;filter()},'Action filter'));
-  const follow=btn(p.follow?'Following':'Paused',()=>{p.follow=!p.follow;follow.textContent=p.follow?'Following':'Paused';follow.setAttribute('aria-pressed',p.follow);if(p.follow)sc.scrollTop=0;save()});follow.setAttribute('aria-pressed',p.follow);tools.append(follow);body.append(tools)
- }body.append(sc);paintNetwork(p,v);sc.scrollTop=p.scroll||0
+function updateSessions(id){store(sessionsKey,sessions);for(const t of tabs())for(const p of leaves(t.root))if(p.sid===id&&cache.has(p.id))paintSession(p,cache.get(p.id));renderTabs();const t=active(),z=t&&zoomedPane&&find(t.root,zoomedPane);if(z)paintZoom(z,t);drawOthers()}
+function stateFor(p,status){const s=sessions[p.sid];if(!s||s.ended)return;s.status=status;s.program=s.program||'agent';s.turn=uid();s.lines.push(entry(status==='Error'?'cmd':'accent',{'Working':'Working · inspecting the workspace…','Done':'Done · turn completed.','Needs input':'Waiting for your input.','Error':'Agent reported an error.'}[status]||status));updateSessions(p.sid)}
+function command(p,cmd){const s=sessions[p.sid];s.lines.push(entry('cmd',(s.program?'› ':'$ ')+cmd));const k=cmd.toLowerCase();
+ if(k==='clear')s.lines=[];
+ else if(['codex','claude'].includes(k)){s.program=k;stateFor(p,'Working')}
+ else if(k==='work')stateFor(p,'Working');else if(k==='done')stateFor(p,'Done');else if(k==='ask')stateFor(p,'Needs input');
+ else if(k==='quit'&&s.program){s.lines.push(entry('mut',s.program+' exited. The shell is idle at its prompt.'));s.program='';s.status=''}
+ else if(k==='exit'&&!s.program){endSession(p.sid);return}
+ else s.lines.push(entry('mut',k==='pwd'?'/home/dev/projects/vibepit':k==='ls'?'cmd/  docs/  experiments/  proxy/  go.mod':k.startsWith('go test')?'PASS\nok    vibepit/proxy    0.42s':k==='git status'?'On branch experiment/desktop\n M proxy/events_test.go':k==='help'?'Demo commands: pwd, ls, git status, go test, codex, claude, ask, done, quit (leave the program), exit (end the shell), clear':'Simulated shell. Type help to list commands.'));
+ updateSessions(p.sid);const sc=cache.get(p.id).querySelector('.scroll');sc.scrollTop=sc.scrollHeight}
+function selectBox(items,value,fn,label){const s=el('select');s.setAttribute('aria-label',label);for(const x of items){const [val,name]=Array.isArray(x)?x:[x,x];const o=el('option','',name);o.value=val;s.append(o)}s.value=value;s.onchange=()=>fn(s.value);return s}
+
+// Held connections. Rows are keyed by hold and updated in place, so no control moves under the pointer.
+const choices=[
+ {k:'a',label:'Allow',scope:'Until the sandbox stops',allow:true,save:false,log:'Allowed'},
+ {k:'A',label:'Allow and save',scope:'Saved to .vibepit/network.yaml',allow:true,save:true,log:'Allowed'},
+ {k:'n',label:'Reject',scope:'Until the sandbox stops. A later allow overrides it.',allow:false,save:false,log:'Rejected'},
+ {k:'N',label:'Deny and save',scope:'Saved. Wins over any allow.',allow:false,save:true,log:'Denied'}];
+function holdRow(h){
+ const d=el('section','holdrow'),head=el('div','holdhead'),time=el('span','countdown'),row=el('div','decide');
+ d.tabIndex=-1;d.dataset.hold=h.id;d.dataset.host=h.host;d.dataset.deadline=h.deadline;head.append(el('code','',h.host),time);
+ for(const c of choices){const b=btn('',()=>decide(h.host,c.k,d),'choice'+(c.k==='a'?' primary':''));b.innerHTML='<kbd>'+c.k+'</kbd><span><b>'+c.label+'</b><small>'+c.scope+'</small></span>';row.append(b)}
+ d.append(head,row);return d
 }
-function paintNetwork(p,v){const sc=v.querySelector('.scroll');if(!sc)return;const old=sc.scrollTop,priorHeight=sc.scrollHeight;sc.replaceChildren();const page=p.type==='logs'?'Logs':p.page;
- if(page==='Requests'){if(!net.holds.length)sc.append(el('div','empty','No requests waiting.'));for(const hold of net.holds){const d=el('section','hold'),timer=el('span','countdown',remaining(hold));timer.dataset.deadline=hold.deadline;d.append(el('h3','',hold.host),el('p','','Held HTTP request · applies to this sandbox'),timer);const row=el('div','choices');for(const [lbl,allow,persist] of [['Allow for session',true,false],['Allow and save',true,true],['Reject',false,false],['Deny and save',false,true]])row.append(btn(lbl,()=>decide(hold.id,allow,persist),allow&&!persist?'primary':''));d.append(row);sc.append(d)}}
- if(page==='Logs'){for(const [time,proto,action,host] of net.events.filter(e=>(p.proto==='All'||e[1]===p.proto)&&(p.action==='All'||e[2]===p.action)&&e[3].toLowerCase().includes(p.query.toLowerCase()))){const d=el('div','netrow');d.append(el('small','',time),el('span','kind',proto),el('code','',host),el('span',action==='Allowed'?'accent':'held',action));sc.append(d)}if(!sc.childElementCount)sc.append(el('p','mut','No matching events.'))}
- if(page==='Hosts'){const h=new Map();for(const e of net.events){const host=e[3].split(':')[0];if(!h.has(host))h.set(host,{allowed:0,blocked:0,held:0});const row=h.get(host);row[e[2]==='Allowed'?'allowed':e[2]==='Held'?'held':'blocked']++}for(const [host,r] of h){const d=el('div','netrow');d.append(el('code','',host),el('small','',r.allowed+' allowed · '+r.blocked+' blocked · '+r.held+' held'));sc.append(d)}}
- if(page==='Rules'){for(const r of net.rules){const d=el('div','netrow');d.append(el('code','',r.host),el('span','kind',r.action),el('small','',r.scope));sc.append(d)}}
- if(page==='Logs')sc.scrollTop=p.follow?0:old+Math.max(0,sc.scrollHeight-priorHeight)
+function resetHolds(box,emptyText){box.replaceChildren();box._rows=new Map();box._empty=el('div','empty',emptyText);box.append(box._empty)}
+function syncHolds(box){
+ if(!box._rows)return;
+ for(const h of net.holds)if(!box._rows.has(h.id)){const r=holdRow(h);box._rows.set(h.id,r);box.append(r)}
+ for(const [id,r] of box._rows){
+  if(r.classList.contains('settled'))continue;
+  const h=net.holds.find(x=>x.id===id);
+  if(!h){settleRow(r,id);continue}
+  r.querySelectorAll('.choice').forEach(b=>b.disabled=!online);
+  r.querySelector('.countdown').textContent=online?blocksIn(h):'withdrawn';
+  r.setAttribute('aria-label',h.host+(online?', held connection':', withdrawn while the connection is down'))
+ }
+ box._empty.hidden=box._rows.size>0
 }
-function redrawNet(){
- for(const t of tabs())for(const p of leaves(t.root))if(p.type!=='session'&&cache.has(p.id))paintNetwork(p,cache.get(p.id));
- renderTabs();if(dlg.open&&dlg.getAttribute('aria-label')==='Workspace attention')attention()
+// A settled row keeps its height and becomes a result line until its list closes.
+function settleRow(r,id){
+ const had=r.contains(document.activeElement),text=net.outcomes[id]||'No longer held',host=r.dataset.host;
+ r.style.minHeight=r.offsetHeight+'px';r.classList.add('settled');r.querySelector('.countdown').remove();
+ const line=el('p','result',text);line.append(btn('Show in Monitor',()=>showHost(host)));r.querySelector('.decide').replaceWith(line);
+ r.setAttribute('aria-label',host+', '+text);if(had)r.focus({preventScroll:true})
 }
-function remaining(hold,now=Date.now()){return Math.max(0,Math.ceil((hold.deadline-now)/1000))+'s remaining'}
+function pruneSettled(box){if(!box._rows||box.matches(':hover')||box.contains(document.activeElement))return;for(const [id,r] of box._rows)if(r.classList.contains('settled')){r.remove();box._rows.delete(id)}box._empty.hidden=box._rows.size>0}
+function holdKeys(box){box.addEventListener('keydown',e=>{
+ if(e.ctrlKey||e.metaKey||e.altKey)return;const row=e.target.closest?.('.holdrow');
+ if(e.key==='ArrowDown'||e.key==='ArrowUp'){const rows=[...box.querySelectorAll('.holdrow')];if(!rows.length)return;e.preventDefault();const i=rows.indexOf(row);rows[i<0?0:(i+(e.key==='ArrowDown'?1:rows.length-1))%rows.length].focus()}
+ else if(row&&!row.classList.contains('settled')&&choices.some(c=>c.k===e.key)){e.preventDefault();decide(row.dataset.host,e.key,row)}
+})}
+function afterDecision(row){
+ const box=row?.parentElement;if(!box)return;const open=[...box.querySelectorAll('.holdrow:not(.settled)')];
+ const next=open.find(r=>row.compareDocumentPosition(r)&Node.DOCUMENT_POSITION_FOLLOWING)||open[0];
+ if(next)next.focus({preventScroll:true});else if(box===holdBox)closeHolds(true);else row.focus({preventScroll:true})
+}
+function setOutcome(h,log,text){net.outcomes[h.id]=text;const e=net.events.find(e=>e[4]===h.id);if(e)e[2]=log;const keys=Object.keys(net.outcomes);for(const k of keys.slice(0,Math.max(0,keys.length-40)))delete net.outcomes[k]}
 function removeExpired(now){
  const expired=net.holds.filter(h=>h.deadline<=now);if(!expired.length)return false;
  net.holds=net.holds.filter(h=>h.deadline>now);
- for(const h of expired)net.events.unshift([new Date(h.deadline).toLocaleTimeString('en-GB'),'HTTP','Expired',h.host]);
+ // Expiry changes the hold's existing log row. The proxy appends no second row.
+ for(const h of expired)setOutcome(h,'Timeout','Blocked after '+holdDuration/1000+'s');
  return true
 }
-// Serialize decisions and expiry across windows when Web Locks is available.
+// Serialize decisions and expiry across clients when Web Locks is available.
 async function changeNetwork(change){
  function run(){
   net=load(networkKey)||net;
@@ -183,56 +301,165 @@ async function changeNetwork(change){
 }
 function tickHolds(){
  const now=Date.now();if(net.holds.some(h=>h.deadline<=now)){void changeNetwork();return}
- document.querySelectorAll('[data-deadline]').forEach(e=>e.textContent=remaining({deadline:Number(e.dataset.deadline)},now))
+ if(online)document.querySelectorAll('.holdrow:not(.settled)').forEach(r=>r.querySelector('.countdown').textContent=blocksIn({deadline:Number(r.dataset.deadline)},now));
+ updateHeader()
 }
-function decide(id,allow,persist){if(!online){tell('Reconnect to decide a request');return}
- return changeNetwork(()=>{
-  const h=net.holds.find(x=>x.id===id);if(!h){tell('This request is no longer pending');return false}
-  net.holds=net.holds.filter(x=>x.id!==id);net.rules=net.rules.filter(x=>x.host!==h.host);
-  net.rules.push({host:h.host,action:allow?'Allow':'Deny',scope:persist?'Project':'Session'});
-  net.events.unshift([clock(),'HTTP',allow?'Allowed':'Denied',h.host]);tell((allow?'Allowed ':'Denied ')+h.host);return true
- })
+// A decision is a rule on the target. It applies even when the hold has already expired.
+async function decide(host,k,row){
+ if(!online){tell('Reconnect to decide a held connection.');return}
+ const c=choices.find(x=>x.k===k);if(!c)return;let msg='',failed=false;
+ await changeNetwork(()=>{
+  const h=net.holds.find(x=>x.host===host),verb=c.allow?'allowed':c.save?'denied':'rejected';
+  failed=c.save&&failNextSave;if(failed)failNextSave=false;
+  const saved=c.save&&!failed,scope=saved?'Saved':'Until the sandbox stops',action=c.allow?'Allow':c.save?'Deny':'Reject';
+  const denied=net.rules.some(r=>r.host===host&&r.action==='Deny');
+  net.rules=net.rules.filter(r=>r.host!==host||(c.allow?r.action==='Deny':c.save?r.action==='Allow':r.action!=='Reject'&&r.scope==='Saved'||r.action==='Deny'));
+  net.rules.push({host,action,scope});
+  if(h){net.holds=net.holds.filter(x=>x.id!==h.id);setOutcome(h,c.log,cap(verb)+(saved?' and saved':failed?', not saved':' until the sandbox stops'))}
+  msg=h?cap(verb)+' '+host+(saved?' and saved to .vibepit/network.yaml.':failed?'. Nothing was saved to .vibepit/network.yaml. The decision stands until the sandbox stops.':' until the sandbox stops.')
+   :host+' is '+verb+' for later requests. The held request had already been blocked.';
+  if(c.allow&&denied)msg+=' A deny rule still overrides it.';
+  return true
+ });
+ tell(msg,failed);afterDecision(row)
 }
+const seenHolds=new Set(net.holds.map(h=>h.id));
+function announceArrivals(){for(const h of net.holds)if(!seenHolds.has(h.id)){seenHolds.add(h.id);if(online)$('#announce').textContent='Held connection: '+h.host+'. '+cap(blocksIn(h))+'.'}}
 function addHold(){return changeNetwork(()=>{
  const host=['registry.npmjs.org:443','proxy.golang.org:443','api.github.com:443'].find(h=>!net.holds.some(x=>x.host===h))||'packages-'+uid().slice(0,4)+'.example.org:443';
- net.holds.push(makeHold(host));net.events.unshift([clock(),'HTTP','Held',host]);tell('New simulated hold · '+host);return true
+ const h=makeHold(host);net.holds.push(h);net.events.unshift([clock(),'HTTP','Held',host,h.id]);return true
 })}
-function addTab(type,existing){const p=existing|| (type==='session'?newSession('Shell'):pane(type)),t=newTab(p);tabs().push(t);selectTab(t.id)}
-function menu(anchor,items){const pop=$('#pop');pop.replaceChildren();for(const item of items){if(typeof item==='string'){pop.append(el('div','poplabel',item));continue}const [label,fn,cl]=item;pop.append(btn(label,()=>{hideMenu();fn()},cl||''))}
+function network(p,v){const body=v.querySelector('.body');body.replaceChildren();
+ if(p.type==='monitor'){const bar=el('div','chips');for(const pg of ['Requests','Logs','Hosts','Rules']){const b=btn(pg,()=>{p.page=pg;network(p,v);save();bar.parentElement.querySelector('[aria-pressed=true]')?.focus()});b.setAttribute('aria-pressed',String(p.page===pg));bar.append(b)}body.append(bar)}
+ const isLog=p.type==='logs'||p.page==='Logs',sc=el('div','scroll');sc.setAttribute('aria-label',title(p)+' content');
+ if(isLog){const tools=el('div','tools'),input=el('input');input.placeholder='Filter hosts…';input.setAttribute('aria-label','Filter hosts');input.value=p.query;
+  const filter=()=>{paintNetwork(p,v);save()};input.oninput=()=>{p.query=input.value;filter()};
+  tools.append(input,selectBox(['All','HTTP','DNS'],p.proto,x=>{p.proto=x;filter()},'Protocol filter'),selectBox(['All','Allowed','Held','Blocked','Rejected','Denied','Timeout'],p.action,x=>{p.action=x;filter()},'Outcome filter'));
+  const follow=btn(p.follow?'Following':'Paused',()=>{p.follow=!p.follow;follow.textContent=p.follow?'Following':'Paused';follow.setAttribute('aria-pressed',p.follow);if(p.follow)sc.scrollTop=0;save()});follow.setAttribute('aria-pressed',p.follow);tools.append(follow);body.append(tools)
+ }
+ if(p.type==='monitor'&&p.page==='Requests'){resetHolds(sc,'No connections are held.');holdKeys(sc);for(const type of ['pointerleave','focusout'])sc.addEventListener(type,()=>setTimeout(()=>pruneSettled(sc),0))}
+ body.append(sc);paintNetwork(p,v);sc.scrollTop=p.scroll||0
+}
+function paintNetwork(p,v){const sc=v.querySelector('.scroll');if(!sc)return;const page=p.type==='logs'?'Logs':p.page;
+ if(page==='Requests'){syncHolds(sc);return}
+ const old=sc.scrollTop,priorHeight=sc.scrollHeight;sc.replaceChildren();
+ if(page==='Logs'){for(const [time,proto,action,host] of net.events.filter(e=>(p.proto==='All'||e[1]===p.proto)&&(p.action==='All'||e[2]===p.action)&&e[3].toLowerCase().includes(p.query.toLowerCase()))){const d=el('div','netrow');d.append(el('small','',time),el('span','kind',proto),el('code','',host),el('span',action==='Allowed'?'accent':action==='Held'?'held':'refused',action));sc.append(d)}if(!sc.childElementCount)sc.append(el('p','mut','No matching events.'))}
+ if(page==='Hosts'){const h=new Map();for(const e of net.events){const host=e[3].split(':')[0];if(!h.has(host))h.set(host,{allowed:0,blocked:0,held:0});const row=h.get(host);row[e[2]==='Allowed'?'allowed':e[2]==='Held'?'held':'blocked']++}for(const [host,r] of h){const d=el('div','netrow');d.append(el('code','',host),el('small','',r.allowed+' allowed · '+r.blocked+' blocked · '+r.held+' held'));sc.append(d)}}
+ if(page==='Rules'){for(const r of net.rules){const d=el('div','netrow');d.append(el('code','',r.host),el('span',r.action==='Allow'?'accent':'refused',r.action),el('small','',r.scope));sc.append(d)}if(!net.rules.length)sc.append(el('p','mut','No rules.'))}
+ if(page==='Logs')sc.scrollTop=p.follow?0:old+Math.max(0,sc.scrollHeight-priorHeight)
+}
+function redrawNet(){
+ for(const t of tabs())for(const p of leaves(t.root))if(p.type!=='session'&&cache.has(p.id))paintNetwork(p,cache.get(p.id));
+ announceArrivals();if(holdsOpen)syncHolds(holdBox);updateHeader()
+}
+function showHost(host){
+ closeHolds(false);
+ for(const t of tabs()){const m=leaves(t.root).find(p=>p.type==='monitor');if(m){m.page='Logs';m.query=host;if(cache.has(m.id))network(m,cache.get(m.id));t.focus=m.id;selectTab(t.id);return}}
+ const m=pane('monitor');m.page='Logs';m.query=host;addTab('monitor',m)
+}
+
+// The hold list opens from the header readout. It is not modal and returns focus where it came from.
+const holdList=$('#holdlist'),holdBox=$('#holdrows');let holdsOpen=false,holdsOpener=null,preFocus=null,othersSig='';
+holdKeys(holdBox);$('#holdclose').innerHTML=icon('close');$('#holdclose').onclick=()=>closeHolds(true);
+function drawOthers(){
+ if(!holdsOpen)return;const items=attentionItems(),sig=items.map(o=>o.p.id+o.status+title(o.p)).join('|');if(sig===othersSig)return;othersSig=sig;
+ const box=$('#otherrows'),had=box.contains(document.activeElement);box.replaceChildren();if(!items.length)return;
+ box.append(el('h3','','Panes that need attention'));for(const {p,status,t} of items)box.append(btn(title(p)+' · '+status,()=>{closeHolds(false);t.focus=p.id;selectTab(t.id)}));
+ if(had)box.querySelector('button')?.focus({preventScroll:true})
+}
+function openHolds(){
+ if(dlg.open||holdsOpen)return;hideMenu();
+ holdsOpener=preFocus&&preFocus.isConnected?preFocus:document.activeElement;preFocus=null;
+ holdsOpen=true;othersSig='\0';resetHolds(holdBox,'No connections are held. Holding stays enabled while this window is connected.');
+ holdList.hidden=false;$('#readout').setAttribute('aria-expanded','true');syncHolds(holdBox);drawOthers();
+ (holdBox.querySelector('.holdrow:not(.settled)')||$('#holdclose')).focus({preventScroll:true})
+}
+function closeHolds(restore){
+ if(!holdsOpen)return;holdsOpen=false;holdList.hidden=true;$('#readout').setAttribute('aria-expanded','false');holdBox.replaceChildren();holdBox._rows=null;
+ if(!restore)return;
+ if(holdsOpener?.isConnected&&holdsOpener!==document.body&&holdsOpener.offsetParent!==null)holdsOpener.focus({preventScroll:true});else focusPane(active()?.focus)
+}
+function toggleHolds(){if(holdsOpen)closeHolds(true);else openHolds()}
+$('#readout').addEventListener('pointerdown',()=>{if(!holdsOpen)preFocus=document.activeElement});
+$('#readout').onclick=toggleHolds;
+
+function addTab(type,existing){if(type==='session'&&!existing&&!canCreate())return;const p=existing||(type==='session'?newSession():pane(type)),t=newTab(p);tabs().push(t);selectTab(t.id)}
+// Menus return focus to the control that opened them.
+let menuAnchor=null;
+function menu(anchor,items){const pop=$('#pop');pop.replaceChildren();menuAnchor=anchor;for(const item of items){if(item==='-'){pop.append(el('hr'));continue}if(typeof item==='string'){pop.append(el('div','poplabel',item));continue}const [label,fn,cl]=item,b=btn(label,()=>{hideMenu(true);fn()},cl||'');b.setAttribute('role','menuitem');pop.append(b)}
  pop.hidden=false;const rect=anchor.getBoundingClientRect();pop.style.left=Math.max(4,Math.min(innerWidth-pop.offsetWidth-5,rect.left))+'px';pop.style.top=Math.max(4,Math.min(innerHeight-pop.offsetHeight-5,rect.bottom+2))+'px';pop.querySelector('button')?.focus()}
-function hideMenu(){$('#pop').hidden=true}
-document.addEventListener('pointerdown',e=>{if(!$('#pop').contains(e.target))hideMenu()},true);
-const dlg=$('#dlg');function modal(name){hideMenu();const box=$('#dialogBody');box.replaceChildren();const head=el('div','dialoghead');head.append(el('h2','',name),btn('×',()=>dlg.close(),'icon'));head.lastChild.ariaLabel='Close dialog';box.append(head);if(!dlg.open)dlg.showModal();dlg.setAttribute('aria-label',name);return box}
-function ask(name,detail,label,action){const b=modal(name);b.append(el('p','note',detail),btn(label,()=>{dlg.close();action()},'danger'))}
-function tabMenu(t,a){menu(a,[title(t.root),['Move tab…',()=>moveDialog(t.root.id)],...statuses(t.root).map(o=>[title(o.p)+' · '+o.status,()=>{t.focus=o.p.id;selectTab(t.id)}]),['Close tab',()=>closeNode(t.root.id)]])}
-function paneMenu(p,a){const items=[title(p),['Split right',()=>splitShell(p,'cols')],['Split below',()=>splitShell(p,'rows')],['Move pane…',()=>moveDialog(p.id)],['Move to new tab',()=>applyMove(p.id,{gap:tabs().length})]];if(p.type==='session'&&!sessions[p.sid]?.ended){items.push(['Rename session…',()=>renameSession(p)],['Simulate agent status…',()=>statusDialog(p)],['End session…',()=>ask('End '+title(p)+'?','All attached views will see this simulated session exit.','End session',()=>{const s=sessions[p.sid];s.ended=true;s.status='';s.lines.push(entry('mut','Session ended.'));updateSessions(p.sid)}) ,'danger'])}items.push(['Close pane',()=>closeNode(p.id)]);menu(a,items)}
+function hideMenu(restore=false){const pop=$('#pop');if(pop.hidden)return;const had=pop.contains(document.activeElement);pop.hidden=true;if(restore&&had&&menuAnchor?.isConnected)menuAnchor.focus({preventScroll:true})}
+$('#pop').addEventListener('keydown',e=>{const items=[...$('#pop').querySelectorAll('button')],i=items.indexOf(document.activeElement);
+ if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();items[(i+(e.key==='ArrowDown'?1:items.length-1))%items.length]?.focus()}
+ else if(e.key==='Home'||e.key==='End'){e.preventDefault();items.at(e.key==='Home'?0:-1)?.focus()}
+ else if(e.key==='Tab')hideMenu(true)});
+document.addEventListener('pointerdown',e=>{clearSticky();if(!$('#pop').contains(e.target))hideMenu();if(holdsOpen&&!holdList.contains(e.target)&&!$('#readout').contains(e.target))closeHolds(false)},true);
+const dlg=$('#dlg');function modal(name){hideMenu(true);closeHolds(true);const box=$('#dialogBody');box.replaceChildren();const head=el('div','dialoghead');head.append(el('h2','',name),iconBtn('close','Close dialog',()=>dlg.close()));box.append(head);if(!dlg.open)dlg.showModal();dlg.setAttribute('aria-label',name);return box}
+// A dialog returns focus to its opener. If that element is gone, focus goes to the active pane.
+dlg.addEventListener('close',()=>setTimeout(()=>{if(!dlg.open&&(document.activeElement===document.body||!document.activeElement))focusPane(active()?.focus)},0));
+function ask(name,detail,label,action){const b=modal(name),foot=el('div','dialogfoot'),cancel=btn('Cancel',()=>dlg.close());b.append(el('p','note',detail));foot.append(btn(label,()=>{dlg.close();action()},'danger'),cancel);b.append(foot);cancel.focus()}
+function tabMenu(t,a){menu(a,[title(t.root),['Move tab…',()=>moveDialog(t.root.id)],...(t.root.children?[['Equalize sizes',()=>equalize(t.root,t)]]:[]),...statuses(t.root).map(o=>['Go to '+title(o.p)+' · '+o.status,()=>{t.focus=o.p.id;selectTab(t.id)}]),'-',['Close tab',()=>requestClose(t.root.id)]])}
+function paneMenu(p,a){const items=[title(p),['Split right',()=>splitShell(p,'cols')],['Split below',()=>splitShell(p,'rows')],'-',['Move pane…',()=>moveDialog(p.id)],['Move to new tab',()=>applyMove(p.id,{gap:tabs().length})]];if(p.type==='session'&&sessions[p.sid]&&!sessions[p.sid].ended)items.push('-',['Rename session…',()=>renameSession(p)],['Detach',()=>removeNode(p.id,'detach')],['End session…',()=>confirmEnd(p.sid),'danger']);items.push('-',['Close pane',()=>requestClose(p.id)]);menu(a,items)}
+function confirmEnd(sid){const s=sessions[sid];if(s&&!s.ended)ask('End '+s.name+'?','The session stops for every attached view.','End session',()=>endSession(sid))}
+function endSession(sid){const s=sessions[sid];if(!s||s.ended)return;s.ended=true;s.status='';s.program='';s.lines.push(entry('mut','Session ended.'));if(!viewCount(sid))delete sessions[sid];updateSessions(sid)}
 function statusDialog(p){const b=modal('Agent status · '+title(p));b.append(el('p','note','Send a simulated report from this terminal.'));const row=el('div','choices');for(const s of ['Working','Needs input','Done','Error'])row.append(btn(s,()=>{dlg.close();stateFor(p,s)}));b.append(row)}
-function detachedList(){const b=modal('Attach a session');const used=new Set(tabs().flatMap(t=>leaves(t.root).map(p=>p.sid)));let count=0;for(const [id,s] of Object.entries(sessions)){if(used.has(id)||s.ended)continue;count++;const d=el('div','detachrow');d.append(el('div','',s.name+' · '+id.slice(0,5)),btn('Attach',()=>{dlg.close();addTab('session',pane('session',id))}));b.append(d)}if(!count)b.append(el('p','note','No detached sessions. Close a terminal pane to detach it.'))}
-$('#types').onclick=()=>menu($('#types'),['New tab',...Object.entries(names).map(([k,v])=>[v,()=>addTab(k)]),['Attach existing session…',detachedList]]);
-$('#plus').onclick=()=>addTab(plusType());
-function guide(){const b=modal('Workspace guide');const ul=el('ul','guide');for(const s of ['Use a pane’s ⋯ menu to split right or below with a fresh shell, or rename a live session. Group actions can equalize adjacent panes.','Drag the Codex + Tests tab over Logs, then to the top or right edge. Release to commit the preview.','On touch or keyboard, open the tab’s ⋮ menu and choose Move tab. Choose a target and edge.','Zoom in a pane header expands that pane to the full workspace. Choose Restore layout or use Ctrl+Shift+Enter (⌘⇧Enter on macOS) to toggle the focused pane.','Move group carries the pair. A pane’s ⋯ moves just that view. Drag a divider to adjust the split.','Use + for another tab of the adjacent type. The dropdown opens Session, Monitor, Logs, or a detached session.','Demo controls create network holds, simulate a reconnect, or open a second workspace window. Terminal input accepts help for sample commands.'])ul.append(el('li','',s));b.append(ul)}
-$('#help').onclick=guide;
-function attention(){const b=modal('Workspace attention'),list=el('div','attentionlist');for(const t of tabs())for(const {p,status} of statuses(t.root))list.append(btn(title(p)+' · '+status,()=>{dlg.close();t.focus=p.id;selectTab(t.id)}));for(const h of net.holds)list.append(btn('Sandbox hold · '+h.host,()=>{dlg.close();for(const t of tabs()){const m=leaves(t.root).find(p=>p.type==='monitor');if(m){m.page='Requests';if(cache.has(m.id))network(m,cache.get(m.id));t.focus=m.id;selectTab(t.id);return}}addTab('monitor')}));if(!list.childElementCount)list.append(el('p','note','Nothing needs attention.'));b.append(list)}
-$('#attention').onclick=attention;
+function age(s){const m=Math.floor((Date.now()-(s.created||Date.now()))/60000);return m<1?'started just now':m<60?'started '+m+' min ago':'started '+Math.floor(m/60)+' h ago'}
+function detachedList(){const b=modal('Attach session');let count=0;for(const [id,s] of Object.entries(sessions)){if(viewCount(id)||s.ended)continue;count++;const d=el('div','detachrow'),info=el('div','',s.name);info.append(el('small','',id.slice(0,5)+' · '+age(s)+(s.program?' · running '+s.program:' · idle')));d.append(info,btn('Attach',()=>{dlg.close();addTab('session',pane('session',id))},'primary'),btn('End session',()=>{endSession(id);detachedList()},'danger'));b.append(d)}
+ if(!count)b.append(el('p','note','No detached sessions. Sessions in use: '+liveCount()+' of '+sessionLimit+'.'));else b.append(el('p','note','Sessions in use: '+liveCount()+' of '+sessionLimit+'.'))}
+$('#types').innerHTML=icon('chevron');$('#types').setAttribute('aria-label','Open another kind of tab');$('#types').title='Open another kind of tab';
+$('#types').onclick=()=>menu($('#types'),['New tab',...Object.entries(names).map(([k,v])=>[v,()=>addTab(k)]),'-',['Attach session…',detachedList]]);
+$('#plus').innerHTML=icon('plus');$('#plus').setAttribute('aria-label','New Session tab');$('#plus').title='New Session tab ('+chords.newTab+')';
+$('#plus').onclick=()=>addTab('session');
+
+// Close pane behaves like a desktop terminal: an idle shell ends, anything else asks.
+function closeState(p){if(p.type!=='session')return 'view';const s=sessions[p.sid];if(!s||s.ended)return 'exited';if(!shellIntegration)return 'unknown';if(viewCount(p.sid)>1)return 'shared';return s.program?'busy':'idle'}
+const closeReason={busy:s=>s.program+' is running',unknown:()=>'the shell does not report its prompt',shared:()=>'another view is attached'};
+function requestClose(id){
+ const t=owner(id);if(!t)return;const asking=leaves(find(t.root,id)).filter(p=>closeReason[closeState(p)]);
+ if(!asking.length){removeNode(id,'end');return}
+ const one=asking.length===1,b=modal(one?'Close '+title(asking[0])+'?':'Close '+asking.length+' sessions?'),ul=el('ul','guide'),foot=el('div','dialogfoot'),cancel=btn('Cancel',()=>dlg.close());
+ for(const p of asking)ul.append(el('li','',title(p)+': '+closeReason[closeState(p)](sessions[p.sid])+'.'));
+ b.append(ul,el('p','note','End session stops '+(one?'it':'them')+' for every attached view. Detach leaves '+(one?'it':'them')+' running, and Attach session in the tab bar menu brings '+(one?'it':'them')+' back.'));
+ foot.append(btn(one?'End session':'End sessions',()=>{dlg.close();removeNode(id,'end')},'danger'),btn('Detach',()=>{dlg.close();removeNode(id,'detach')}),cancel);b.append(foot);cancel.focus()
+}
+function removeNode(id,mode){
+ const t=owner(id);if(!t)return;scrollRemember();if(t.id===layout.active)zoomedPane=null;
+ const node=find(t.root,id),what=title(node),ended=[],kept=[];
+ for(const p of leaves(node)){
+  const state=closeState(p),s=sessions[p.sid];cache.delete(p.id);if(p.type!=='session')continue;
+  const last=viewCount(p.sid)<=1;
+  if(state==='exited'){if(s&&last)delete sessions[p.sid]}
+  else if(state==='idle'||mode==='end'){ended.push(s.name);if(last)delete sessions[p.sid];else{s.ended=true;s.status='';s.program='';s.lines.push(entry('mut','Session ended.'))}}
+  else kept.push(s.name)
+ }
+ const idx=tabs().indexOf(t);
+ if(t.root.id===id){tabs().splice(idx,1);if(t.id===layout.active)layout.active=tabs()[Math.min(idx,tabs().length-1)]?.id||null}else{t.root=normalize(detach(t.root,id));normalizeFocus(t)}
+ store(sessionsKey,sessions);save();render();refreshTerminals();focusPane(active()?.focus);
+ tell([ended.length&&'Ended '+ended.join(', ')+'.',kept.length&&'Detached '+kept.join(', ')+'. Still running, and listed under Attach session.'].filter(Boolean).join(' ')||'Closed '+what+'.')
+}
+
+function guide(){const b=modal('Workspace guide');const ul=el('ul','guide');for(const s of ['A held connection shows in the header with its remaining time. Click it or press '+chords.holds+', then decide with a, A, n or N. Focus returns to the pane you were in.','Press '+chords.palette+' for the command palette. It lists every command with its chord. The browser keeps some chords, such as new tab and close, so use the palette for those here.','Split from a pane’s actions menu or with '+chords.splitRight+' and '+chords.splitBelow+'. A split in the same direction joins the existing row or column.','Drag a tab over another tab, then to an edge of the diagram. Release to commit the preview. Move in a menu does the same from the keyboard.','Closing a pane ends an idle shell. If a program is running, you choose between End session, Detach and Cancel. Type codex to start a program and quit to leave it.','Demo controls in the footer add held connections, drop the connection, and switch off shell integration.'])ul.append(el('li','',s));b.append(ul)}
 function reconnect(exitSid){
  if(!online)return;
- online=false;refreshTerminals();tell('Connection interrupted · retaining layout');
+ setConn('reconnecting');tell('Connection interrupted. The layout is kept.');
  setTimeout(()=>{
-  online=true;const lost=exitSid&&sessions[exitSid];
-  if(lost&&!lost.ended){lost.ended=true;lost.status='';lost.lines.push(entry('mut','Session exited while disconnected.'));updateSessions(exitSid)}
-  refreshTerminals();tell(lost?'Reconnected · '+lost.name+' exited':'Reconnected · restored session attachments')
+  const lost=exitSid&&sessions[exitSid],name=lost?.name;
+  if(lost&&!lost.ended){lost.ended=true;lost.status='';lost.program='';lost.lines.push(entry('mut','Session exited while disconnected.'));store(sessionsKey,sessions)}
+  setConn('connected');drawOthers();tell(name?'Reconnected. '+name+' exited.':'Reconnected. Sessions are attached again.')
  },1800)
 }
 function reconnectWithExit(){
- const b=modal('Choose a terminal to exit during reconnect'),seen=new Set();
+ const b=modal('Choose a terminal to exit during reconnect'),seen=new Set(),row=el('div','choices');
  for(const t of tabs())for(const p of leaves(t.root)){
   if(!sessions[p.sid]||sessions[p.sid].ended||seen.has(p.sid))continue;
-  seen.add(p.sid);b.append(btn(title(p),()=>{dlg.close();reconnect(p.sid)}))
+  seen.add(p.sid);row.append(btn(title(p),()=>{dlg.close();reconnect(p.sid)}))
  }
- if(!seen.size)b.append(el('p','note','Open a live terminal session first.'))
+ b.append(seen.size?row:el('p','note','Open a live terminal session first.'))
 }
 function refreshTerminals(){for(const t of tabs())for(const p of leaves(t.root))if(p.sid&&cache.has(p.id))paintSession(p,cache.get(p.id));renderTabs()}
-$('#demobtn').onclick=()=>menu($('#demobtn'),['Demo controls',['Simulate network hold',addHold],['Simulate agent status…',()=>{const b=modal('Choose terminal');for(const t of tabs())for(const p of leaves(t.root))if(p.sid&&!sessions[p.sid]?.ended)b.append(btn(title(p),()=>statusDialog(p))) }],['Simulate reconnect',()=>reconnect()],['Reconnect with an exited terminal…',reconnectWithExit],['Open another window',()=>{const u=new URL(location.href);u.searchParams.set('window',uid());window.open(u.href,'_blank','noopener')}],['Workspace guide',guide],['Restore example tabs…',()=>ask('Restore example tabs?','Replace this window’s layout with fresh Codex, Tests, Logs and Monitor views.','Restore example',()=>{const t=newTab(group('cols',[newSession('Codex'),newSession('Tests')]));layout={tabs:[t,newTab(pane('logs')),newTab(pane('monitor'))],active:t.id};zoomedPane=null;cache.clear();save();render()})]]);
+function lateAllow(){const e=net.events.find(e=>e[2]==='Timeout');if(e)decide(e[3],'a');else tell('Let a held connection expire first.')}
+$('#demobtn').onclick=()=>menu($('#demobtn'),['Demo controls',['Simulate held connection',addHold],['Simulate three held connections',async()=>{for(let i=0;i<3;i++)await addHold()}],['Send a late allow for an expired hold',lateAllow],[(failNextSave?'✓ ':'')+'Fail the next save',()=>{failNextSave=!failNextSave;tell(failNextSave?'The next “and save” decision will fail to save.':'Saving works again.')}],'-',[(shellIntegration?'✓ ':'')+'Shell integration reports the prompt',()=>{shellIntegration=!shellIntegration;tell(shellIntegration?'Shells report their prompt. Closing an idle shell ends it.':'Shell state is unknown. Every close asks.')}],['Simulate agent status…',()=>{const b=modal('Choose terminal'),row=el('div','choices');for(const t of tabs())for(const p of leaves(t.root))if(p.sid&&sessions[p.sid]&&!sessions[p.sid].ended)row.append(btn(title(p),()=>statusDialog(p)));b.append(row)}],['Simulate reconnect',()=>reconnect()],['Reconnect with an exited terminal…',reconnectWithExit],'-',['Workspace guide',guide],['Restore example tabs…',()=>ask('Restore example tabs?','Replace this window’s layout and sessions with fresh Codex, Tests, Logs and Monitor views.','Restore example',()=>{layout=exampleLayout();zoomedPane=null;cache.clear();save();render()})]]);
+
 // Layout transforms copy containers and retain live pane objects.
 function cloneNode(n){return n.children?{...n,weights:[...n.weights],children:n.children.map(cloneNode)}:n}
 function detach(n,id){if(n.id===id)return null;if(!n.children)return n;
@@ -240,27 +467,36 @@ function detach(n,id){if(n.id===id)return null;if(!n.children)return n;
  return n.children.length===1?n.children[0]:n
 }
 function substitute(root,id,next){if(root.id===id)return next;if(root.children)root.children=root.children.map(c=>substitute(c,id,next));return root}
+// A group made by a dock or split is implicit and merges into a parent of the same orientation.
+// A group that was moved in as a unit is explicit and keeps its handle.
+function normalize(n){
+ if(!n.children)return n;
+ const kids=[],weights=[];
+ n.children.map(normalize).forEach((c,i)=>{
+  if(c.children&&c.dir===n.dir&&!c.explicit){const sum=c.weights.reduce((a,b)=>a+b,0);c.children.forEach((g,j)=>{kids.push(g);weights.push(n.weights[i]*c.weights[j]/sum)})}
+  else{kids.push(c);weights.push(n.weights[i])}
+ });
+ n.children=kids;n.weights=weights;return kids.length===1?kids[0]:n
+}
 function normalizeFocus(t){if(!find(t.root,t.focus))t.focus=leaves(t.root)[0].id}
 function transform(src,dest){
  const ts=tabs().map(t=>({...t,root:cloneNode(t.root)})),start=ts.find(t=>find(t.root,src));if(!start)throw Error('Source no longer exists.');
  const moving=find(start.root,src),whole=moving===start.root,former=ts.indexOf(start);
  if(!('gap' in dest)&&find(moving,dest.target))throw Error('Choose a target outside the moving group.');
- const originalTarget=dest.target&&find(start.root,dest.target);
- if(whole)ts.splice(former,1);else{start.root=detach(start.root,src);normalizeFocus(start)}
- if('gap' in dest){const tab=whole?start:newTab(moving);let index=dest.gap-(whole&&former<dest.gap?1:0);ts.splice(Math.max(0,Math.min(index,ts.length)),0,tab);return {tabs:ts,active:tab.id}}
+ const originalTarget=dest.target&&find(start.root,dest.target),focus=find(moving,start.focus)?start.focus:leaves(moving)[0].id;
+ if(whole)ts.splice(former,1);else{start.root=normalize(detach(start.root,src));normalizeFocus(start)}
+ if('gap' in dest){delete moving.explicit;const tab=whole?start:newTab(moving,focus);let index=dest.gap-(whole&&former<dest.gap?1:0);ts.splice(Math.max(0,Math.min(index,ts.length)),0,tab);return {tabs:ts,active:tab.id}}
  let targetId=dest.target;
  if(originalTarget?.children&&!find(start.root,targetId)){const survivor=originalTarget.children.find(c=>find(start.root,c.id));if(survivor)targetId=survivor.id}
  const t=ts.find(t=>find(t.root,targetId));if(!t)throw Error('Target no longer exists.');const target=find(t.root,targetId);
- const horizontal=['left','right'].includes(dest.edge);if(moving.children)moving.dir=horizontal?'rows':'cols';
- const next=group(horizontal?'cols':'rows',['left','top'].includes(dest.edge)?[moving,target]:[target,moving]);t.root=substitute(t.root,target.id,next);t.focus=leaves(moving)[0].id;const min=minSize(t.root),rect=$('#stage').getBoundingClientRect();
+ const horizontal=['left','right'].includes(dest.edge);if(moving.children){moving.dir=horizontal?'rows':'cols';moving.explicit=true}
+ // Incoming content takes half of its target. The target keeps its own weights in the other half.
+ const next=group(horizontal?'cols':'rows',['left','top'].includes(dest.edge)?[moving,target]:[target,moving]);t.root=normalize(substitute(t.root,target.id,next));t.focus=focus;const min=minSize(t.root,true),rect=$('#stage').getBoundingClientRect();
  if(min.w>rect.width-10||min.h>rect.height-10)throw Error('Too little space for these panes at this edge.');
  return {tabs:ts,active:t.id}
 }
 function commit(result){scrollRemember();zoomedPane=null;layout=result;save();render();focusPane(active()?.focus)}
-function applyMove(src,dest){try{commit(transform(src,dest));return true}catch(e){tell(e.message);return false}}
-function closeNode(id){const t=owner(id);if(!t)return;scrollRemember();if(t.id===layout.active)zoomedPane=null;const idx=tabs().indexOf(t);for(const p of leaves(find(t.root,id)))cache.delete(p.id);
- if(t.root.id===id){tabs().splice(idx,1);if(t.id===layout.active)layout.active=tabs()[Math.min(idx,tabs().length-1)]?.id||null}else{t.root=detach(t.root,id);normalizeFocus(t)}
- save();render();tell('View closed')}
+function applyMove(src,dest){try{commit(transform(src,dest));return true}catch(e){tell(e.message,true);return false}}
 function mini(n,incoming,target){const d=el('div',n.children?'schematic groupmini '+n.dir:'leafmini',n.children?'':title(n));if(n.id===incoming)d.classList.add('incoming');if(n.id===target)d.classList.add('targetmark');if(n.children)n.children.forEach((c,i)=>{const x=mini(c,incoming,target);x.style.flex=n.weights[i]+' 1 0';d.append(x)});return d}
 function field(txt,control){const label=el('label','formline',txt);label.append(control);return label}
 function moveDialog(src){
@@ -275,9 +511,38 @@ function moveDialog(src){
  b.append(field('Destination',target),row,box,status);for(const side of ['left','top','right','bottom']){const x=btn({left:'Left',top:'Above',right:'Right',bottom:'Below'}[side],()=>{edge=side;refresh()});x.dataset.edge=side;row.append(x)}
  const foot=el('div','dialogfoot');foot.append(btn('Cancel',()=>dlg.close()),drop);b.append(foot);
  function refresh(){const value=target.value,gap=value.startsWith('gap:');row.hidden=gap;row.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.edge===edge));box.replaceChildren();
-  try{pendingMove=transform(src,gap?{gap:Number(value.slice(4))}:{target:value,edge});box.append(mini(pendingMove.tabs.find(t=>t.id===pendingMove.active).root,src,value));status.textContent=gap?'Place the source in the tab bar at this position.':'Dashed outline marks the incoming pane or group.';drop.disabled=false}catch(e){pendingMove=null;drop.disabled=true;status.textContent=e.message}
- }refresh()
+  try{pendingMove=transform(src,gap?{gap:Number(value.slice(4))}:{target:value,edge});box.append(mini(pendingMove.tabs.find(t=>t.id===pendingMove.active).root,src,value));status.textContent=gap?'Place the source in the tab bar at this position.':'The dashed outline marks the incoming pane or group. It takes half of the target.';drop.disabled=false}catch(e){pendingMove=null;drop.disabled=true;status.textContent=e.message}
+ }refresh();target.focus()
 }
+
+// The command palette lists every command with its chord and acts on the focused pane.
+function palette(){
+ const p=current(),t=active(),s=p&&sessions[p.sid],live=p?.type==='session'&&!!s&&!s.ended,parent=t&&p&&all(t.root).find(n=>n.children?.includes(p));
+ const cmds=[
+  ['New Session tab','newTab',act.newTab,online],['Split right','splitRight',act.splitRight,!!p],['Split below','splitBelow',act.splitBelow,!!p],
+  [zoomedPane?'Restore layout':'Zoom pane','zoom',act.zoom,!!t?.root.children],['Close pane','close',act.close,!!p],
+  ['Focus pane left','left',act.left,!!p&&!zoomedPane],['Focus pane right','right',act.right,!!p&&!zoomedPane],['Focus pane above','up',act.up,!!p&&!zoomedPane],['Focus pane below','down',act.down,!!p&&!zoomedPane],
+  ['Next tab','nextTab',act.nextTab,tabs().length>1],['Previous tab','prevTab',act.prevTab,tabs().length>1],['Open hold list','holds',openHolds,true],
+  ['Rename session…','',()=>renameSession(p),live],['Move pane…','',()=>moveDialog(p.id),!!p],['Move to new tab','',()=>applyMove(p.id,{gap:tabs().length}),!!p&&!!t.root.children],
+  ['Equalize sizes','',()=>equalize(parent,t),!!parent],['Close tab','',()=>requestClose(t.root.id),!!t],['End session…','',()=>confirmEnd(p.sid),live],['Detach session','',()=>removeNode(p.id,'detach'),live],
+  ['Attach session…','',detachedList,true],['Open Monitor','',()=>addTab('monitor'),true],['Open Logs','',()=>addTab('logs'),true],
+  ['Send next key to terminal','',()=>{passNext=true;tell('The next key chord goes to the program in the focused pane.',true)},!!p],['Hide window','hide',act.hide,true]
+ ].map(([name,id,run,ok])=>({name,chord:chords[id]||'',run,ok}));
+ const b=modal('Commands'),input=el('input','wide'),box=el('div','cmdlist');let shown=[],index=0;
+ input.placeholder='Type a command';input.autocomplete='off';input.spellcheck=false;input.setAttribute('role','combobox');input.setAttribute('aria-expanded','true');input.setAttribute('aria-controls','cmdlist');input.setAttribute('aria-label','Command');box.id='cmdlist';box.setAttribute('role','listbox');box.setAttribute('aria-label','Commands');
+ function run(c){if(!c?.ok)return;dlg.close();c.run()}
+ function draw(){
+  const q=input.value.trim().toLowerCase();shown=cmds.filter(c=>c.name.toLowerCase().includes(q));index=Math.min(index,Math.max(0,shown.length-1));box.replaceChildren();
+  shown.forEach((c,i)=>{const o=el('div','cmdrow'+(i===index?' on':''));o.id='cmd-'+i;o.setAttribute('role','option');o.setAttribute('aria-selected',String(i===index));if(!c.ok)o.setAttribute('aria-disabled','true');o.append(el('span','',c.name));if(c.chord)o.append(el('kbd','',c.chord));o.onclick=()=>run(c);box.append(o)});
+  if(!shown.length)box.append(el('p','note','No matching command.'));
+  input.setAttribute('aria-activedescendant',shown.length?'cmd-'+index:'');box.children[index]?.scrollIntoView?.({block:'nearest'})
+ }
+ input.oninput=()=>{index=0;draw()};
+ input.onkeydown=e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();if(shown.length)index=(index+(e.key==='ArrowDown'?1:shown.length-1))%shown.length;draw()}else if(e.key==='Enter'){e.preventDefault();run(shown[index])}};
+ b.append(input,box);draw();input.focus()
+}
+$('#commands').innerHTML='Commands <kbd>'+escapeText(chords.palette)+'</kbd>';$('#commands').onclick=palette;
+
 const overlay=$('#projection');
 function removeMarks(){document.querySelectorAll('.ins,.endins,.reveal').forEach(x=>x.classList.remove('ins','endins','reveal'));overlay.hidden=true;overlay.replaceChildren()}
 function showDestination(dest,tabId){
@@ -290,6 +555,7 @@ function showDestination(dest,tabId){
  try{drag.result=transform(drag.src,dest);overlay.append(mini(drag.result.tabs.find(x=>x.id===drag.result.active).root,drag.src,dest.target))}catch(e){overlay.classList.add('invalid');overlay.textContent=e.message}
 }
 function closestEdge(rect,x,y){return [['left',(x-rect.left)/rect.width],['right',(rect.right-x)/rect.width],['top',(y-rect.top)/rect.height],['bottom',(rect.bottom-y)/rect.height]].sort((a,b)=>a[1]-b[1])[0][0]}
+// A release outside the workspace and the tab bar has no destination, which cancels the move.
 function hit(x,y){const at=document.elementFromPoint(x,y);if(!at){showDestination(null);return}const tab=at.closest('.tab'),bar=at.closest('.tabbar');
  if(tab){const i=tabs().findIndex(t=>t.id===tab.dataset.tab),t=tabs()[i],r=tab.getBoundingClientRect(),width=Math.min(17,r.width/5);if(x<r.left+width||x>r.right-width){showDestination({gap:i+(x>r.right-width?1:0)});return}if(t.root.id===drag.src){showDestination(null,t.id);return}showDestination({target:t.root.id,edge:'right'},t.id);return}
  if(bar){showDestination({gap:tabs().length});return}
@@ -305,20 +571,31 @@ document.addEventListener('pointerdown',e=>{
  pending={src:h.dataset.grab,x:e.clientX,y:e.clientY,pid:e.pointerId,prior:document.activeElement};
 },true);
 document.addEventListener('pointermove',e=>{
- if(!drag&&pending&&e.pointerId===pending.pid&&Math.hypot(e.clientX-pending.x,e.clientY-pending.y)>7){drag={...pending,reveal:layout.active,result:null};pending=null;hideMenu();if(zoomedPane)render(drag.reveal);document.body.style.userSelect='none'}
+ if(!drag&&pending&&e.pointerId===pending.pid&&Math.hypot(e.clientX-pending.x,e.clientY-pending.y)>7){drag={...pending,reveal:layout.active,result:null};pending=null;hideMenu();closeHolds(false);if(zoomedPane)render(drag.reveal);document.body.style.userSelect='none'}
  if(drag&&e.pointerId===drag.pid){e.preventDefault();hit(e.clientX,e.clientY)}
 },{passive:false});
 function stopDrag(apply){pending=null;if(!drag)return;const {result,prior}=drag;drag=null;removeMarks();document.body.style.userSelect='';ignoreClickUntil=performance.now()+160;if(apply&&result)commit(result);else{render();if(prior?.isConnected)prior.focus({preventScroll:true});else focusPane(active()?.focus)}}
 document.addEventListener('pointerup',e=>{if(drag&&e.pointerId===drag.pid)hit(e.clientX,e.clientY);stopDrag(true)});
 document.addEventListener('pointercancel',()=>stopDrag(false));window.addEventListener('blur',()=>stopDrag(false));
 document.addEventListener('click',e=>{if(performance.now()<ignoreClickUntil){e.preventDefault();e.stopImmediatePropagation()}},true);
-document.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&e.shiftKey&&!e.altKey&&!dlg.open&&!drag&&active()?.root.children){e.preventDefault();toggleZoom(active().focus);return}if(e.key==='Escape'){stopDrag(false);hideMenu()}if(e.key==='?'&&!dlg.open&&!['INPUT','SELECT'].includes(document.activeElement.tagName)){e.preventDefault();guide()}});
-window.addEventListener('storage',e=>{if(e.key===networkKey){net=load(networkKey)||net;redrawNet()}if(e.key===sessionsKey){sessions=load(sessionsKey)||sessions;refreshTerminals();
- const showing=drag?.reveal?tabs().find(t=>t.id===drag.reveal):active();
- if(showing)for(const node of all(showing.root)){
-  if(node.children){const head=document.querySelector('[data-node="'+node.id+'"] > .gin');if(head){head.querySelector('b').textContent=title(node);head.querySelector('button').ariaLabel='Group actions for '+title(node)}}
-  else if(node.sid){const z=cache.get(node.id)?.querySelector('.zoom-toggle');if(z){z.ariaLabel=(zoomedPane===node.id?'Restore layout':'Zoom pane')+' · '+title(node);z.title=z.ariaLabel+' (Ctrl+Shift+Enter or ⌘⇧Enter)'}}
- }}});
+// Chords are taken before a terminal sees them. Modified Enter, Tab and a lone Escape are left to the terminal.
+document.addEventListener('keydown',e=>{
+ if(['Control','Shift','Alt','Meta'].includes(e.key))return;
+ clearSticky();
+ if(passNext){passNext=false;e.preventDefault();e.stopPropagation();deliverKey(e);return}
+ if(e.key==='Escape'){
+  if(drag){stopDrag(false);e.preventDefault()}
+  else if(!$('#pop').hidden){hideMenu(true);e.preventDefault();e.stopPropagation()}
+  else if(holdsOpen&&!dlg.open){closeHolds(true);e.preventDefault();e.stopPropagation()}
+  return
+ }
+ const id=chordOf(e);if(!id)return;
+ if(dlg.open){if(id==='palette'&&dlg.getAttribute('aria-label')==='Commands'){e.preventDefault();dlg.close()}return}
+ if(drag)return;
+ e.preventDefault();e.stopPropagation();hideMenu(true);
+ if(typeof id==='number'){const t=tabs()[id-1];if(t)selectTab(t.id)}else act[id]()
+},true);
+window.addEventListener('storage',e=>{if(e.key===networkKey){net=load(networkKey)||net;redrawNet()}if(e.key===sessionsKey){sessions=load(sessionsKey)||sessions;if(drag)refreshTerminals();else{render();refreshTerminals()}}});
 window.addEventListener('pagehide',()=>{if(!drag)scrollRemember();save()});
-render();tickHolds();setInterval(tickHolds,500);
+render();setConn('connecting');setTimeout(()=>setConn('connected'),600);tickHolds();setInterval(tickHolds,500);
 </script></body></html>
