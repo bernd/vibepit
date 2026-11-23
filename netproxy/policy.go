@@ -32,10 +32,28 @@ type compiledRule struct {
 
 type requestPolicy []compiledRule
 
+func (r compiledRule) isRequestRule() bool { return r.paths != nil || r.when != nil }
+
+// Alias policy uses the strongest deny on the authority. Request rules only
+// constrain a blind tunnel, where the proxy cannot check the inner authority.
+func (p requestPolicy) aliasDeny() aliasDeny {
+	result := noAliasDeny
+	for _, r := range p {
+		if !r.deny {
+			continue
+		}
+		if !r.isRequestRule() {
+			return denyHostAlias
+		}
+		result = denyTunnelAlias
+	}
+	return result
+}
+
 func (p requestPolicy) admitsHost() bool {
 	allowed := false
 	for _, r := range p {
-		if r.deny && r.paths == nil && r.when == nil {
+		if r.deny && !r.isRequestRule() {
 			return false
 		}
 		if !r.deny && (r.paths == nil || len(r.paths) > 0) {
@@ -47,7 +65,7 @@ func (p requestPolicy) admitsHost() bool {
 
 func (p requestPolicy) requiresInspection() bool {
 	for _, r := range p {
-		if r.paths != nil || r.when != nil {
+		if r.isRequestRule() {
 			return true
 		}
 	}

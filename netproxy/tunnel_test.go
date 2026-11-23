@@ -20,8 +20,8 @@ func wholeHostProxy(t *testing.T, host, addr string, report func(tunnelRefusal))
 	t.Helper()
 	pinned := netip.MustParseAddrPort(addr)
 	authority := net.JoinHostPort(host, fmt.Sprint(pinned.Port()))
-	proxy, err := newInspectionProxy([]inspectionOrigin{{
-		authority: authority, address: pinned.Addr(), rules: []requestRule{{}},
+	proxy, err := newLoopbackProxy([]inspectionOrigin{{
+		authority: authority, rules: []requestRule{{}},
 	}}, nil)
 	require.NoError(t, err)
 	proxy.onTunnelRefusal = report
@@ -187,7 +187,7 @@ func TestAddressAndHostPortTunnels(t *testing.T) {
 	} {
 		t.Run(tc.host, func(t *testing.T) {
 			authority := net.JoinHostPort(tc.host, fmt.Sprint(endpoint.Port()))
-			p, err := newInspectionProxy([]inspectionOrigin{{authority: authority, address: endpoint.Addr(), rules: []requestRule{{}}, hostPort: tc.hostPort}}, nil)
+			p, err := newLoopbackProxy([]inspectionOrigin{{authority: authority, rules: []requestRule{{}}, hostPort: tc.hostPort}}, nil)
 			require.NoError(t, err)
 			server := httptest.NewServer(p)
 			defer server.Close()

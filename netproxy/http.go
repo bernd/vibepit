@@ -18,21 +18,24 @@ import (
 	"time"
 )
 
-// inspectionOrigin supplies the checked IPv4 address and the session's server
-// certificate for authorities that need TLS inspection.
+// inspectionOrigin binds an authority to its request policy and optional inspection certificate.
 type inspectionOrigin struct {
 	authority   string
-	address     netip.Addr
 	certificate tls.Certificate
 	rules       []requestRule
 	hostPort    bool // The embedder has authorized a host-port gateway rewrite.
 }
+
+// net/http detaches its dial context from the request so it can pool late
+// connections. Keep request cancellation available during egress checks.
+type requestContextKey struct{}
 
 type inspectedRoute struct {
 	authority   string
 	certificate tls.Certificate
 	policy      requestPolicy
 	transport   *http.Transport
+	dialTunnel  func(context.Context) (net.Conn, error)
 	inspect     bool
 	tunnelName  string // Empty for a literal address or authorized host port.
 }
@@ -42,7 +45,11 @@ type inspectionProxy struct {
 	onTunnelRefusal func(tunnelRefusal)
 }
 
-func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool) (*inspectionProxy, error) {
+func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool, cfg upstreamConfig) (*inspectionProxy, error) {
+	dialer, err := newUpstreamDialer(cfg)
+	if err != nil {
+		return nil, err
+	}
 	p := &inspectionProxy{routes: make(map[string]*inspectedRoute, len(origins))}
 	for _, origin := range origins {
 		key, err := canonicalAuthority(origin.authority, "")
@@ -52,13 +59,12 @@ func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool) (*insp
 		if _, exists := p.routes[key]; exists {
 			return nil, fmt.Errorf("duplicate inspection origin %q", key)
 		}
-		address := origin.address.Unmap()
-		if !address.Is4() {
-			return nil, fmt.Errorf("%s requires a checked IPv4 address", key)
-		}
 		policy, err := compileRules(origin.rules)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
+		}
+		if deny := policy.aliasDeny(); deny != noAliasDeny {
+			dialer.aliasRules[key] = deny
 		}
 		inspect := policy.requiresInspection()
 		if origin.hostPort && inspect {
@@ -72,21 +78,51 @@ func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool) (*insp
 			return nil, fmt.Errorf("%s requires a TLS inspection certificate", key)
 		}
 		host, port, _ := net.SplitHostPort(key)
-		if _, err := netip.ParseAddr(host); err == nil || origin.hostPort {
-			host = ""
+		tunnelName := host
+		if ip, err := netip.ParseAddr(host); err == nil {
+			if !ip.Is4() {
+				return nil, fmt.Errorf("%s requires an IPv4 address", key)
+			}
+			tunnelName = ""
+		} else if !origin.hostPort && cfg.resolver == nil && !dialer.config.staticHosts[host].IsValid() {
+			return nil, fmt.Errorf("missing resolver for %s", host)
 		}
-		pinned := net.JoinHostPort(address.String(), port)
-		dialer := net.Dialer{Timeout: 10 * time.Second}
+		if origin.hostPort {
+			if !dialer.config.gateway.IsValid() {
+				return nil, fmt.Errorf("missing gateway for %s", key)
+			}
+			tunnelName = ""
+		}
 		tr := &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return dialer.DialContext(ctx, "tcp4", pinned)
+				if requestCtx, ok := ctx.Value(requestContextKey{}).(context.Context); ok {
+					if err := requestCtx.Err(); err != nil {
+						return nil, err
+					}
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithCancel(ctx)
+					defer cancel()
+					stop := context.AfterFunc(requestCtx, cancel)
+					defer stop()
+				}
+				return dialer.dial(ctx, host, port, origin.hostPort, false)
 			},
 			TLSClientConfig:     &tls.Config{RootCAs: roots},
 			ForceAttemptHTTP2:   true,
 			TLSHandshakeTimeout: 10 * time.Second,
 			IdleConnTimeout:     90 * time.Second,
 		}
-		p.routes[key] = &inspectedRoute{authority: key, certificate: origin.certificate, policy: policy, transport: tr, inspect: inspect, tunnelName: host}
+		p.routes[key] = &inspectedRoute{
+			authority:   key,
+			certificate: origin.certificate,
+			policy:      policy,
+			transport:   tr,
+			inspect:     inspect,
+			tunnelName:  tunnelName,
+			dialTunnel: func(ctx context.Context) (net.Conn, error) {
+				return dialer.dial(ctx, host, port, origin.hostPort, true)
+			},
+		}
 	}
 	return p, nil
 }
@@ -99,7 +135,7 @@ func canonicalAuthority(authority, defaultPort string) (string, error) {
 	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
 	if ip, err := netip.ParseAddr(host); err == nil {
 		host = ip.Unmap().String()
-	} else if host == "" || strings.ContainsAny(host, ":[]%*") {
+	} else if _, err := canonicalDNSName(u.Hostname()); err != nil || strings.HasPrefix(authority, "[") {
 		return "", fmt.Errorf("invalid host in authority %q", authority)
 	}
 	port := u.Port()
@@ -185,8 +221,10 @@ func (route *inspectedRoute) forward(w http.ResponseWriter, r *http.Request, sch
 		return
 	}
 	proxy := httputil.ReverseProxy{
-		Transport: route.transport,
+		Transport:    route.transport,
+		ErrorHandler: writeUpstreamError,
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), requestContextKey{}, pr.Out.Context()))
 			pr.Out.URL.Scheme = scheme
 			pr.Out.URL.Host = route.authority
 			pr.Out.Host = route.authority

@@ -76,8 +76,8 @@ func TestRequestAuthorization(t *testing.T) {
 				{"condition deny", []requestRule{{}, {deny: true, when: `request.path == "/private"`}}},
 			} {
 				t.Run(policy.name, func(t *testing.T) {
-					proxy, err := newInspectionProxy([]inspectionOrigin{{
-						authority: authority, address: netip.MustParseAddr("127.0.0.1"),
+					proxy, err := newLoopbackProxy([]inspectionOrigin{{
+						authority:   authority,
 						certificate: leaf, rules: policy.rules,
 					}}, upstreamRoots)
 					require.NoError(t, err)
@@ -130,8 +130,8 @@ func TestInspectionBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	authority := net.JoinHostPort("origin.test", port)
 	cert, roots := testCertificate(t)
-	proxy, err := newInspectionProxy([]inspectionOrigin{{
-		authority: authority, address: netip.MustParseAddr("127.0.0.1"), certificate: cert,
+	proxy, err := newLoopbackProxy([]inspectionOrigin{{
+		authority: authority, certificate: cert,
 		rules: []requestRule{{paths: []string{"/**"}}},
 	}}, x509.NewCertPool())
 	require.NoError(t, err)
@@ -186,8 +186,8 @@ func TestConnectAdmission(t *testing.T) {
 		{"deny alone does not admit", []requestRule{{deny: true, paths: []string{"/private"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proxy, err := newInspectionProxy([]inspectionOrigin{{
-				authority: "origin.test:443", address: netip.MustParseAddr("127.0.0.1"),
+			proxy, err := newLoopbackProxy([]inspectionOrigin{{
+				authority:   "origin.test:443",
 				certificate: cert, rules: tc.rules,
 			}}, nil)
 			require.NoError(t, err)
@@ -200,8 +200,8 @@ func TestConnectAdmission(t *testing.T) {
 
 func TestInspectedConnectionRequiresTLS(t *testing.T) {
 	cert, _ := testCertificate(t)
-	proxy, err := newInspectionProxy([]inspectionOrigin{{
-		authority: "origin.test:443", address: netip.MustParseAddr("127.0.0.1"), certificate: cert,
+	proxy, err := newLoopbackProxy([]inspectionOrigin{{
+		authority: "origin.test:443", certificate: cert,
 		rules: []requestRule{{paths: []string{"/public"}}},
 	}}, nil)
 	require.NoError(t, err)
@@ -238,8 +238,8 @@ func TestCancelServingContextEndsInspectedRequest(t *testing.T) {
 	require.NoError(t, err)
 	authority := net.JoinHostPort("origin.test", port)
 	leaf, roots := testCertificate(t)
-	proxy, err := newInspectionProxy([]inspectionOrigin{{
-		authority: authority, address: netip.MustParseAddr("127.0.0.1"), certificate: leaf,
+	proxy, err := newLoopbackProxy([]inspectionOrigin{{
+		authority: authority, certificate: leaf,
 		rules: []requestRule{{paths: []string{"/**"}}},
 	}}, upstreamRoots)
 	require.NoError(t, err)
@@ -287,4 +287,14 @@ func TestInnerHTTP1RequiresOriginForm(t *testing.T) {
 	w := httptest.NewRecorder()
 	route.serveInner(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// Most wire tests use local upstreams. Opt into loopback explicitly, as an
+// embedder must do for ordinary names and literals.
+func newLoopbackProxy(origins []inspectionOrigin, roots *x509.CertPool) (*inspectionProxy, error) {
+	return newInspectionProxy(origins, roots, upstreamConfig{
+		staticHosts: map[string]netip.Addr{"origin.test": netip.MustParseAddr("127.0.0.1")},
+		gateway:     netip.MustParseAddr("127.0.0.1"),
+		allowCIDRs:  []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
+	})
 }

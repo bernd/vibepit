@@ -20,9 +20,9 @@ type tunnelRefusal struct {
 }
 
 func (route *inspectedRoute) serveTunnel(w http.ResponseWriter, r *http.Request, report func(tunnelRefusal)) {
-	up, err := route.transport.DialContext(r.Context(), "tcp", route.authority)
+	up, err := route.dialTunnel(r.Context())
 	if err != nil {
-		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		writeUpstreamError(w, r, err)
 		return
 	}
 	defer up.Close()
