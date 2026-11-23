@@ -16,6 +16,7 @@ build:
 
 test:
 	go test ./...
+	go -C netproxy test ./...
 
 # Runs the Go race detector across the packages where vibepit's own
 # concurrency lives. Currently known to fail inside ./session because
@@ -23,10 +24,12 @@ test:
 # field (SafeEmulator doesn't lock Close()). Run locally to audit your own
 # changes; tolerate the upstream race until the fix lands.
 test-race:
+	CGO_ENABLED=1 go -C netproxy test -race ./...
 	CGO_ENABLED=1 go test -race ./session ./sshd ./cmd ./vt/... ./overlay ./container
 
 test-integration:
 	go test -tags=integration -timeout 60s ./...
+	go -C netproxy test -tags=integration -timeout 60s ./...
 
 test-bats:
 	bats image/tests

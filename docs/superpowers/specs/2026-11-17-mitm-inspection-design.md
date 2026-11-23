@@ -386,10 +386,13 @@ until the server has answered.
 - What begins like TLS but can't be read within a size and time limit (a
   ClientHello may span several records) is refused, so splitting it up is no
   way around the check.
-- Encrypted ClientHello shows the provider's name, not the site's, so it
-  doesn't match and is refused; such a tunnel could lead to any site of that
-  provider. A client behind an HTTP proxy normally leaves name resolution to
-  the proxy and never gets the ECH configuration, so this should be rare.
+- On name-checked tunnels, refuse a ClientHello carrying the
+  `encrypted_client_hello` extension, including after a HelloRetryRequest.
+  The outer name can match the target while the inner name remains hidden.
+  This rule also refuses clients sending dummy (GREASE) ECH, even with no
+  ECH configuration. Record an ECH-specific refusal so users can distinguish
+  it from a name mismatch. Cover real and GREASE ECH in the handshake suite.
+  [RFC 9849, sections 6.1 and 6.2](https://www.rfc-editor.org/rfc/rfc9849.html#section-6)
 - **Built early, against real servers.** Three review rounds each found a
   way past this check on paper, because it reads a protocol the proxy
   doesn't terminate and servers differ in what they accept. It is built
@@ -403,7 +406,11 @@ until the server has answered.
   absolute-form request, the URL's host and scheme `https`. A mismatch gets a
   `421 Misdirected Request`, never followed. 421 is also what tells an
   HTTP/2 client that tries to reuse ("coalesce") the connection for another
-  host to open a new one; goproxy serves coalesced requests
+  host to open a new one. For HTTP/1.1 the first implementation requires
+  origin form even if an absolute URI names the correct target (400).
+  Go drops the wire Host field while parsing an absolute URI, so the
+  handler cannot independently verify both authorities. Ordinary HTTP
+  proxy requests still use absolute form. goproxy serves coalesced requests
   (`TestMitmHTTP2Coalescing`), the new proxy deliberately does not.
 - The client must speak TLS. Only `tls.Server` reads a terminated connection,
   so cleartext and h2c are never served; a non-TLS first byte closes the
@@ -656,8 +663,12 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   `read-write`.
 
 **`when` conditions.**
-- CEL (cel-go) or `expr`, chosen by measuring the binary size increase. The
-  environment and rules are identical either way.
+- The first acceptance milestone uses `expr` for typed boolean conditions on
+  `request.path`. A stripped, CGO-disabled Linux arm64 HTTP binary built with
+  Go 1.27.4 grew by 3.41 MB with expr v1.18.1 and 8.78 MB with cel-go v0.32.0
+  when compiling and evaluating a condition. Before exposing config, verify
+  the rest of the documented expression environment and the collection
+  examples against the selected engine.
 - Environment: `request.method`, `request.host`, `request.port`,
   `request.path`, `request.param(name)`, `request.header(name)`,
   `request.json` (request body parsed as JSON, only when the expression
@@ -676,6 +687,15 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   doesn't parse cleanly (for example `;` separators or invalid escapes). An
   ambiguous request counts as an evaluation error: an allow rule does not
   match; a deny rule matches.
+- Header conditions read the outbound end-to-end headers after the proxy's
+  hop-by-hop and forwarding-header cleanup. A reference to a header removed,
+  rewritten, or synthesized by the proxy or its transport is an evaluation
+  error. This includes service credential headers on active binding origins.
+  Use an explicit error for those names even when the inbound header is
+  absent. The policy never needs a real credential to evaluate a condition.
+  Inspectors still receive the original client headers. Test a condition on
+  a removed header and one on a preserved header against what the upstream
+  actually receives.
 - `request.json` is parsed strictly, for the same reason: parsers disagree
   on duplicate keys (Go's `encoding/json` takes the last one). A body with a
   duplicate key in any object, invalid UTF-8, or data after the JSON value
@@ -968,7 +988,17 @@ Sources: `env` and `command`.
 - `run` and `up` resolve sources on the host at startup and push values to
   the proxy through a new mTLS control API endpoint. Values are held in proxy
   memory only, never in `ProxyConfig`, container env, or any response.
-- `vibepit secret refresh` resolves and pushes again (for expired tokens).
+- At startup the CLI saves the active secret names and their approved source
+  descriptors (environment variable names or commands) in a session manifest
+  readable only by the host user, outside both container mounts. It stores
+  no resolved values. Source commands run from a host-controlled working
+  directory outside the project. Startup, automatic re-delivery, and
+  `vibepit secret refresh` use those descriptors. A fresh refresh process
+  resolves the current value of the session's source and pushes over that
+  session's mTLS connection. Renaming or replacing a source in global config
+  takes effect on the next session. A missing or unreadable manifest fails
+  refresh. Test refresh from a second CLI process after changing the global
+  source under the same name.
 - After a proxy restart no values are loaded. Requests that need a secret
   get a 403: "secret `github` not loaded, run `vibepit secret refresh`".
   Everything that needs only the placeholder keeps working (below).
@@ -1154,13 +1184,13 @@ credential grants.
   able to move it. It can write the project's `.git/config`, and
   `git rev-parse --show-toplevel` obeys a `core.worktree` set there: the
   lookup took a parent directory as the root and the next session mounted
-  it read-write. (Fixed in today's code on its own, ahead of this design.)
-  The root is
-  the nearest directory, from the start directory upwards, that holds a
-  project config or a `.git` entry. No git command runs and no git
-  configuration is read. The project config counts because the sandbox
-  can't remove it; taking away the project's `.git` therefore can't move
-  the root to a repository further up.
+  it read-write.
+  The host integration depends on `fix/project-root-lookup`, which is
+  separate from the inspection branch. Use its physical root for approval,
+  session lookup and the project mount. It walks upward looking for a root
+  recorded in host state or an owned `.git` marker, and stops at a foreign
+  marker. Root records establish identity. Config and grant hashes still
+  decide whether the user has approved the current policy.
 - **The prompt names what will be mounted.** The trust prompt and first-time
   setup show the root path. If that root contains a project that is already
   approved, or lies inside one, the prompt says so and names it. A root
@@ -1466,7 +1496,7 @@ watch" stream:
    removal, `op: upsert|remove`; removal happens when the table cap evicts
    the least recently seen row, and it supersedes any pending rate-limited
    update for that row),
-   `finding`, `status` (a status section update), and `gap`. The kind is a
+   `finding`, `status` (a status section update), `replay-end`, and `gap`. The kind is a
    field inside the data, never
    a new event type. Example:
 
@@ -1493,6 +1523,15 @@ watch" stream:
    fallen out of a ring buffer, the proxy sends a `gap` event before the
    replay instead of silently skipping entries. A subscriber dropped for
    falling behind reconnects with `after` like any other.
+   The snapshot sequence is a state watermark. For a subscriber requesting
+   flows, the snapshot also supplies the starting flow cursor for its replay
+   window (including an initial bounded tail). Keep that cursor until a
+   replayed flow has been applied, then advance it to that flow. End replay
+   with a `replay-end` event at the snapshot watermark. Only then may the
+   subscriber advance its flow cursor to the watermark and process live
+   changes. Test disconnects just after the snapshot and midway through a
+   tail or resume. Each reconnect delivers the remaining records or an
+   explicit gap.
 6. **Topics and kinds.** A subscriber filters by event type and, optionally,
    by kind: `?topics=holds,policy` for the prompt;
    `?topics=flows&kinds=http-request` for the monitor's request log. Flow
@@ -1749,9 +1788,16 @@ TUI. Also where the proxy's config lives and what survives a restart:
   (section 5); append the canonical rule to the session's proxy config
   under a session-directory lock, written to a temp file and renamed into
   place. Every append reads the file inside the lock, so two concurrent
-  saves (CLI and monitor) can't drop each other's rules.
+  saves (CLI and monitor) can't drop each other's rules. The live response
+  identifies its proxy instance. After the rename, confirm the running
+  instance still enforces the rule. If the instance changed, idempotently
+  ensure the canonical rule on the current instance before reporting success.
+  A later restart loads the renamed file. Test a restart between the first
+  acknowledgement and the rename.
 - **What the UI reports:**
-  - both writes succeeded: "Saved";
+  - both writes succeeded and live enforcement was confirmed: "Saved";
+  - both writes succeeded but live confirmation failed: report that the rule
+    was saved and its current enforcement could not be confirmed;
   - the live change worked but the project write failed: "active for this
     session, not saved", as today; nothing is appended;
   - the project write worked but the append failed: "saved to the project
@@ -1959,7 +2005,7 @@ update; the changelog and the update docs say so.
   (section 8); sandbox tools verify with the proxy image's roots
   (section 1); a TLS tunnel is closed when its server name is missing or is
   not the `CONNECT` host, when its first record is not a ClientHello, and
-  when it uses Encrypted ClientHello (section 1); an ordinary proxy request
+  when it offers Encrypted ClientHello, including GREASE (section 1); an ordinary proxy request
   with an `https://` URL gets a 400, and an ordinary request goes upstream
   under its URL's host, whatever its `Host` header says (section 1); an
   unknown preset name is a startup error (section 4); a `deny-http` entry
@@ -2328,7 +2374,8 @@ it.
 
 ## Left to the builder
 
-- CEL vs `expr`, decided by measured binary growth.
+- Verify the preset expressions and evaluation-error semantics with the
+  condition engine before its syntax becomes public config (section 2).
 - Exact names of new config keys for user-defined presets, the audit
   setting, and its exclusion list, the new control API endpoint, and new
   block codes.
