@@ -19,12 +19,13 @@ import (
 )
 
 // inspectionOrigin supplies the checked IPv4 address and the session's server
-// certificate for one authority. This first slice serves inspected origins only.
+// certificate for authorities that need TLS inspection.
 type inspectionOrigin struct {
 	authority   string
 	address     netip.Addr
 	certificate tls.Certificate
 	rules       []requestRule
+	hostPort    bool // The embedder has authorized a host-port gateway rewrite.
 }
 
 type inspectedRoute struct {
@@ -32,10 +33,13 @@ type inspectedRoute struct {
 	certificate tls.Certificate
 	policy      requestPolicy
 	transport   *http.Transport
+	inspect     bool
+	tunnelName  string // Empty for a literal address or authorized host port.
 }
 
 type inspectionProxy struct {
-	routes map[string]*inspectedRoute
+	routes          map[string]*inspectedRoute
+	onTunnelRefusal func(tunnelRefusal)
 }
 
 func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool) (*inspectionProxy, error) {
@@ -49,21 +53,28 @@ func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool) (*insp
 			return nil, fmt.Errorf("duplicate inspection origin %q", key)
 		}
 		address := origin.address.Unmap()
-		if !address.Is4() || len(origin.certificate.Certificate) == 0 || origin.certificate.PrivateKey == nil {
-			return nil, fmt.Errorf("%s requires a checked IPv4 address and a TLS certificate", key)
+		if !address.Is4() {
+			return nil, fmt.Errorf("%s requires a checked IPv4 address", key)
 		}
 		policy, err := compileRules(origin.rules)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
+		inspect := policy.requiresInspection()
+		if origin.hostPort && inspect {
+			return nil, fmt.Errorf("%s: host ports cannot have request rules", key)
+		}
 		if !policy.admitsHost() {
 			p.routes[key] = nil
 			continue
 		}
-		if !policy.requiresInspection() {
-			return nil, fmt.Errorf("%s has no request-level rule for inspection", key)
+		if inspect && (len(origin.certificate.Certificate) == 0 || origin.certificate.PrivateKey == nil) {
+			return nil, fmt.Errorf("%s requires a TLS inspection certificate", key)
 		}
-		_, port, _ := net.SplitHostPort(key)
+		host, port, _ := net.SplitHostPort(key)
+		if _, err := netip.ParseAddr(host); err == nil || origin.hostPort {
+			host = ""
+		}
 		pinned := net.JoinHostPort(address.String(), port)
 		dialer := net.Dialer{Timeout: 10 * time.Second}
 		tr := &http.Transport{
@@ -75,7 +86,7 @@ func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool) (*insp
 			TLSHandshakeTimeout: 10 * time.Second,
 			IdleConnTimeout:     90 * time.Second,
 		}
-		p.routes[key] = &inspectedRoute{authority: key, certificate: origin.certificate, policy: policy, transport: tr}
+		p.routes[key] = &inspectedRoute{authority: key, certificate: origin.certificate, policy: policy, transport: tr, inspect: inspect, tunnelName: host}
 	}
 	return p, nil
 }
@@ -134,7 +145,11 @@ func (p *inspectionProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isConnect {
-		route.serveTLS(w, r)
+		if route.inspect {
+			route.serveTLS(w, r)
+		} else {
+			route.serveTunnel(w, r, p.onTunnelRefusal)
+		}
 		return
 	}
 	route.forward(w, r, "http")
@@ -165,7 +180,7 @@ func (route *inspectedRoute) serveInner(w http.ResponseWriter, r *http.Request) 
 }
 
 func (route *inspectedRoute) forward(w http.ResponseWriter, r *http.Request, scheme string) {
-	if !route.policy.allows(r.URL) {
+	if route.inspect && !route.policy.allows(r.URL) {
 		http.Error(w, "request refused by policy", http.StatusForbidden)
 		return
 	}
@@ -188,6 +203,7 @@ func (route *inspectedRoute) forward(w http.ResponseWriter, r *http.Request, sch
 type bufferedConn struct {
 	net.Conn
 	reader      io.Reader
+	done        chan struct{}
 	signalClose func()
 }
 
@@ -218,22 +234,39 @@ func (l *singleConnListener) Accept() (net.Conn, error) {
 func (l *singleConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
 func (l *singleConnListener) Close() error   { return l.conn.Close() }
 
-func (route *inspectedRoute) serveTLS(w http.ResponseWriter, r *http.Request) {
+func acceptConnect(w http.ResponseWriter, r *http.Request) *bufferedConn {
 	conn, rw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		http.Error(w, "CONNECT requires HTTP/1", http.StatusBadRequest)
-		return
+		return nil
 	}
-	defer conn.Close()
+
 	if _, err := fmt.Fprintf(rw, "HTTP/%d.%d 200 Connection established\r\n\r\n", r.ProtoMajor, r.ProtoMinor); err != nil {
-		return
+		conn.Close()
+		return nil
 	}
 	if err := rw.Flush(); err != nil {
-		return
+		conn.Close()
+		return nil
 	}
 	done := make(chan struct{})
 	reader := io.MultiReader(io.LimitReader(rw.Reader, int64(rw.Reader.Buffered())), conn)
-	buffered := &bufferedConn{Conn: conn, reader: reader, signalClose: sync.OnceFunc(func() { close(done) })}
+	return &bufferedConn{Conn: conn, reader: reader, done: done, signalClose: sync.OnceFunc(func() { close(done) })}
+}
+
+func (c *bufferedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return net.ErrClosed
+}
+
+func (route *inspectedRoute) serveTLS(w http.ResponseWriter, r *http.Request) {
+	buffered := acceptConnect(w, r)
+	if buffered == nil {
+		return
+	}
+	defer buffered.Close()
 	stopClose := context.AfterFunc(r.Context(), func() { buffered.Close() })
 	defer stopClose()
 	tlsConn := tls.Server(buffered, &tls.Config{
@@ -241,12 +274,12 @@ func (route *inspectedRoute) serveTLS(w http.ResponseWriter, r *http.Request) {
 		NextProtos:   []string{"h2", "http/1.1"},
 	})
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	err = tlsConn.HandshakeContext(ctx)
+	err := tlsConn.HandshakeContext(ctx)
 	cancel()
 	if err != nil {
 		return
 	}
-	ln := &singleConnListener{conn: tlsConn, done: done}
+	ln := &singleConnListener{conn: tlsConn, done: buffered.done}
 	var protocols http.Protocols
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(true)

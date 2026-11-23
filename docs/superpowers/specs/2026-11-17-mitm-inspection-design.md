@@ -383,9 +383,13 @@ until the server has answered.
   from the beginning, so protocols where the server speaks first keep
   working; only the client's ClientHello records are held until they are
   checked.
-- What begins like TLS but can't be read within a size and time limit (a
-  ClientHello may span several records) is refused, so splitting it up is no
-  way around the check.
+- A bounded record reader holds a complete ClientHello across fragments.
+  Each hello flight has a 64 KiB wire budget including record headers.
+  A single ten-second deadline covers the TLS exchange through the final
+  ServerHello, including a retry. Ambiguous legacy SSL prefixes have up to
+  ten seconds to supply their framing. The proxy removes these deadlines
+  when it starts the ordinary byte relay. Upstream TLS alerts are forwarded
+  so clients receive the server's handshake errors.
 - On name-checked tunnels, refuse a ClientHello carrying the
   `encrypted_client_hello` extension, including after a HelloRetryRequest.
   The outer name can match the target while the inner name remains hidden.
@@ -2396,8 +2400,6 @@ it.
   session credentials.
 - Mount paths of the sandbox's trust files, and which JDK versions the
   truststore test covers.
-- How a tunnel's ClientHello is read (parsed by hand, or through
-  `crypto/tls` on a read-only connection) and its size and time limits.
 - Where the trust record is stored (per `config/paths.go`) and the exact
   canonical form that is hashed.
 - The draft-rules output mechanism (view plus copy, or write to a file).
