@@ -90,13 +90,39 @@ export function closestEdge(r: Rect, x: number, y: number): Edge {
   return d.sort((a, b) => a[1] - b[1])[0][0];
 }
 
+export interface Hit { target: string; edge: Edge }
+
+const depths = (r: Rect, x: number, y: number): Record<Edge, number> => ({
+  left: (x - r.x) / r.w, right: (r.x + r.w - x) / r.w, top: (y - r.y) / r.h, bottom: (r.y + r.h - y) / r.h,
+});
+
+// The edge the pointer is pushing toward, or null in the middle of the
+// rectangle. An edge counts only within `zone` of its side, as a fraction of
+// the rectangle. The previous edge is kept until another is clearly deeper,
+// so a small movement near a corner does not flip the result.
+export function edgeZone(r: Rect, x: number, y: number, prev?: Edge, zone = 1 / 3, margin = 0.08): Edge | null {
+  const d = depths(r, x, y);
+  const best = (Object.keys(d) as Edge[]).sort((a, b) => d[a] - d[b])[0];
+  if (prev && d[prev] <= zone + margin / 2 && d[best] >= d[prev] - margin) return prev;
+  return d[best] <= zone ? best : null;
+}
+
 // Docking target under the pointer. The workspace's outer band targets the
-// whole tab and wins over the pane edge it overlaps.
-export function hitStage(root: Node, placed: Placement, x: number, y: number, band = 30): { target: string; edge: Edge } {
+// whole tab and wins over the pane edge it overlaps. In the middle of a pane
+// the previous edge stays, so the preview only changes when the pointer
+// pushes toward a side.
+export function hitStage(root: Node, placed: Placement, x: number, y: number, prev?: Hit, band = 30): Hit {
   const whole = { x: 0, y: 0, w: placed.size.w, h: placed.size.h };
   const fromEdge = Math.min(x, whole.w - x, y, whole.h - y);
-  const pane = fromEdge > band ? placed.panes.find((p) => inside(p.rect, x, y)) : undefined;
-  return pane ? { target: pane.id, edge: closestEdge(pane.rect, x, y) } : { target: root.id, edge: closestEdge(whole, x, y) };
+  // The band is a little deeper for a target that is already the whole tab.
+  const reach = prev?.target === root.id ? band + 10 : band - 10;
+  const pane = fromEdge > reach ? placed.panes.find((p) => inside(p.rect, x, y)) : undefined;
+  const target = pane?.id ?? root.id;
+  const rect = pane?.rect ?? whole;
+  const before = prev?.target === target ? prev.edge : undefined;
+  // The whole tab has no middle: its band is always near a border.
+  const edge = edgeZone(rect, x, y, before, pane ? 1 / 3 : 0.5) ?? before ?? closestEdge(rect, x, y);
+  return { target, edge };
 }
 
 // Which part of a tab the pointer is over: its edges reorder, its center docks.

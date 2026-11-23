@@ -50,9 +50,9 @@ A dedicated Claude conversation could become another pane type. Its addition sho
 
 The drag source sets the unit of movement. A tab carries its root layout, a group handle carries the whole subtree, and a pane header carries one view. Dragging inside terminal text remains a selection gesture.
 
-1. **Reveal.** Hovering over the center of a tab shows a diagram of its workspace in place of the current one. The diagram draws each pane with its actual title, and it is the same one the keyboard move command shows. Live pane content stays untouched until the drop. Moving through the gaps between tabs instead shows a reorder or new-tab insertion line.
+1. **Reveal.** Hovering over the center of a tab shows a diagram of its workspace in place of the current one. The diagram draws each pane with its actual title, and it is the same one the keyboard move command shows. Live pane content stays untouched until the drop. A tab becomes the target only after the pointer rests on it for a moment, so crossing other tabs on the way to the workspace does not retarget. Moving through the gaps between tabs instead shows a reorder or new-tab insertion line.
    Releasing over the center of a different tab uses the right edge of its workspace as the default. Show that preview before accepting the drop.
-2. **Target.** The workspace’s outer edge targets the whole tab. An edge inside a pane targets that pane. Give the outer edge priority where they overlap. Outline the selected target and draw the proposed panes with their actual titles.
+2. **Target.** The workspace’s outer edge targets the whole tab. An edge inside a pane targets that pane. Give the outer edge priority where they overlap. Inside a pane, an edge is chosen only while the pointer is in the outer third on that side. In the middle the preview keeps its last edge, and near a corner it keeps the current edge until another is clearly closer, so a small movement never flips the preview. Outline the selected target and draw the proposed panes with their actual titles.
 3. **Orient.** At the top or bottom, the incoming group’s immediate children run left to right. At the left or right, they run top to bottom. Preserve child order and relative weights. A child that is itself a group retains its own orientation, order and proportions.
 4. **Commit.** Release to apply exactly the preview in one operation. Remove an emptied source tab. If removing a child leaves a group with one child, promote that child. Preserve every group still containing multiple children. The destination tab becomes active, and focus goes to the moved pane, or to the last-focused pane of a moved group. An invalid drop, a release outside the workspace and tab bar, or Escape restores the previous layout, active tab and focus.
 5. **Adjust.** Drag a divider to resize neighboring panes. A group or pane can be picked up again and docked elsewhere or moved into a tab-bar gap. Keyboard-accessible move commands must offer the same source, target, edge and new-tab choices.
@@ -67,7 +67,7 @@ The drag source sets the unit of movement. A tab carries its root layout, a grou
 
 **Round trips.** Docking at an edge reorients the moved group’s direct children, while a move into a tab-bar gap keeps the internal layout. A side-by-side pair docked at a right edge and dragged back to the tab bar therefore returns stacked. This is intended. V1 has no modifier that keeps the original orientation.
 
-Reject a move into the source itself or one of its descendants. When the available space cannot accommodate the result at the supported pane minimums, show the target as unavailable and keep the source intact. Preview and commit must use the same sizing and targeting rules.
+Mark the panes being moved while a drag is in progress. Over the source itself or one of its descendants, show no preview; a release there leaves the layout unchanged. When the available space cannot accommodate the result at the supported pane minimums, show the target as unavailable and keep the source intact. Preview and commit must use the same sizing and targeting rules.
 
 ## Pane zoom
 
@@ -205,6 +205,7 @@ This document covers the workspace layout portion of the desktop UI design. The 
 | Move the pair back to the tab bar, then repeat with only Tests. | The first move carries both panes. The second carries one. The terminal sessions keep their identities and continue running. |
 | Dock the nested Shell + (Codex, Tests) group. | Only Shell and the pair change orientation relative to each other. Explicit child groups survive. |
 | Hover a background tab, switch between outer and pane targets, then cancel. | The outline and preview identify the affected region. Cancellation restores selection, layout and focus. |
+| Drag a pane across another tab without stopping, then into the workspace. Move the pointer slightly in the middle of a pane. | The crossed tab does not become the target. The preview stays the same until the pointer pushes toward a side. |
 | Repeat a move using keyboard commands. | The same layouts and new-tab destinations are reachable. |
 | Split a Logs pane right, then split its shell below. Rename the new session and move it. | New shells open in place and receive focus. The name follows the same session in headers, previews, attention and reattachment. |
 | Resize a nested group, then equalize its parent. | The parent’s children share the space and the nested proportions survive. |

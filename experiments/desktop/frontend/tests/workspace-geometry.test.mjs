@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closestEdge, distribute, dragShare, hitStage, place, tabZone } from '../src/core/workspace/geometry.ts';
+import { closestEdge, distribute, dragShare, edgeZone, hitStage, place, tabZone } from '../src/core/workspace/geometry.ts';
 import { restore } from '../src/core/workspace/persist.ts';
 
 const pane = (id, type = 'session') => ({ id, type, ...(type === 'session' ? { sid: `s-${id}` } : {}) });
@@ -75,17 +75,46 @@ test('closestEdge', async (t) => {
   for (const c of cases) await t.test(c.want, () => assert.equal(closestEdge(r, c.x, c.y), c.want));
 });
 
+test('edgeZone', async (t) => {
+  const r = { x: 0, y: 0, w: 300, h: 300 };
+  const cases = [
+    { name: 'pushing toward a side picks it', x: 30, y: 150, want: 'left' },
+    { name: 'the middle has no edge', x: 150, y: 150, want: null },
+    { name: 'just outside the outer third', x: 110, y: 150, want: null },
+    { name: 'the previous edge stays in the middle', x: 150, y: 150, prev: 'left', want: null },
+    { name: 'a corner keeps the previous edge', x: 40, y: 30, prev: 'left', want: 'left' },
+    { name: 'the same corner without history takes the nearer edge', x: 40, y: 30, want: 'top' },
+    { name: 'a clearly deeper edge replaces the previous one', x: 80, y: 20, prev: 'left', want: 'top' },
+    { name: 'the previous edge is dropped once the pointer leaves its side', x: 200, y: 20, prev: 'left', want: 'top' },
+  ];
+  for (const c of cases) await t.test(c.name, () => assert.equal(edgeZone(r, c.x, c.y, c.prev), c.want));
+});
+
 test('hitStage', async (t) => {
   const root = grp('root', 'cols', [pane('A'), pane('B')]);
   const placed = place(root, { w: 812, h: 602 }, m);
   const cases = [
     { name: 'the outer band targets the whole tab', x: 10, y: 300, want: { target: 'root', edge: 'left' } },
     { name: 'the outer band wins over the pane edge', x: 400, y: 590, want: { target: 'root', edge: 'bottom' } },
-    { name: 'inside a pane targets its nearest edge', x: 380, y: 300, want: { target: 'A', edge: 'right' } },
+    { name: 'pushing toward a pane side targets that edge', x: 380, y: 300, want: { target: 'A', edge: 'right' } },
     { name: 'the other pane', x: 440, y: 300, want: { target: 'B', edge: 'left' } },
     { name: 'on a divider falls back to the whole tab', x: 406, y: 100, want: { target: 'root', edge: 'top' } },
+    { name: 'the middle of a pane keeps the previous edge', x: 200, y: 300, prev: { target: 'A', edge: 'right' }, want: { target: 'A', edge: 'right' } },
+    { name: 'history from another target does not carry over', x: 80, y: 300, prev: { target: 'B', edge: 'right' }, want: { target: 'A', edge: 'left' } },
+    { name: 'a whole-tab target reaches a little deeper', x: 36, y: 300, prev: { target: 'root', edge: 'left' }, want: { target: 'root', edge: 'left' } },
+    { name: 'a pane target reaches a little closer to the border', x: 24, y: 300, prev: { target: 'A', edge: 'left' }, want: { target: 'A', edge: 'left' } },
   ];
-  for (const c of cases) await t.test(c.name, () => assert.deepEqual(hitStage(root, placed, c.x, c.y), c.want));
+  for (const c of cases) await t.test(c.name, () => assert.deepEqual(hitStage(root, placed, c.x, c.y, c.prev), c.want));
+
+  await t.test('small movements in the middle of a pane do not change the result', () => {
+    let hit = hitStage(root, placed, 380, 300);
+    const seen = new Set();
+    for (const [dx, dy] of [[0, 0], [8, -9], [-7, 6], [5, 11], [-10, -4], [9, 9], [-3, -12]]) {
+      hit = hitStage(root, placed, 205 + dx, 300 + dy, hit);
+      seen.add(`${hit.target}:${hit.edge}`);
+    }
+    assert.deepEqual([...seen], ['A:right']);
+  });
 
   await t.test('a single-pane tab is its own target', () => {
     const one = pane('A');

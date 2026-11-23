@@ -69,6 +69,9 @@ button[aria-pressed='true'] { color: var(--leaf); }
 .pane { position: absolute; display: flex; flex-direction: column; background: var(--term); overflow: hidden; }
 .pane.solo { border: 1px solid var(--line); border-radius: 5px; }
 .pane.focus { outline: 1px solid #8aa46f; outline-offset: -1px; }
+/* Panes being dragged are marked, so it is clear what a drop will move. */
+.pane.carried { outline: 2px dashed var(--leaf); outline-offset: -2px; }
+.pane.carried > * { opacity: .55; }
 .phead { gap: 7px; flex: none; padding: 0 4px 0 10px; height: 36px; background: #222923; border-bottom: 1px solid var(--line); color: var(--mute); cursor: grab; touch-action: none; }
 .phead strong { font-size: 13px; font-weight: 560; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane.focus .phead { background: #2a3429; }
@@ -94,6 +97,8 @@ button[aria-pressed='true'] { color: var(--leaf); }
 .groupmini { padding: 3px; border: 1px solid var(--line2); }
 .leafmini { min-width: 0; min-height: 0; display: grid; place-content: center; text-align: center; padding: 5px; border: 1px solid #56645a; background: #252f27; color: var(--mute); overflow: hidden; font: 12px var(--mono); overflow-wrap: anywhere; }
 .incoming { background: #35472d; border: 2px dashed var(--leaf); color: var(--leaf); }
+/* The incoming half is tinted through, so the result reads at a glance. */
+.incoming .leafmini { background: #35472d; border-color: #6f8a5c; color: var(--leaf); }
 .targetmark { outline: 2px solid var(--warm); outline-offset: -2px; }
 .miniwrap { display: flex; height: 140px; margin: 12px 0; background: #151b17; border-radius: 4px; padding: 5px; }
 

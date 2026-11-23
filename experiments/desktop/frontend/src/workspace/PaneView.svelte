@@ -26,7 +26,7 @@
 </script>
 
 <section
-  id="pane-{pane.id}" class="pane" class:focus={focused} class:solo role="group" aria-label={title} hidden={!rect}
+  id="pane-{pane.id}" class="pane" class:focus={focused} class:carried={ws.carried.has(pane.id)} class:solo role="group" aria-label={title} hidden={!rect}
   style:left="{rect?.x ?? 0}px" style:top="{rect?.y ?? 0}px" style:width="{rect?.w ?? 0}px" style:height="{rect?.h ?? 0}px"
   onfocusin={() => ws.focus(pane.id)} onpointerdowncapture={() => ws.focus(pane.id)}
 >

@@ -38,6 +38,13 @@ export class Workspace {
   }
 
   get active(): Tab | undefined { return this.layout.tabs.find((t) => t.id === this.layout.active); }
+  // Panes that the drag in progress is carrying.
+  get carried(): Set<string> {
+    const src = this.drag?.src;
+    const tab = src ? this.layout.tabs.find((t) => find(t.root, src)) : undefined;
+    const node = tab && src ? find(tab.root, src) : undefined;
+    return new Set(node ? leaves(node).map((p) => p.id) : []);
+  }
   get focused(): Pane | undefined { const t = this.active; return t && (find(t.root, t.focus) as Pane | undefined); }
 
   paneTitle(p: Pane): string { return p.type === 'session' ? this.sessions[p.sid ?? '']?.name ?? 'Unavailable' : typeNames[p.type]; }

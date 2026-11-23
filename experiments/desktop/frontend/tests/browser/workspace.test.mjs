@@ -52,11 +52,16 @@ async function tabAction(index, item) {
 }
 const center = async (locator) => { const b = await locator.boundingBox(); return { ...b, x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 // A drag in small steps, so the docking controller sees every stage of it.
+// A point with `rest` holds the pointer there, as a tab needs before it becomes the target.
+const rest = (p) => ({ x: p.x, y: p.y, rest: 250 });
 async function drag(from, points, { drop = true } = {}) {
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(from.x + 12, from.y + 12, { steps: 3 });
-  for (const p of points) await page.mouse.move(p.x, p.y, { steps: 8 });
+  for (const p of points) {
+    await page.mouse.move(p.x, p.y, { steps: 8 });
+    if (p.rest) await page.waitForTimeout(p.rest);
+  }
   if (drop) await page.mouse.up();
 }
 
@@ -162,7 +167,7 @@ test('worked example: drag the Codex + Tests tab onto Logs', async () => {
       const logsTab = await center(page.locator('.tab').nth(1));
       const stage = await page.locator('.stage-inner').boundingBox();
       // Straight down from the tab, so the pointer crosses no other tab on its way.
-      await drag(from, [logsTab, { x: logsTab.x, y: stage.y + 80 }, c.point(stage)], { drop: false });
+      await drag(from, [rest(logsTab), { x: logsTab.x, y: stage.y + 80 }, c.point(stage)], { drop: false });
       const labels = await page.locator('.projection .leafmini').allTextContents();
       assert.deepEqual([...labels].sort(), ['Codex', 'Logs', 'Tests'], 'the preview draws the panes with their titles');
       assert.deepEqual(await tabLabels(), ['Codex + Tests', 'Logs', 'Monitor'], 'a preview causes no structural edit');
@@ -183,6 +188,59 @@ test('worked example: drag the Codex + Tests tab onto Logs', async () => {
     await drag(from, [{ x: bar.x + bar.width - 40, y: bar.y + bar.height / 2 }]);
     assert.deepEqual(await tabLabels(), ['Logs', 'Monitor', 'Codex + Tests']);
   }
+});
+
+test('crossing a tab on the way to the workspace does not retarget, resting on it does', async () => {
+  const from = await center(pane('Tests').locator('.phead strong'));
+  const monitorTab = await center(page.locator('.tab').nth(2));
+  const stage = await page.locator('.stage-inner').boundingBox();
+  const right = { x: stage.x + stage.width - 10, y: stage.y + stage.height / 2 };
+  const previewed = async () => (await page.locator('.projection .leafmini').allTextContents()).sort();
+
+  await drag(from, [monitorTab, right], { drop: false });
+  assert.deepEqual(await previewed(), ['Codex', 'Tests'], 'a quick pass over the Monitor tab keeps the current tab as target');
+  assert.equal(await page.locator('.tab.reveal').count(), 1);
+  assert.equal(await page.locator('.tab.reveal .tablabel').textContent(), 'Codex + Tests');
+
+  await page.mouse.move(monitorTab.x, monitorTab.y, { steps: 8 });
+  await page.waitForTimeout(250);
+  assert.equal(await page.locator('.tab.reveal .tablabel').textContent(), 'Monitor', 'resting on the tab makes it the target without moving the pointer');
+  assert.deepEqual(await previewed(), ['Monitor', 'Tests']);
+  await page.mouse.up();
+  assert.deepEqual(await tabLabels(), ['Codex', 'Logs', 'Monitor + Tests']);
+});
+
+test('the docking preview only changes when the pointer pushes toward a side', async () => {
+  await page.getByRole('button', { name: 'New Session tab' }).click();
+  await page.locator('.tab-name').nth(0).click();
+  const from = await center(page.locator('.tab-name').nth(3));
+  const body = await pane('Codex').locator('.body').boundingBox();
+  const mid = { x: body.x + body.width / 2, y: body.y + body.height / 2 };
+  // The arrangement of the preview, as the incoming pane's position relative to Codex.
+  const arrangement = async () => page.evaluate(() => {
+    const box = (name) => [...document.querySelectorAll('.projection .leafmini')].find((e) => e.textContent === name)?.getBoundingClientRect();
+    const a = box('Shell 1'), b = box('Codex');
+    if (!a || !b) return 'none';
+    return a.right <= b.left + 1 ? 'left' : a.left >= b.right - 1 ? 'right' : a.bottom <= b.top + 1 ? 'above' : 'below';
+  });
+
+  await drag(from, [{ x: body.x + 40, y: mid.y }], { drop: false });
+  assert.equal(await arrangement(), 'left', 'pushing toward the left side docks on the left');
+
+  await page.mouse.move(mid.x, mid.y, { steps: 10 });
+  const seen = new Set([await arrangement()]);
+  for (const [dx, dy] of [[14, -12], [-10, 15], [18, 9], [-16, -14], [6, 20], [-20, 4], [0, 0]]) {
+    await page.mouse.move(mid.x + dx, mid.y + dy, { steps: 2 });
+    seen.add(await arrangement());
+  }
+  assert.deepEqual([...seen], ['left'], 'small movements in the middle of the pane keep the preview');
+
+  await page.mouse.move(mid.x, body.y + body.height - 30, { steps: 10 });
+  assert.equal(await arrangement(), 'below', 'pushing toward the bottom changes it');
+  await page.screenshot({ path: `${output}docking-pane-edge.png` });
+  await page.mouse.up();
+  const [codex, shell] = [await pane('Codex').boundingBox(), await pane('Shell 1').boundingBox()];
+  assert.ok(shell.y >= codex.y + codex.height && Math.abs(shell.x - codex.x) < 2, 'the drop matches the last preview');
 });
 
 test('dragging a pane header moves one view', async () => {
@@ -222,7 +280,7 @@ test('cancelling a drag restores layout, selection and focus', async () => {
       const from = await center(page.locator('.tab-name').nth(0));
       const logsTab = await center(page.locator('.tab').nth(1));
       const stage = await page.locator('.stage-inner').boundingBox();
-      await drag(from, [logsTab, { x: logsTab.x, y: stage.y + 80 }], { drop: false });
+      await drag(from, [rest(logsTab), { x: logsTab.x, y: stage.y + 80 }], { drop: false });
       assert.equal(await page.locator('.projection').count(), 1);
       await c.end();
       assert.equal(await page.locator('.projection').count(), 0);
@@ -233,14 +291,31 @@ test('cancelling a drag restores layout, selection and focus', async () => {
   }
 });
 
-test('a move into the moving group is shown as unavailable', async () => {
+test('over the source itself there is no preview, and a release there changes nothing', async () => {
   await paneAction('Tests', 'Split below');
   const from = await center(page.locator('.gin b'));
   const inside = await center(pane('Shell 1').locator('.body'));
   await drag(from, [inside], { drop: false });
-  assert.match(await page.locator('.projection.invalid').textContent(), /outside the moving group/);
+  assert.equal(await page.locator('.projection').count(), 0, 'no preview and no error over the moving group');
+  assert.deepEqual(await page.locator('.pane.carried').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Tests', 'Shell 1'], 'the carried panes are marked');
+  const codex = await center(pane('Codex').locator('.body'));
+  await page.mouse.move(codex.x - codex.width / 2 + 60, codex.y, { steps: 8 });
+  assert.equal(await page.locator('.projection:not(.invalid)').count(), 1, 'a target outside the group previews as usual');
+  await page.screenshot({ path: `${output}docking-carried.png` });
+  await page.mouse.move(inside.x, inside.y, { steps: 8 });
+  assert.equal(await page.locator('.projection').count(), 0);
   await page.mouse.up();
+  assert.equal(await page.locator('.pane.carried').count(), 0);
   assert.deepEqual(await shownNames(), ['Codex', 'Tests', 'Shell 1']);
+  assert.equal(await page.locator('.gin').count(), 1, 'the layout is unchanged');
+});
+
+test('dragging a pane shows no message at the start of the drag', async () => {
+  const from = await center(pane('Tests').locator('.phead strong'));
+  await drag(from, [{ x: from.x + 40, y: from.y + 60 }], { drop: false });
+  assert.equal(await page.locator('.projection').count(), 0);
+  assert.equal(await pane('Tests').evaluate((el) => el.classList.contains('carried')), true);
+  await page.mouse.up();
 });
 
 test('the move dialog reaches the same layouts from the keyboard', async () => {
