@@ -15,10 +15,15 @@ request a tool makes, so presets can be authored from observed traffic.
 
 Prior art reviewed: NVIDIA OpenShell, Docker Sandboxes (sbx), Vercel Sandbox,
 iron-proxy, Anthropic sandbox-runtime, Coder boundary/httpjail, Cloudflare
-outbound Workers, Fly tokenizer, Codex cloud. The design borrows OpenShell's
-audit mode, credential/endpoint binding and placeholder model, Docker's
-"same allow/deny verbs with optional method/path", and Vercel's "terminate
-TLS only where rules need it".
+outbound Workers, Fly tokenizer, Codex cloud, Claude Code on the web. The
+design borrows OpenShell's audit mode, credential/endpoint binding and
+placeholder model, Docker's "same allow/deny verbs with optional
+method/path", and Vercel's "terminate TLS only where rules need it". From
+Claude Code on the web it borrows ref-level push restrictions (its GitHub
+proxy rejects branch deletions and non-branch pushes), hosts that never
+receive a credential, flagging overlapping secrets at configuration time,
+its sandbox CA variable coverage, and an agent-facing troubleshooting file
+in the sandbox.
 
 ## Goals
 
@@ -172,8 +177,19 @@ goproxy found in #432).
 The entrypoint concatenates the system bundle and the CA into a file under
 `/tmp` and the container env points these at it: `SSL_CERT_FILE`,
 `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `PIP_CERT`,
-`CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE`, `DENO_CERT`; `NODE_EXTRA_CA_CERTS`
-points at the CA alone. For Java, a truststore setting replaces the JDK's
+`CARGO_HTTP_CAINFO`, `AWS_CA_BUNDLE`, `DENO_CERT`, `NIX_SSL_CERT_FILE`,
+`HEX_CACERTS_PATH` (Elixir Hex), `BUNDLE_SSL_CA_CERT` (Ruby Bundler),
+`HTTPLIB2_CA_CERTS` (older Google Python clients),
+`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` (gRPC, which reaches terminated hosts
+over HTTP/2), and `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` (gcloud);
+`NODE_EXTRA_CA_CERTS` points at the CA alone. `NODE_OPTIONS` is not set
+(Claude Code's cloud sandbox adds `--use-openssl-ca` there):
+`NODE_EXTRA_CA_CERTS` already covers Node, and `NODE_OPTIONS` is often set
+by users and projects, which would replace or be replaced by ours. Tool
+config files (`pip.conf` `cert`, npm `cafile`, `~/.curlrc`, git
+`http.sslCAInfo`) override these variables; the troubleshooting file
+(section 12) tells the agent to point them at the bundle rather than turn
+verification off. For Java, a truststore setting replaces the JDK's
 default store, so it must contain the public roots too: when a JDK is found,
 the sandbox copies the JDK's `cacerts` into `/tmp`, imports the CA with
 `keytool`, and only then adds the `-Djavax.net.ssl.trustStore` flags to
@@ -414,7 +430,8 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
 - Environment: `request.method`, `request.host`, `request.port`,
   `request.path`, `request.param(name)`, `request.header(name)`,
   `request.json` (request body parsed as JSON, only when the expression
-  references it), and `request.graphql.queryOnly`.
+  references it), `request.graphql.queryOnly`, `request.git.push`, and
+  `request.git.updates`.
 - A condition that references `request.path` is a path decision and follows
   the path rules above, even on a rule without `paths`: the request is
   rejected if either interpretation contains `.`, `..`, `//`, or NUL, and the
@@ -425,10 +442,46 @@ A new `HTTPEntry` type, decodable from a string or an object, replaces
   GraphQL parser (`gqlparser`), contains only query operations. A text check
   is not acceptable: comments or a fragment before `mutation` would get past
   it. Parsed only when an expression references it.
-- Bodies are buffered only for rules that reference `request.json` or
-  `request.graphql`, up to
+- `request.git` describes a git smart-HTTP push, so rules can limit which
+  refs a push changes, not just which repository it goes to:
+  - `request.git.push` is true for a `POST` whose path ends in
+    `/git-receive-pack` (in every path interpretation), whatever its
+    `Content-Type`. The git server parses such a body as a push whatever
+    the header says, so the proxy does too.
+  - `request.git.updates` is the push's list of ref updates, each with
+    `ref`, `old`, and `new` (hex object IDs) and the derived `create` (`old`
+    is all zeros) and `delete` (`new` is all zeros). It comes from the
+    pkt-line command list at the start of the body, which ends at the first
+    flush packet. Capabilities after the NUL on the first line are ignored.
+    Only the command list is buffered (within the 64 KiB cap below); the
+    pack data after it streams upstream unbuffered.
+  - A gzip `Content-Encoding` is decoded before parsing; any other encoding,
+    a malformed pkt-line, a command list without its flush packet within the
+    cap, a short or non-hex object ID, or a ref name that `git
+    check-ref-format` rejects (`..`, `//`, control characters, `@{`, a
+    `.lock` suffix) is a parse error.
+  - On a request where `request.git.push` is false, referencing
+    `request.git.updates` is an evaluation error. A push rule's condition
+    therefore belongs on the rule for the receive-pack path; CEL's `||`
+    absorbs the error in `!request.git.push || ...`.
+  - The whole request gets one decision. Write allows with `all` and denies
+    with `exists`, for example
+    `request.git.updates.all(u, !u.delete && u.ref.startsWith("refs/heads/"))`
+    to allow only creating and updating branches, or a deny with
+    `request.git.updates.exists(u, u.ref == "refs/heads/main")` to keep
+    the agent off `main`.
+  - Force pushes can't be told apart from ordinary ones: whether an update
+    fast-forwards depends on history the proxy doesn't have, and `old` is
+    only what the client says the ref was. Branch protection on the server
+    stays the control for force pushes, and the docs say so.
+  - Git has no protocol v2 for push, so the command list format above is
+    the only one to parse.
+- Bodies are buffered only for rules that reference `request.json`,
+  `request.graphql`, or `request.git`, up to
   64 KiB. Body too large, unparseable, or an evaluation error: an allow rule
-  does not match; a deny rule matches.
+  does not match; a deny rule matches. A push that updates so many refs
+  that its command list passes the cap (a large `git push --mirror`)
+  doesn't match a ref-limited allow; pushing fewer refs at a time works.
 - Compiled and type-checked at config load (and on runtime adds). Errors stop
   startup or reject the API call.
 - A condition only narrows its rule; it never decides which hosts a rule
@@ -506,8 +559,15 @@ not in project config):
 - Existing `domains:` and `includes:` keep working.
 - The GitHub presets assume git over HTTPS. Outbound SSH (for example
   `github.com:22` through a `CONNECT`-based `ProxyCommand`) can't be
-  inspected, is always tunneled, and would bypass any repo or method
-  narrowing. The preset docs say to use HTTPS remotes and not to allow `:22`.
+  inspected, is always tunneled, and would bypass any repo, method, or ref
+  narrowing. The image already rewrites GitHub SSH remotes to HTTPS:
+  `image/config/gitconfig`, installed as `/etc/gitconfig`, maps
+  `git@github.com:` and `ssh://git@github.com/` to `https://github.com/`, so
+  cloned repos with SSH remotes go through inspection unchanged (Claude
+  Code's cloud sandbox does the same through `GIT_CONFIG_*` variables). A
+  user or repo `insteadOf`/`pushInsteadOf` back
+  to SSH, or a `GIT_SSH_COMMAND`, still needs `:22`, which stays not
+  allowed; the preset docs say not to allow it.
 - An unknown preset name is a startup error (today it is silently skipped).
 - Accepted risk (vibepit is 0.x): older binaries silently skip unknown preset
   names, so a project using `github-read` opened with an older binary falls
@@ -519,7 +579,18 @@ not in project config):
     download via `when` on `request.json.operation`, website browsing without
     credentials. No `/graphql`.
   - `github-write` (`repos` required): git push, REST writes, LFS upload. No
-    `/graphql`.
+    `/graphql`. Like Claude Code on the web's GitHub proxy, it only creates
+    and updates branches: its push rule has
+    `when: request.git.updates.all(u, !u.delete && u.ref.startsWith("refs/heads/"))`,
+    so ref deletions and pushes to tags, notes, or any other ref namespace
+    get a 403. Its REST rules hold the same line: no `DELETE` on
+    `/repos/{repos}/git/refs/**`, creating refs (`POST
+    /repos/{repos}/git/refs`) only when `request.json.ref` is under
+    `refs/heads/`, updating refs only under `heads/` and without
+    `request.json.force`, and no release or tag endpoints. Deleting
+    branches, pushing tags, or protecting `main` from direct pushes is the
+    user's choice, through an object-form allow or deny with its own `when`
+    (examples in section 2) or a user-defined preset.
   - `github-graphql-read`: `POST /graphql` with credentials and
     `when: request.graphql.queryOnly`, so `gh` works for reads.
   - `github-graphql-write`: `POST /graphql` with credentials, mutations
@@ -574,6 +645,31 @@ with `secret` whose port differs from every binding is a config error. An
 inject entry without `kind`, or with a kind that isn't injectable, is a
 config error.
 
+**Hosts in a binding are literal.** Every entry in an inject entry's
+`hosts` is a full DNS name. A `*` anywhere in it, an IP address, or a
+trailing dot is a config error, in built-in and inline services alike. A
+wildcard binding on a domain shared by many tenants (`*.amazonaws.com`,
+`*.githubusercontent.com`, `*.vercel.app`) would send the token to any
+tenant's server. Claude Code on the web accepts `*.` on shared-environment
+secrets; vibepit doesn't. A rule with `secret` may still use a wildcard
+host, since rules can't widen a binding: the credential is only attached
+on the binding's literal hosts.
+
+**Hosts that never take a credential.** vibepit keeps a built-in list of
+public package registries (`registry.npmjs.org`, `registry.yarnpkg.com`,
+`pypi.org`, `files.pythonhosted.org`, `index.crates.io`,
+`static.crates.io`, `proxy.golang.org`, `sum.golang.org`, `jsr.io`,
+`npm.jsr.io`, `rubygems.org`, and the like; Claude Code on the web keeps a
+similar list). An inject entry bound to one of them is a config error
+naming the host, unless that entry sets `public-registry: true`. These hosts
+serve anonymous downloads in bulk, so a stray token adds exposure on
+high-volume traffic and can break public fetches (a registry that rejects
+an unknown token fails the request rather than ignoring the header). The
+opt-in covers real use, such as private npm packages on
+`registry.npmjs.org`; GitHub's own registries (`npm.pkg.github.com`) are
+not on the list. The list is vibepit policy, passed to `netproxy` as data
+like the service definitions.
+
 **Secrets** (values, sources, and inline service definitions) are
 configured in global config only. Rules that *use* a secret may also come
 from a project config, after project trust (below):
@@ -606,20 +702,57 @@ Sources: `env` and `command`.
 **Placeholders.** One random placeholder per secret per session (for example
 `vibepit-secret-github-<random>`), stable for the session, set in the sandbox
 env for each name in the service's `env`. It exists so tools like `gh` run;
-it carries no value.
+it carries no value. A script that reads the variable directly gets the
+placeholder, not a usable token; the docs say so, as Claude Code on the
+web's do for its fixed `proxy-injected` placeholder.
+
+Some clients check a token's shape before sending it (a prefix, a length,
+a character set). A service definition may set `placeholder`, a template
+with literal parts and exactly one `{random:N}`, for example
+`placeholder: "ghp_{random:36}"`:
+- Literal parts use only `A-Z`, `a-z`, `0-9`, `_`, `.`, and `-`; the random
+  part uses `A-Z`, `a-z`, and `0-9`, and `N` is at least 24. Anything else
+  is a config error. The random part keeps each placeholder unique per
+  session, so detection, stripping, and redaction work exactly as with the
+  default form.
+- Without `placeholder`, the default is
+  `vibepit-secret-<name>-{random:32}`. Built-in services set a template
+  only where a known client rejects the default.
+- A realistic-looking placeholder can trip secret scanners (including
+  GitHub push protection) if the agent commits it. That is accepted: it is
+  worthless, and a scanner hit on it is a useful signal.
 
 **Injection.** For a request inside a terminated `CONNECT` connection that
 passes request authorization (the only request form that can carry a
 credential):
 - If an allow rule with `secret: X` matches, the request is allowed overall
   (no deny matches), and the host and path fall within one of X's `inject`
-  entries, the proxy overwrites that entry's header with the formatted value.
+  entries, the proxy sets that entry's header to the formatted value. It
+  does so whether the agent sent the header or not, and replaces every value
+  the agent sent for it (placeholder, an empty value, or a token of its
+  own). Git and many SDKs send no `Authorization` until a server answers
+  401, so the proxy can't wait for one: with the header set on the first
+  request, the server never challenges, and git needs no credential helper
+  or askpass in the sandbox. Within a binding the agent can't use a
+  credential of its own instead; that's the binding's purpose.
 - Immediately before attaching, the proxy checks the final outbound URL:
   scheme `https` and authority equal to the binding's host and port. Plain
   `http://` requests, cleartext inside `CONNECT`, and any other port never
   carry a credential upstream.
 - If two different secrets would set the same header on one request, block
-  it and log the conflict.
+  it and log the conflict. (Claude Code on the web sends one of them; a
+  silent choice between credentials is not acceptable here.)
+- Overlaps are also reported before any request, at config load: two
+  secrets that both have grants, whose inject entries share an origin and
+  header name, and whose path patterns (narrowed by the grants' paths) can
+  match a common path. The check is conservative: patterns count as
+  overlapping unless segment-by-segment comparison proves them disjoint,
+  and `when` conditions are ignored. Each overlap is a startup warning
+  naming both secrets, the origin, the header, and the patterns. It also
+  appears in the monitor's status and, when a project grant is involved,
+  in the `vibepit trust` list. A warning, not an error: the runtime block
+  already keeps it safe, and an error would stop sessions over grants that
+  may never be used together.
 - Otherwise, if the service's header carries the placeholder (decoding Basic
   auth), strip the header and forward unauthenticated.
 - A placeholder found anywhere else the proxy looks (other headers, path,
@@ -1193,11 +1326,37 @@ wire types, and `proxy/` is deleted.
 - `threat-model.md` (currently states the proxy does not inspect encrypted
   traffic) and `security-model.md`: TLS termination, the MITM CA, secret
   handling, global grants applying to every project, project trust, token
-  scope as the primary control for writes,
+  scope as the primary control for writes, server-side branch protection
+  as the only control for force pushes (section 2), placeholders that
+  scripts reading the variable can't use as tokens,
   and that OAuth tokens from agent logins still live in the sandbox's home
   volume until the host daemon exists.
 - Configuration reference for object entries, sets, presets with inputs,
   secrets, audit mode.
+- **A troubleshooting file for the agent, inside the sandbox.** Modeled on
+  `/root/.ccr/README.md` in Claude Code's cloud sandbox. An agent that hits
+  a certificate error tends to turn verification off; one that hits a 403
+  tends to retry or route around it. The file is written for the agent,
+  ordered by failure class, each with its fix:
+  - certificate errors: which variable or tool config file the tool reads
+    (section 1), and pointing it at the bundle; never disable verification;
+  - 403 with a vibepit body: a policy refusal; don't retry or route around
+    it, report the host and path; allowing it is the user's action on the
+    host (`allow-http`, the monitor, the prompt);
+  - "secret not loaded": the user runs `vibepit secret refresh` on the host;
+  - 400 for an absolute `https://` proxy request (use `CONNECT`), and 421
+    (a connection reused for another host);
+  - a placeholder in `GH_TOKEN` and similar variables is not a token; there
+    is no real one in the sandbox to find;
+  - tools that ignore the proxy variables (Node's built-in `fetch` without
+    `NODE_USE_ENV_PROXY=1`, aiohttp without `trust_env=True`), pinned
+    clients, and outbound SSH.
+
+  The text is embedded in the vibepit binary, so it always matches the
+  running proxy, and is mounted read-only next to the CA certificate
+  (outside the home volume, like the CA). It is linked from vibepit's 4xx
+  response bodies and the shell login banner, and the docs suggest pointing
+  agent instruction files (`AGENTS.md`, `CLAUDE.md`) at it.
 
 ### 13. Behavior the tests must pin
 
@@ -1301,6 +1460,35 @@ in a `when` condition on `request.path`.
   errors.
 - Injection only within the service's host and path binding; placeholder
   stripping and misuse blocking.
+- Injection sets the header when the agent sent none, and replaces every
+  value when it sent one or several; a git clone and push through a
+  terminated connection work with no credential helper in the sandbox.
+- A `*`, an IP address, or a trailing dot in a service's `hosts` is a
+  config error, for built-in and inline services; a wildcard rule host with
+  `secret` attaches the credential only on the binding's literal hosts.
+- An inject entry bound to a listed public registry is a config error
+  without `public-registry: true` and works with it.
+- `placeholder` templates: invalid literals, a missing or repeated
+  `{random:N}`, and `N` under 24 are config errors; a templated placeholder
+  is stripped, detected outside its binding, and redacted like the default
+  form.
+- Two secrets with grants that overlap on origin, header, and path produce
+  a startup warning; disjoint path patterns produce none; the overlapping
+  request is still blocked at runtime.
+- `request.git`: a push that creates or updates `refs/heads/*` matches the
+  `github-write` push rule; a deletion, a tag, a `refs/notes/*` update, or a
+  mixed push containing any of them gets a 403 with zero upstream requests.
+  Parse errors (malformed pkt-line, missing flush within the cap, bad object
+  ID, a ref name `check-ref-format` rejects, an unknown
+  `Content-Encoding`) make an allow fail and a deny match. A
+  gzip-encoded command list is parsed. A receive-pack `POST` with a
+  misleading `Content-Type` is still parsed. A pack larger than the cap
+  streams upstream without being buffered. Referencing `request.git.updates`
+  on a non-push request is an evaluation error.
+- `github-write` REST rules refuse ref deletion, ref creation outside
+  `refs/heads/`, forced ref updates, and tag and release endpoints.
+- The sandbox CA variables of section 1 are all set, and the troubleshooting
+  file is mounted read-only and outside the home volume (BATS).
 - HTTP/2 and WebSocket requests through a terminated connection.
 - Sandbox trust env and bundle generation (BATS).
 - `netproxy` imports no vibepit packages (its own `go.mod` enforces it).
@@ -1378,7 +1566,18 @@ Recorded because the protocol already fits it.
 - Exact names of new config keys for user-defined presets and the audit
   setting, the new control API endpoint, and new block codes.
 - The exact GitHub preset rule lists (verify paths against GitHub's git smart
-  HTTP, REST, and LFS docs).
+  HTTP, REST, and LFS docs), including the REST ref, tag, and release
+  endpoints `github-write` refuses.
+- How a refused push reads in git's output: a `403` with a `text/plain`
+  body, or a `200` carrying a `report-status` `ng <ref> <reason>` line per
+  refused ref, which git prints next to the ref. The decision stays
+  per request either way.
+- The exact public-registry list, and which built-in services need a
+  `placeholder` template (check each client for local token checks).
+- Confirm each sandbox CA variable against current tool versions and drop
+  any that a tool no longer reads.
+- The mount path of the CA certificate and the troubleshooting file, and
+  the troubleshooting file's final wording.
 - Leaf certificate cache size and lifetime; CA lifetime matching the existing
   session credentials.
 - Where the trust record is stored (per `config/paths.go`) and the exact
