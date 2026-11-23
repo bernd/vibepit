@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { closestEdge, distribute, dragShare, edgeZone, hitStage, place, tabZone } from '../src/core/workspace/geometry.ts';
+import { closestEdge, crossRects, distribute, dragShare, edgeZone, hitStage, place, tabZone } from '../src/core/workspace/geometry.ts';
 import { restore } from '../src/core/workspace/persist.ts';
 
 const pane = (id, type = 'session') => ({ id, type, ...(type === 'session' ? { sid: `s-${id}` } : {}) });
@@ -99,7 +99,7 @@ test('hitStage', async (t) => {
     { name: 'pushing toward a pane side targets that edge', x: 380, y: 300, want: { target: 'A', edge: 'right' } },
     { name: 'the other pane', x: 440, y: 300, want: { target: 'B', edge: 'left' } },
     { name: 'on a divider falls back to the whole tab', x: 406, y: 100, want: { target: 'root', edge: 'top' } },
-    { name: 'the middle of a pane keeps the previous edge', x: 200, y: 300, prev: { target: 'A', edge: 'right' }, want: { target: 'A', edge: 'right' } },
+    { name: 'the middle of a pane keeps the previous edge', x: 150, y: 220, prev: { target: 'A', edge: 'right' }, want: { target: 'A', edge: 'right' } },
     { name: 'history from another target does not carry over', x: 80, y: 300, prev: { target: 'B', edge: 'right' }, want: { target: 'A', edge: 'left' } },
     { name: 'a whole-tab target reaches a little deeper', x: 36, y: 300, prev: { target: 'root', edge: 'left' }, want: { target: 'root', edge: 'left' } },
     { name: 'a pane target reaches a little closer to the border', x: 24, y: 300, prev: { target: 'A', edge: 'left' }, want: { target: 'A', edge: 'left' } },
@@ -110,7 +110,7 @@ test('hitStage', async (t) => {
     let hit = hitStage(root, placed, 380, 300);
     const seen = new Set();
     for (const [dx, dy] of [[0, 0], [8, -9], [-7, 6], [5, 11], [-10, -4], [9, 9], [-3, -12]]) {
-      hit = hitStage(root, placed, 205 + dx, 300 + dy, hit);
+      hit = hitStage(root, placed, 150 + dx, 220 + dy, hit);
       seen.add(`${hit.target}:${hit.edge}`);
     }
     assert.deepEqual([...seen], ['A:right']);
@@ -119,6 +119,38 @@ test('hitStage', async (t) => {
   await t.test('a single-pane tab is its own target', () => {
     const one = pane('A');
     assert.deepEqual(hitStage(one, place(one, { w: 800, h: 600 }, m), 400, 100), { target: 'A', edge: 'top' });
+  });
+});
+
+test('crossRects', async (t) => {
+  await t.test('four arrows around the center of the pane', () => {
+    assert.deepEqual(crossRects({ x: 100, y: 0, w: 400, h: 300 }), {
+      left: { x: 257, y: 137, w: 26, h: 26 }, right: { x: 317, y: 137, w: 26, h: 26 },
+      top: { x: 287, y: 107, w: 26, h: 26 }, bottom: { x: 287, y: 167, w: 26, h: 26 },
+    });
+  });
+  await t.test('a pane too small for the cross has none', () => {
+    assert.equal(crossRects({ x: 0, y: 0, w: 124, h: 90 }), null);
+  });
+});
+
+test('hitStage: pointing at an arrow of the cross chooses its edge', async (t) => {
+  const root = grp('root', 'cols', [pane('A'), pane('B')]);
+  const placed = place(root, { w: 812, h: 602 }, m);
+  // Pane A spans x 1..401 and y 1..601, so its center is (201, 301).
+  const cases = [
+    { name: 'left arrow', x: 171, y: 301, want: 'left' },
+    { name: 'right arrow', x: 231, y: 301, want: 'right' },
+    { name: 'top arrow', x: 201, y: 271, want: 'top' },
+    { name: 'bottom arrow', x: 201, y: 331, want: 'bottom' },
+  ];
+  for (const c of cases) await t.test(c.name, () => assert.deepEqual(hitStage(root, placed, c.x, c.y, { target: 'A', edge: 'top' === c.want ? 'left' : 'top' }), { target: 'A', edge: c.want }));
+
+  await t.test('the gap in the middle of the cross keeps the previous edge', () => {
+    assert.deepEqual(hitStage(root, placed, 201, 301, { target: 'A', edge: 'bottom' }), { target: 'A', edge: 'bottom' });
+  });
+  await t.test('between the cross and the outer third the previous edge stays', () => {
+    assert.deepEqual(hitStage(root, placed, 150, 220, { target: 'A', edge: 'right' }), { target: 'A', edge: 'right' });
   });
 });
 

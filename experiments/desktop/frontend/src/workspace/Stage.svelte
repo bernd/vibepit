@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { dragShare, place } from '../core/workspace/geometry.ts';
+  import { crossRects, dragShare, place } from '../core/workspace/geometry.ts';
   import type { DividerBox } from '../core/workspace/geometry.ts';
-  import { find, isGroup, leaves } from '../core/workspace/layout.ts';
+  import { find, isGroup, leaves, parentOf } from '../core/workspace/layout.ts';
   import type { Edge, Rect } from '../core/workspace/layout.ts';
   import type { Workspace } from './state.svelte.ts';
   import Icon from './Icon.svelte';
@@ -19,26 +19,31 @@
   // Every pane of every tab stays mounted, keyed by its id. Panes of
   // background tabs are hidden, and a move never remounts a pane.
   const panes = $derived(ws.layout.tabs.flatMap((t) => leaves(t.root).map((pane) => ({ pane, multi: isGroup(t.root) }))));
-  // Markers for the available edges: wide ones on the border for the whole
-  // tab, small ones inside the pane under the pointer.
+  // Markers for the edges: wide ones on the border for the whole tab, and a
+  // cross of four arrows in the middle of the pane under the pointer. An
+  // unavailable arrow of the cross stays as a faint outline, so the cross
+  // keeps its shape. An unavailable border marker is left out.
   const marks = $derived.by(() => {
     const d = ws.drag;
     if (!d || !placed || !tab) return [];
-    const out: { key: string; rect: Rect; edge: Edge; whole: boolean; active: boolean }[] = [];
+    const out: { key: string; rect: Rect; edge: Edge; whole: boolean; active: boolean; off: boolean }[] = [];
     for (const m of d.marks) {
-      if (m.state !== 'ok') continue;
       const whole = m.target === tab.root.id;
-      const r = whole ? { x: 0, y: 0, w: placed.size.w, h: placed.size.h } : rects.get(m.target);
-      if (!r) continue;
-      const inset = whole ? 4 : 40;
-      const long = whole ? 44 : 24;
-      const across = m.edge === 'left' || m.edge === 'right';
-      const w = across ? 22 : long;
-      const h = across ? long : 22;
-      const x = m.edge === 'left' ? r.x + inset : m.edge === 'right' ? r.x + r.w - inset - w : r.x + (r.w - w) / 2;
-      const y = m.edge === 'top' ? r.y + inset : m.edge === 'bottom' ? r.y + r.h - inset - h : r.y + (r.h - h) / 2;
+      const off = m.state !== 'ok';
       const active = !!d.dest && 'target' in d.dest && d.dest.target === m.target && d.dest.edge === m.edge;
-      out.push({ key: `${m.target}:${m.edge}`, rect: { x, y, w, h }, edge: m.edge, whole, active });
+      if (whole) {
+        if (off) continue;
+        const across = m.edge === 'left' || m.edge === 'right';
+        const w = across ? 22 : 44;
+        const h = across ? 44 : 22;
+        const x = m.edge === 'left' ? 4 : m.edge === 'right' ? placed.size.w - 4 - w : (placed.size.w - w) / 2;
+        const y = m.edge === 'top' ? 4 : m.edge === 'bottom' ? placed.size.h - 4 - h : (placed.size.h - h) / 2;
+        out.push({ key: `${m.target}:${m.edge}`, rect: { x, y, w, h }, edge: m.edge, whole, active, off });
+        continue;
+      }
+      const r = rects.get(m.target);
+      const cross = r && crossRects(r);
+      if (cross) out.push({ key: `${m.target}:${m.edge}`, rect: cross[m.edge], edge: m.edge, whole, active, off });
     }
     return out;
   });
@@ -56,7 +61,15 @@
     const x = Math.min(...boxes.map((b) => b.x));
     const y = Math.min(...boxes.map((b) => b.y));
     const source = ws.layout.tabs.map((t) => find(t.root, d.src)).find(Boolean);
-    return { rect: { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y }, title: source ? ws.title(source) : '' };
+    // The group the content will belong to, when that is not the tab itself.
+    // It is outlined with its future handle, so it is clear which panes will
+    // move together afterwards.
+    const parent = parentOf(next.root, d.src);
+    const frame2 = parent && parent.id !== next.root.id ? after.groups.find((g) => g.id === parent.id)?.frame : undefined;
+    // A group that exists already is named as it is now, without the newcomer.
+    const existing = parent && ws.layout.tabs.map((t) => find(t.root, parent.id)).find(Boolean);
+    const joins = parent && frame2 ? { rect: frame2, label: existing ? `Joins group · ${ws.fullTitle(existing)}` : `New group · ${ws.fullTitle(parent)}` } : null;
+    return { rect: { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y }, title: source ? ws.title(source) : '', joins };
   });
   const blocked = $derived(ws.drag?.dest && 'target' in ws.drag.dest && !ws.drag.result ? ws.drag.error : '');
 
@@ -129,9 +142,12 @@
       {/each}
     {/if}
     {#each marks as m (m.key)}
-      <div class="dropmark {m.edge}" class:whole={m.whole} class:active={m.active} style={box(m.rect)}><Icon name="chevron" /></div>
+      <div class="dropmark {m.edge}" class:whole={m.whole} class:active={m.active} class:off={m.off} style={box(m.rect)}><Icon name="chevron" /></div>
     {/each}
-    {#if landing}<div class="landing" style={box(landing.rect)}><span>{landing.title}</span></div>{/if}
+    {#if landing}
+      {#if landing.joins}<div class="groupmark" style={box(landing.joins.rect)}><span><Icon name="group" />{landing.joins.label}</span></div>{/if}
+      <div class="landing" style={box(landing.rect)}><span>{landing.title}</span></div>
+    {/if}
     {#each panes as { pane, multi } (pane.id)}
       <PaneView {ws} {pane} {multi} rect={rects.get(pane.id)} solo={!!visible && !isGroup(visible)} />
     {/each}

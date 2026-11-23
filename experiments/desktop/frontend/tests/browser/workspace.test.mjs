@@ -202,20 +202,37 @@ test('worked example: drag the Codex + Tests tab onto Logs', async () => {
   }
 });
 
-test('markers show the available edges of the whole tab and of the pane under the pointer', async () => {
+test('markers: a cross of arrows in the pane under the pointer, and the available edges of the whole tab', async () => {
   const from = await center(pane('Tests').locator('.phead strong'));
-  const codex = await center(pane('Codex').locator('.body'));
-  await drag(from, [{ x: codex.x, y: codex.y }], { drop: false });
+  const codex = await center(pane('Codex'));
+  await drag(from, [{ x: codex.x - 150, y: codex.y - 120 }], { drop: false });
   const marks = await page.locator('.dropmark').evaluateAll((els) => els.map((e) => [...e.classList].filter((c) => c !== 'dropmark' && c !== 'active').sort().join(' ')).sort());
-  // Tests already sits right of Codex and at the right edge of the tab, so those two edges offer nothing.
-  assert.deepEqual(marks, ['bottom', 'bottom whole', 'left', 'left whole', 'top', 'top whole']);
+  // Tests already sits right of Codex and at the right edge of the tab. The cross keeps a faint
+  // right arrow, and the border has no right marker.
+  assert.deepEqual(marks, ['bottom', 'bottom whole', 'left', 'left whole', 'off right', 'top', 'top whole']);
+  const arrow = (edge) => page.locator(`.dropmark.${edge}:not(.whole)`);
+  const [l, r, t, b] = await Promise.all(['left', 'right', 'top', 'bottom'].map((e) => arrow(e).boundingBox()));
+  assert.ok(Math.abs((l.x + r.x + r.width) / 2 - codex.x) < 2 && Math.abs((t.y + b.y + b.height) / 2 - codex.y) < 2, 'the cross is centered on the pane');
+  assert.ok(r.x - (l.x + l.width) < 40, 'the arrows sit close together');
   await page.screenshot({ path: `${output}docking-markers.png` });
-  await page.mouse.move(codex.x, codex.y + codex.height / 2 - 30, { steps: 6 });
-  assert.equal(await page.locator('.dropmark.active.bottom:not(.whole)').count(), 1, 'the edge being pushed is highlighted');
+
+  // Pointing at an arrow chooses its edge.
+  const down = await center(arrow('bottom'));
+  await page.mouse.move(down.x, down.y, { steps: 6 });
+  assert.equal(await page.locator('.dropmark.active.bottom:not(.whole)').count(), 1);
   assert.equal((await landing())?.title, 'Tests');
+  await page.screenshot({ path: `${output}docking-cross-active.png` });
+  const up = await center(arrow('top'));
+  await page.mouse.move(up.x, up.y, { steps: 6 });
+  assert.equal(await page.locator('.dropmark.active.top:not(.whole)').count(), 1);
+  // The faint arrow offers nothing.
+  const right = await center(arrow('right'));
+  await page.mouse.move(right.x, right.y, { steps: 6 });
+  assert.equal(await landing(), null);
+  await page.mouse.move(down.x, down.y, { steps: 6 });
   await page.mouse.up();
-  const [c, t] = [await pane('Codex').boundingBox(), await pane('Tests').boundingBox()];
-  assert.ok(t.y >= c.y + c.height && Math.abs(t.x - c.x) < 2);
+  const [c, tst] = [await pane('Codex').boundingBox(), await pane('Tests').boundingBox()];
+  assert.ok(tst.y >= c.y + c.height && Math.abs(tst.x - c.x) < 2, 'dropping on the bottom arrow puts Tests below Codex');
 });
 
 test('crossing a tab on the way to the workspace does not retarget, resting on it does', async () => {
@@ -244,7 +261,8 @@ test('the docking preview only changes when the pointer pushes toward a side', a
   const from = await center(page.locator('.tab-name').nth(3));
   const body = await pane('Codex').locator('.body').boundingBox();
   const whole = await pane('Codex').boundingBox();
-  const mid = { x: body.x + body.width / 2, y: body.y + body.height / 2 };
+  // A point between the cross in the middle and the outer third, where nothing is chosen.
+  const mid = { x: body.x + body.width * 0.4, y: body.y + body.height * 0.38 };
   // Which part of the Codex pane the landing block covers.
   const side = async () => {
     const l = await landing();
@@ -262,7 +280,7 @@ test('the docking preview only changes when the pointer pushes toward a side', a
     await page.mouse.move(mid.x + dx, mid.y + dy, { steps: 2 });
     seen.add(await side());
   }
-  assert.deepEqual([...seen], ['left'], 'small movements in the middle of the pane keep the preview');
+  assert.deepEqual([...seen], ['left'], 'small movements away from the arrows and the sides keep the preview');
 
   await page.mouse.move(mid.x, body.y + body.height - 30, { steps: 10 });
   assert.equal(await side(), 'below', 'pushing toward the bottom changes it');
@@ -299,6 +317,49 @@ test('dragging the middle of three shells to the left reorders it without resizi
   await page.mouse.up();
   assert.deepEqual(await order(), ['Shell 2', 'Shell 1', 'Shell 3']);
   assert.deepEqual(await widths(), before, 'every pane keeps its width');
+});
+
+test('a drop that forms or joins a group outlines that group with its future handle', async () => {
+  await page.getByRole('button', { name: 'New Session tab' }).click();
+  await paneAction('Shell 1', 'Split right');
+  await paneAction('Shell 2', 'Split right');
+  await paneAction('Shell 3', 'Split right');
+  const arrow = (edge) => page.locator(`.dropmark.${edge}:not(.whole)`);
+  const mark = page.locator('.groupmark');
+
+  // Shell 3 below Shell 1 makes a new stacked group in the row.
+  const first = await pane('Shell 1').boundingBox();
+  await drag(await center(pane('Shell 3').locator('.phead strong')), [{ x: first.x + first.width / 2, y: first.y + 120 }], { drop: false });
+  const down = await center(arrow('bottom'));
+  await page.mouse.move(down.x, down.y, { steps: 6 });
+  assert.equal((await mark.textContent()).trim(), 'New group · Shell 1 + Shell 3');
+  const outline = await mark.boundingBox();
+  const block = await landing();
+  assert.ok(block.y > outline.y + 30 && block.x >= outline.x && block.x + block.width <= outline.x + outline.width + 1, 'the landing block sits inside the outlined group, below its handle');
+  await page.screenshot({ path: `${output}docking-new-group.png` });
+  await page.mouse.up();
+  assert.equal(await page.locator('.gin b').textContent(), 'Shell 1 + Shell 3');
+  const frame = await page.locator('.frame:not(.root)').boundingBox();
+  assert.ok(Math.abs(frame.x - outline.x) < 3 && Math.abs(frame.width - outline.width) < 3 && Math.abs(frame.y - outline.y) < 3, 'the group forms exactly where it was outlined');
+
+  // Shell 2 below Shell 3 joins that group.
+  const third = await pane('Shell 3').boundingBox();
+  await drag(await center(pane('Shell 2').locator('.phead strong')), [{ x: third.x + third.width / 2, y: third.y + 60 }], { drop: false });
+  const below = await center(arrow('bottom'));
+  await page.mouse.move(below.x, below.y, { steps: 6 });
+  assert.equal((await mark.textContent()).trim(), 'Joins group · Shell 1 + Shell 3');
+  await page.mouse.up();
+  assert.equal(await page.locator('.gin b').textContent(), 'Shell 1 + 2', 'the group now holds three panes');
+  assert.deepEqual(await tabLabels(), ['Codex + Tests', 'Logs', 'Monitor', 'Shell 1 + 3']);
+});
+
+test('a reorder within the tab outlines no group', async () => {
+  const from = await center(pane('Tests').locator('.phead strong'));
+  const codex = await pane('Codex').boundingBox();
+  await drag(from, [{ x: codex.x + 40, y: codex.y + codex.height / 2 }], { drop: false });
+  assert.ok(await landing());
+  assert.equal(await page.locator('.groupmark').count(), 0);
+  await page.mouse.up();
 });
 
 test('dragging a pane header moves one view', async () => {

@@ -112,6 +112,21 @@ export function edgeZone(r: Rect, x: number, y: number, prev?: Edge, zone = 1 / 
   return d[best] <= zone ? best : null;
 }
 
+// A cross of four arrows in the middle of a pane, one per edge. Each arrow
+// is a target of its own: pointing at it chooses that edge. A pane too small
+// to hold the cross has none.
+export function crossRects(r: Rect, size = 26, gap = 4): Record<Edge, Rect> | null {
+  const span = size * 3 + gap * 2;
+  if (r.w < span + 16 || r.h < span + 16) return null;
+  const cx = r.x + r.w / 2 - size / 2;
+  const cy = r.y + r.h / 2 - size / 2;
+  const step = size + gap;
+  return {
+    left: { x: cx - step, y: cy, w: size, h: size }, right: { x: cx + step, y: cy, w: size, h: size },
+    top: { x: cx, y: cy - step, w: size, h: size }, bottom: { x: cx, y: cy + step, w: size, h: size },
+  };
+}
+
 // Docking target under the pointer. The workspace's outer band targets the
 // whole tab and wins over the pane edge it overlaps. In the middle of a pane
 // the previous edge stays, so the preview only changes when the pointer
@@ -125,6 +140,9 @@ export function hitStage(root: Node, placed: Placement, x: number, y: number, pr
   const target = pane?.id ?? root.id;
   const rect = pane?.rect ?? whole;
   const before = prev?.target === target ? prev.edge : undefined;
+  const cross = pane && crossRects(pane.rect);
+  const aimed = cross && (Object.keys(cross) as Edge[]).find((e) => inside(cross[e], x, y));
+  if (pane && aimed) return { target, edge: aimed };
   // The whole tab has no middle: its band is always near a border.
   const edge = edgeZone(rect, x, y, before, pane ? 1 / 3 : 0.5) ?? before ?? closestEdge(rect, x, y);
   return { target, edge };
