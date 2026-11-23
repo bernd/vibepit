@@ -194,10 +194,11 @@ test('crossing a tab on the way to the workspace does not retarget, resting on i
   const from = await center(pane('Tests').locator('.phead strong'));
   const monitorTab = await center(page.locator('.tab').nth(2));
   const stage = await page.locator('.stage-inner').boundingBox();
-  const right = { x: stage.x + stage.width - 10, y: stage.y + stage.height / 2 };
+  // The left edge, because Tests already sits at the right edge of its own tab.
+  const edge = { x: stage.x + 10, y: stage.y + stage.height / 2 };
   const previewed = async () => (await page.locator('.projection .leafmini').allTextContents()).sort();
 
-  await drag(from, [monitorTab, right], { drop: false });
+  await drag(from, [monitorTab, edge], { drop: false });
   assert.deepEqual(await previewed(), ['Codex', 'Tests'], 'a quick pass over the Monitor tab keeps the current tab as target');
   assert.equal(await page.locator('.tab.reveal').count(), 1);
   assert.equal(await page.locator('.tab.reveal .tablabel').textContent(), 'Codex + Tests');
@@ -241,6 +242,34 @@ test('the docking preview only changes when the pointer pushes toward a side', a
   await page.mouse.up();
   const [codex, shell] = [await pane('Codex').boundingBox(), await pane('Shell 1').boundingBox()];
   assert.ok(shell.y >= codex.y + codex.height && Math.abs(shell.x - codex.x) < 2, 'the drop matches the last preview');
+});
+
+test('dragging the middle of three shells to the left reorders it without resizing', async () => {
+  await page.getByRole('button', { name: 'New Session tab' }).click();
+  await paneAction('Shell 1', 'Split right');
+  await paneAction('Shell 2', 'Split right');
+  // Make the middle pane wider, so a resize would show.
+  const divider = await center(page.locator('.divider').nth(1));
+  await page.mouse.move(divider.x, divider.y); await page.mouse.down(); await page.mouse.move(divider.x + 120, divider.y, { steps: 5 }); await page.mouse.up();
+  const widths = async () => Object.fromEntries(await Promise.all(['Shell 1', 'Shell 2', 'Shell 3'].map(async (n) => [n, Math.round((await pane(n).boundingBox()).width)])));
+  const order = async () => (await Promise.all(['Shell 1', 'Shell 2', 'Shell 3'].map(async (n) => [n, (await pane(n).boundingBox()).x]))).sort((a, b) => a[1] - b[1]).map((e) => e[0]);
+  const previewOrder = async () => page.evaluate(() => [...document.querySelectorAll('.projection .leafmini')].sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left).map((e) => e.textContent));
+  const before = await widths();
+  const first = await pane('Shell 1').boundingBox();
+  const y = first.y + first.height / 2;
+  const seen = [];
+
+  await drag(await center(pane('Shell 2').locator('.phead strong')), [{ x: first.x + first.width - 20, y }], { drop: false });
+  assert.equal(await page.locator('.projection').count(), 0, 'beside its own left neighbor nothing would change, so there is no preview');
+  for (let x = first.x + first.width - 20; x >= first.x + 2; x -= 15) {
+    await page.mouse.move(x, y, { steps: 2 });
+    if (await page.locator('.projection').count()) seen.push((await previewOrder()).join(','));
+  }
+  assert.deepEqual([...new Set(seen)], ['Shell 2,Shell 1,Shell 3'], 'one preview all the way to the border');
+  await page.screenshot({ path: `${output}docking-reorder.png` });
+  await page.mouse.up();
+  assert.deepEqual(await order(), ['Shell 2', 'Shell 1', 'Shell 3']);
+  assert.deepEqual(await widths(), before, 'every pane keeps its width');
 });
 
 test('dragging a pane header moves one view', async () => {

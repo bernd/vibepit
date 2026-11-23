@@ -61,7 +61,7 @@ The drag source sets the unit of movement. A tab carries its root layout, a grou
 
 **Nested example.** Dock a group containing Shell and the pair (Codex, Tests) to the right of Logs. Shell goes above the pair. If Codex and Tests were side by side inside that pair, they remain side by side. Only the two direct children of the incoming group were reoriented.
 
-**Size.** Incoming content takes half of its target, which is the pane for a pane edge and the whole tab for an outer edge. The existing content keeps its relative weights in the other half. Preview and commit use this rule.
+**Size.** Incoming content that joins an existing row or column takes an equal share of it, and the others keep their proportions. A pane or group moved within its own row or column keeps its size, so the move is a reorder. Otherwise the incoming content takes half of its target, and the target keeps its relative weights in the other half. Preview and commit use this rule. A destination that would leave the layout as it is shows no preview.
 
 **Merging.** An implicit group merges into a parent of the same orientation. Docking C at the right outer edge of a side-by-side root (A, B) gives (A, B, C). Docking C to the right of A inside (A, B) gives (A, C, B). Docking C below A gives a stacked implicit group (A, C) beside B. An explicit group never merges, and it stays explicit until promotion leaves it with one child. Every group except the root shows a handle.
 
@@ -224,11 +224,12 @@ This document covers the workspace layout portion of the desktop UI design. The 
 | Open the palette from a terminal with a partial command, run **Rename session**, and confirm. | The name changes. Focus returns to the same pane with the command intact. |
 | Run **Send next key to terminal**, then press Ctrl+Shift+D. | The program receives the chord. No split opens. |
 | Close a pane whose shell is idle, then one that runs a program, then one whose shell reports no prompt state. | The first ends without a question. The others ask, with Cancel focused. Cancel leaves the pane and session untouched. |
-| Dock C at the right outer edge of side-by-side (A, B), then dock D below A. | The root holds A, B, C with no nested group, and C has half the width. A and D form one stacked group beside B and C. |
+| Dock C at the right outer edge of side-by-side (A, B), then dock D below A. | The root holds A, B, C with no nested group, each a third of the width. A and D form one stacked group beside B and C. |
 | Click **+** with a Monitor tab last in the bar. | A Session opens in a new tab. |
 | Reach the session limit with Split and **+**. | Nothing is created. The message names the limit and offers the attach picker. |
 | Zoom a pane, then let a hidden sibling need input. | **Restore layout** shows Needs input and names the pane. |
 | Quit and reopen the desktop. | Tab order, layout tree, weights and last focus are restored. No hover preview was saved. |
+| With three shells side by side, drag the middle one to the left edge of the tab. | Nothing previews beside its own neighbor. One preview shows it first in the row, and stays the same up to the border. After the drop every pane has its earlier width. |
 | Change filters in one of two Logs views and rearrange both. | Filters remain independent. Moving either view preserves its filters and scroll position. |
 
 ### Related project documents
@@ -248,7 +249,7 @@ Review of 19 November 2026. All sixteen findings were resolved in this document 
 | 3 | Expiry in Logs | Expiry changes the hold’s existing row. The text speaks of one hold per target. |
 | 4 | Exited terminal transcript | The transcript comes from the desktop’s terminal buffer. The pane says so when there is none. |
 | 5 | Explicit groups and merging | Implicit groups merge into a parent of the same orientation. Moved-in groups are explicit. |
-| 6 | Size of the incoming content | Half of the target. |
+| 6 | Size of the incoming content | An equal share when joining a row or column, unchanged for a reorder, otherwise half of the target. |
 | 7 | Active tab and focus after a commit | The destination tab, and the moved pane or the moved group’s last-focused pane. |
 | 8 | Round trips change orientation | Intended. No modifier in v1. |
 | 9 | Detached shells and the session limit | Closing an idle shell ends it, and a busy one asks. The dropdown has an attach picker. The limit refuses with a message. |

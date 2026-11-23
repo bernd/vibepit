@@ -138,6 +138,10 @@ export function transform(layout: Layout, src: string, dest: Destination, opts: 
   const former = layout.tabs.indexOf(start);
   if ('target' in dest && find(found, dest.target)) throw new LayoutError('into-self', 'Choose a target outside the moving group.');
 
+  // Where the source sat, so a move within its own row or column keeps its size.
+  const from = parentOf(start.root, src);
+  const origin = from && { id: from.id, weight: from.weights[from.children.indexOf(found)] };
+
   // Focus follows the moved pane, or the moved group's last-focused pane.
   const focus = withFocus(found, start.focus);
   const originalTarget = 'target' in dest ? find(start.root, dest.target) : undefined;
@@ -176,14 +180,45 @@ export function transform(layout: Layout, src: string, dest: Destination, opts: 
   // orientation.
   const horizontal = dest.edge === 'left' || dest.edge === 'right';
   const moving: Node = isGroup(found) ? { ...found, dir: horizontal ? 'rows' : 'cols', explicit: true } : found;
-  // Incoming content takes half of its target. The target keeps its own
-  // weights in the other half.
+  const dir: Dir = horizontal ? 'cols' : 'rows';
   const first = dest.edge === 'left' || dest.edge === 'top';
-  const pair = group(horizontal ? 'cols' : 'rows', first ? [moving, target] : [target, moving], newId);
-  const root = normalize(replace(tabs[at].root, target.id, pair));
+  const destRoot = tabs[at].root;
+  // The row or column the incoming content joins, if the edge runs along one:
+  // the target itself at its outer edge, or the target's parent.
+  const outer = isGroup(target) && target.dir === dir && !target.explicit ? target : undefined;
+  const parent = outer ? undefined : parentOf(destRoot, target.id);
+  const row = outer ?? (parent?.dir === dir ? parent : undefined);
+  let root: Node;
+  if (row) {
+    // Joining a row or column gives the incoming content an equal share. A
+    // move within its own row or column is a reorder and keeps its size.
+    const index = outer ? (first ? 0 : row.children.length) : row.children.indexOf(target) + (first ? 0 : 1);
+    const weight = origin?.id === row.id ? origin.weight : row.weights.reduce((a, b) => a + b, 0) / row.weights.length;
+    const children = row.children.slice();
+    const weights = row.weights.slice();
+    children.splice(index, 0, moving);
+    weights.splice(index, 0, weight);
+    root = normalize(replace(destRoot, row.id, { ...row, children, weights }));
+  } else {
+    // Otherwise the incoming content takes half of its target.
+    root = normalize(replace(destRoot, target.id, group(dir, first ? [moving, target] : [target, moving], newId)));
+  }
   checkSpace(root, opts, 'Too little space for these panes at this edge.');
   tabs[at] = { ...tabs[at], root, focus };
   return { tabs, active: tabs[at].id };
+}
+
+// Whether two layouts show the same arrangement: the same tabs, panes, order,
+// orientation and proportions. Group ids, focus and the active tab are ignored.
+export function sameLayout(a: Layout, b: Layout): boolean {
+  const same = (x: Node, y: Node): boolean => {
+    if (!isGroup(x) || !isGroup(y)) return !isGroup(x) && !isGroup(y) && x.id === y.id;
+    if (x.dir !== y.dir || x.children.length !== y.children.length || !!x.explicit !== !!y.explicit) return false;
+    const sx = x.weights.reduce((p, q) => p + q, 0);
+    const sy = y.weights.reduce((p, q) => p + q, 0);
+    return x.children.every((c, i) => same(c, y.children[i]) && Math.abs(x.weights[i] / sx - y.weights[i] / sy) < 1e-6);
+  };
+  return a.tabs.length === b.tabs.length && a.tabs.every((t, i) => t.id === b.tabs[i].id && same(t.root, b.tabs[i].root));
 }
 
 // Opens a fresh pane next to an existing one in the same tab. The new pane

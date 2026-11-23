@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { all, find, isGroup, leaves } from '../core/workspace/layout.ts';
+  import { all, find, isGroup, leaves, sameLayout } from '../core/workspace/layout.ts';
   import type { Destination, Edge } from '../core/workspace/layout.ts';
   import type { Workspace } from './state.svelte.ts';
   import Diagram from './Diagram.svelte';
@@ -36,6 +36,7 @@
   const gap = $derived(choice.startsWith('gap:'));
   const dest = $derived<Destination | null>(!choice ? null : gap ? { gap: Number(choice.slice(4)) } : { target: choice, edge });
   const preview = $derived(source && dest ? ws.preview(source.node.id, dest) : { layout: null, error: '' });
+  const unchanged = $derived(!!preview.layout && sameLayout(preview.layout, ws.layout));
   const shown = $derived(preview.layout?.tabs.find((t) => t.id === preview.layout?.active)?.root);
 
   $effect(() => {
@@ -86,11 +87,11 @@
       {#if shown}<Diagram {ws} node={shown} incoming={source.node.id} target={gap ? undefined : choice} />{/if}
     </div>
     <p class="note" aria-live="polite">
-      {preview.error || (gap ? 'Places the source in the tab bar at this position.' : 'The dashed outline marks the incoming pane or group. It takes half of the target.')}
+      {preview.error || (unchanged ? 'It is already there.' : gap ? 'Places the source in the tab bar at this position.' : 'The dashed outline marks the incoming pane or group.')}
     </p>
     <div class="dialogfoot">
       <button type="button" onclick={done}>Cancel</button>
-      <button type="button" class="primary" disabled={!preview.layout} onclick={apply}>Move</button>
+      <button type="button" class="primary" disabled={!preview.layout || unchanged} onclick={apply}>Move</button>
     </div>
   {/if}
 </dialog>

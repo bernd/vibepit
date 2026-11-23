@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LayoutError, close, equalize, find, isGroup, joinTitle, leaves, minSize, neighbor, normalize, setDivider, setFocus, split, transform,
+  LayoutError, close, equalize, find, isGroup, joinTitle, leaves, minSize, neighbor, normalize, sameLayout, setDivider, setFocus, split, transform,
 } from '../src/core/workspace/layout.ts';
 
 const pane = (id, type = 'session') => ({ id, type });
@@ -108,9 +108,9 @@ test('nested example: only the direct children of the incoming group are reorien
 test('merging implicit groups', async (t) => {
   const row = () => ({ tabs: [tab('t1', grp('root', 'cols', [pane('A'), pane('B')])), tab('t2', pane('C'))], active: 't1' });
   const cases = [
-    { name: 'outer right edge joins the row', dest: { target: 'root', edge: 'right' }, want: 'cols(A,B,C)', w: [0.5, 0.5, 1] },
-    { name: 'right of a pane joins the row', dest: { target: 'A', edge: 'right' }, want: 'cols(A,C,B)', w: [0.5, 0.5, 1] },
-    { name: 'left of a pane joins the row', dest: { target: 'B', edge: 'left' }, want: 'cols(A,C,B)', w: [1, 0.5, 0.5] },
+    { name: 'outer right edge joins the row with an equal share', dest: { target: 'root', edge: 'right' }, want: 'cols(A,B,C)', w: [1, 1, 1] },
+    { name: 'right of a pane joins the row', dest: { target: 'A', edge: 'right' }, want: 'cols(A,C,B)', w: [1, 1, 1] },
+    { name: 'left of a pane joins the row', dest: { target: 'B', edge: 'left' }, want: 'cols(A,C,B)', w: [1, 1, 1] },
     { name: 'below a pane nests a stacked group', dest: { target: 'A', edge: 'bottom' }, want: 'cols(rows(A,C),B)', w: [1, 1] },
     { name: 'outer top edge wraps the row', dest: { target: 'root', edge: 'top' }, want: 'rows(C,cols(A,B))', w: [1, 1] },
   ];
@@ -132,6 +132,58 @@ test('merging implicit groups', async (t) => {
     const layout = { tabs: [tab('t1', grp('root', 'cols', [pane('A'), grp('pair', 'rows', [pane('B'), pane('C')], undefined, true)]))], active: 't1' };
     assert.equal(shape(close(layout, 'C').tabs[0].root), 'cols(A,B)');
   });
+});
+
+test('joining a row keeps the others in proportion', () => {
+  const layout = { tabs: [tab('t1', grp('root', 'cols', [pane('A'), pane('B')], [3, 1])), tab('t2', pane('C'))], active: 't1' };
+  const after = transform(layout, 'C', { target: 'B', edge: 'right' }, { newId: ids() });
+  assert.deepEqual(weights(after.tabs[0].root), [3, 1, 2], 'the incoming pane gets the average share');
+});
+
+test('a move within a row is a reorder', async (t) => {
+  const row = () => ({ tabs: [tab('t1', grp('root', 'cols', [pane('A'), pane('B'), pane('C')], [1, 2, 3]))], active: 't1' });
+  const cases = [
+    { name: 'left of its left neighbor', dest: { target: 'A', edge: 'left' }, want: 'cols(B,A,C)', w: [2, 1, 3] },
+    { name: 'the outer left edge gives the same result', dest: { target: 'root', edge: 'left' }, want: 'cols(B,A,C)', w: [2, 1, 3] },
+    { name: 'right of its right neighbor', dest: { target: 'C', edge: 'right' }, want: 'cols(A,C,B)', w: [1, 3, 2] },
+  ];
+  for (const c of cases) {
+    await t.test(c.name, () => {
+      const after = transform(row(), 'B', c.dest, { newId: ids() });
+      assert.equal(shape(after.tabs[0].root), c.want);
+      assert.deepEqual(weights(after.tabs[0].root), c.w, 'every pane keeps its size');
+    });
+  }
+
+  const still = [
+    { name: 'right of its left neighbor', dest: { target: 'A', edge: 'right' } },
+    { name: 'left of its right neighbor', dest: { target: 'C', edge: 'left' } },
+  ];
+  for (const c of still) {
+    await t.test(`${c.name} changes nothing`, () => {
+      const before = row();
+      assert.equal(sameLayout(transform(before, 'B', c.dest, { newId: ids() }), before), true);
+    });
+  }
+
+  await t.test('stacking on a neighbor is a real change', () => {
+    const before = row();
+    const after = transform(before, 'B', { target: 'A', edge: 'bottom' }, { newId: ids() });
+    assert.equal(shape(after.tabs[0].root), 'cols(rows(A,B),C)');
+    assert.equal(sameLayout(after, before), false);
+  });
+});
+
+test('sameLayout', async (t) => {
+  const base = () => ({ tabs: [tab('t1', grp('g', 'cols', [pane('A'), pane('B')], [1, 3]))], active: 't1' });
+  const cases = [
+    { name: 'ignores group ids, focus and scale of weights', other: { tabs: [tab('t1', grp('other', 'cols', [pane('A'), pane('B')], [2, 6]), 'B')], active: null }, want: true },
+    { name: 'sees a different order', other: { tabs: [tab('t1', grp('g', 'cols', [pane('B'), pane('A')], [3, 1]))], active: 't1' }, want: false },
+    { name: 'sees different proportions', other: { tabs: [tab('t1', grp('g', 'cols', [pane('A'), pane('B')], [1, 1]))], active: 't1' }, want: false },
+    { name: 'sees a different orientation', other: { tabs: [tab('t1', grp('g', 'rows', [pane('A'), pane('B')], [1, 3]))], active: 't1' }, want: false },
+    { name: 'sees another tab order', other: { tabs: [tab('t2', pane('C')), ...base().tabs], active: 't1' }, want: false },
+  ];
+  for (const c of cases) await t.test(c.name, () => assert.equal(sameLayout(base(), c.other), c.want));
 });
 
 test('moves inside one tab', async (t) => {

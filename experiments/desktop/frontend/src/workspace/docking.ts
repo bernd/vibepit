@@ -1,6 +1,6 @@
 import { hitStage, place, tabZone } from '../core/workspace/geometry.ts';
 import type { Hit } from '../core/workspace/geometry.ts';
-import { find, owner } from '../core/workspace/layout.ts';
+import { find, owner, sameLayout } from '../core/workspace/layout.ts';
 import type { Destination } from '../core/workspace/layout.ts';
 import type { Workspace } from './state.svelte.ts';
 
@@ -64,12 +64,14 @@ export function attachDocking(ws: Workspace, stageInner: () => HTMLElement | nul
     if (hit.reveal) active.reveal = hit.reveal;
     // Over the source itself there is nothing to preview: a release there
     // leaves the layout as it is.
-    const dest = hit.dest && 'target' in hit.dest && withinSource(ws.drag.src, hit.dest.target) ? null : hit.dest;
+    let dest = hit.dest && 'target' in hit.dest && withinSource(ws.drag.src, hit.dest.target) ? null : hit.dest;
     last = dest;
     const sig = JSON.stringify(dest);
     if (sig === active.sig) return;
     active.sig = sig;
-    const { layout, error } = dest ? ws.preview(ws.drag.src, dest) : { layout: null, error: '' };
+    let { layout, error } = dest ? ws.preview(ws.drag.src, dest) : { layout: null, error: '' };
+    // A destination that would leave everything where it is shows no preview.
+    if (layout && sameLayout(layout, ws.layout)) { dest = null; layout = null; error = ''; }
     ws.drag = { src: ws.drag.src, dest, result: layout, error };
   }
 
