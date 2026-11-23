@@ -18,12 +18,11 @@ import (
 	"time"
 )
 
-// inspectionOrigin binds an authority to its request policy and optional inspection certificate.
+// inspectionOrigin binds an authority to its request policy.
 type inspectionOrigin struct {
-	authority   string
-	certificate tls.Certificate
-	rules       []requestRule
-	hostPort    bool // The embedder has authorized a host-port gateway rewrite.
+	authority string
+	rules     []requestRule
+	hostPort  bool // The embedder has authorized a host-port gateway rewrite.
 }
 
 // net/http detaches its dial context from the request so it can pool late
@@ -31,26 +30,26 @@ type inspectionOrigin struct {
 type requestContextKey struct{}
 
 type inspectedRoute struct {
-	authority   string
-	certificate tls.Certificate
-	policy      requestPolicy
-	transport   *http.Transport
-	dialTunnel  func(context.Context) (net.Conn, error)
-	inspect     bool
-	tunnelName  string // Empty for a literal address or authorized host port.
+	authority  string
+	policy     requestPolicy
+	transport  *http.Transport
+	dialTunnel func(context.Context) (net.Conn, error)
+	inspect    bool
+	tunnelName string // Empty for a literal address or authorized host port.
 }
 
 type inspectionProxy struct {
+	ca              *inspectionCA
 	routes          map[string]*inspectedRoute
 	onTunnelRefusal func(tunnelRefusal)
 }
 
-func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool, cfg upstreamConfig) (*inspectionProxy, error) {
+func newInspectionProxy(origins []inspectionOrigin, ca *inspectionCA, roots *x509.CertPool, cfg upstreamConfig) (*inspectionProxy, error) {
 	dialer, err := newUpstreamDialer(cfg)
 	if err != nil {
 		return nil, err
 	}
-	p := &inspectionProxy{routes: make(map[string]*inspectedRoute, len(origins))}
+	p := &inspectionProxy{ca: ca, routes: make(map[string]*inspectedRoute, len(origins))}
 	for _, origin := range origins {
 		key, err := canonicalAuthority(origin.authority, "")
 		if err != nil {
@@ -74,8 +73,8 @@ func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool, cfg up
 			p.routes[key] = nil
 			continue
 		}
-		if inspect && (len(origin.certificate.Certificate) == 0 || origin.certificate.PrivateKey == nil) {
-			return nil, fmt.Errorf("%s requires a TLS inspection certificate", key)
+		if inspect && ca == nil {
+			return nil, fmt.Errorf("%s requires a session inspection CA", key)
 		}
 		host, port, _ := net.SplitHostPort(key)
 		tunnelName := host
@@ -113,12 +112,11 @@ func newInspectionProxy(origins []inspectionOrigin, roots *x509.CertPool, cfg up
 			IdleConnTimeout:     90 * time.Second,
 		}
 		p.routes[key] = &inspectedRoute{
-			authority:   key,
-			certificate: origin.certificate,
-			policy:      policy,
-			transport:   tr,
-			inspect:     inspect,
-			tunnelName:  tunnelName,
+			authority:  key,
+			policy:     policy,
+			transport:  tr,
+			inspect:    inspect,
+			tunnelName: tunnelName,
 			dialTunnel: func(ctx context.Context) (net.Conn, error) {
 				return dialer.dial(ctx, host, port, origin.hostPort, true)
 			},
@@ -182,7 +180,7 @@ func (p *inspectionProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if isConnect {
 		if route.inspect {
-			route.serveTLS(w, r)
+			route.serveTLS(w, r, p.ca)
 		} else {
 			route.serveTunnel(w, r, p.onTunnelRefusal)
 		}
@@ -299,7 +297,7 @@ func (c *bufferedConn) CloseWrite() error {
 	return net.ErrClosed
 }
 
-func (route *inspectedRoute) serveTLS(w http.ResponseWriter, r *http.Request) {
+func (route *inspectedRoute) serveTLS(w http.ResponseWriter, r *http.Request, ca *inspectionCA) {
 	buffered := acceptConnect(w, r)
 	if buffered == nil {
 		return
@@ -307,9 +305,12 @@ func (route *inspectedRoute) serveTLS(w http.ResponseWriter, r *http.Request) {
 	defer buffered.Close()
 	stopClose := context.AfterFunc(r.Context(), func() { buffered.Close() })
 	defer stopClose()
+	host, _, _ := net.SplitHostPort(route.authority)
 	tlsConn := tls.Server(buffered, &tls.Config{
-		Certificates: []tls.Certificate{route.certificate},
-		NextProtos:   []string{"h2", "http/1.1"},
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return ca.certificate(host)
+		},
+		NextProtos: []string{"h2", "http/1.1"},
 	})
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	err := tlsConn.HandshakeContext(ctx)

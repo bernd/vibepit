@@ -22,12 +22,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
+func testCertificate(t *testing.T, names ...string) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
+	if len(names) == 0 {
+		names = []string{"origin.test"}
+	}
 	cert := &x509.Certificate{
-		SerialNumber: big.NewInt(1), DNSNames: []string{"origin.test"},
+		SerialNumber: big.NewInt(1), DNSNames: names,
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -65,7 +68,7 @@ func TestRequestAuthorization(t *testing.T) {
 			_, port, err := net.SplitHostPort(upstream.Listener.Addr().String())
 			require.NoError(t, err)
 			authority := net.JoinHostPort("origin.test", port)
-			leaf, roots := testCertificate(t)
+			ca, roots := testInspectionCA(t)
 			for _, policy := range []struct {
 				name  string
 				rules []requestRule
@@ -77,9 +80,9 @@ func TestRequestAuthorization(t *testing.T) {
 			} {
 				t.Run(policy.name, func(t *testing.T) {
 					proxy, err := newLoopbackProxy([]inspectionOrigin{{
-						authority:   authority,
-						certificate: leaf, rules: policy.rules,
-					}}, upstreamRoots)
+						authority: authority,
+						rules:     policy.rules,
+					}}, ca, upstreamRoots)
 					require.NoError(t, err)
 					t.Cleanup(proxy.closeIdleConnections)
 					server := httptest.NewServer(proxy)
@@ -120,20 +123,25 @@ func TestRequestAuthorization(t *testing.T) {
 }
 
 func TestInspectionBoundaries(t *testing.T) {
+	ca, roots := testInspectionCA(t)
+	// Even a matching certificate issued by the session CA is untrusted upstream.
+	upstreamCert, err := ca.certificate("origin.test")
+	require.NoError(t, err)
 	var calls atomic.Int32
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	upstream.TLS = &tls.Config{Certificates: []tls.Certificate{*upstreamCert}}
+	upstream.StartTLS()
 	t.Cleanup(upstream.Close)
 	_, port, err := net.SplitHostPort(upstream.Listener.Addr().String())
 	require.NoError(t, err)
 	authority := net.JoinHostPort("origin.test", port)
-	cert, roots := testCertificate(t)
 	proxy, err := newLoopbackProxy([]inspectionOrigin{{
-		authority: authority, certificate: cert,
-		rules: []requestRule{{paths: []string{"/**"}}},
-	}}, x509.NewCertPool())
+		authority: authority,
+		rules:     []requestRule{{paths: []string{"/**"}}},
+	}}, ca, x509.NewCertPool())
 	require.NoError(t, err)
 	server := httptest.NewServer(proxy)
 	t.Cleanup(server.Close)
@@ -177,7 +185,7 @@ func TestInspectionBoundaries(t *testing.T) {
 }
 
 func TestConnectAdmission(t *testing.T) {
-	cert, _ := testCertificate(t)
+	ca, _ := testInspectionCA(t)
 	for _, tc := range []struct {
 		name  string
 		rules []requestRule
@@ -187,9 +195,9 @@ func TestConnectAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proxy, err := newLoopbackProxy([]inspectionOrigin{{
-				authority:   "origin.test:443",
-				certificate: cert, rules: tc.rules,
-			}}, nil)
+				authority: "origin.test:443",
+				rules:     tc.rules,
+			}}, ca, nil)
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
 			proxy.ServeHTTP(w, httptest.NewRequest(http.MethodConnect, "origin.test:443", nil))
@@ -199,11 +207,11 @@ func TestConnectAdmission(t *testing.T) {
 }
 
 func TestInspectedConnectionRequiresTLS(t *testing.T) {
-	cert, _ := testCertificate(t)
+	ca, _ := testInspectionCA(t)
 	proxy, err := newLoopbackProxy([]inspectionOrigin{{
-		authority: "origin.test:443", certificate: cert,
-		rules: []requestRule{{paths: []string{"/public"}}},
-	}}, nil)
+		authority: "origin.test:443",
+		rules:     []requestRule{{paths: []string{"/public"}}},
+	}}, ca, nil)
 	require.NoError(t, err)
 	server := httptest.NewServer(proxy)
 	t.Cleanup(server.Close)
@@ -237,11 +245,11 @@ func TestCancelServingContextEndsInspectedRequest(t *testing.T) {
 	_, port, err := net.SplitHostPort(upstream.Listener.Addr().String())
 	require.NoError(t, err)
 	authority := net.JoinHostPort("origin.test", port)
-	leaf, roots := testCertificate(t)
+	ca, roots := testInspectionCA(t)
 	proxy, err := newLoopbackProxy([]inspectionOrigin{{
-		authority: authority, certificate: leaf,
-		rules: []requestRule{{paths: []string{"/**"}}},
-	}}, upstreamRoots)
+		authority: authority,
+		rules:     []requestRule{{paths: []string{"/**"}}},
+	}}, ca, upstreamRoots)
 	require.NoError(t, err)
 	server := httptest.NewUnstartedServer(proxy)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -291,8 +299,8 @@ func TestInnerHTTP1RequiresOriginForm(t *testing.T) {
 
 // Most wire tests use local upstreams. Opt into loopback explicitly, as an
 // embedder must do for ordinary names and literals.
-func newLoopbackProxy(origins []inspectionOrigin, roots *x509.CertPool) (*inspectionProxy, error) {
-	return newInspectionProxy(origins, roots, upstreamConfig{
+func newLoopbackProxy(origins []inspectionOrigin, ca *inspectionCA, roots *x509.CertPool) (*inspectionProxy, error) {
+	return newInspectionProxy(origins, ca, roots, upstreamConfig{
 		staticHosts: map[string]netip.Addr{"origin.test": netip.MustParseAddr("127.0.0.1")},
 		gateway:     netip.MustParseAddr("127.0.0.1"),
 		allowCIDRs:  []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},

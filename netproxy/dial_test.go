@@ -31,7 +31,7 @@ func TestStaticAddressSubjectToDefaultCIDRs(t *testing.T) {
 	authority := net.JoinHostPort("service.test", port)
 	p, err := newInspectionProxy([]inspectionOrigin{{
 		authority: authority, rules: []requestRule{{}},
-	}}, nil, upstreamConfig{staticHosts: map[string]netip.Addr{"service.test": netip.MustParseAddr("127.0.0.1")}})
+	}}, nil, nil, upstreamConfig{staticHosts: map[string]netip.Addr{"service.test": netip.MustParseAddr("127.0.0.1")}})
 	require.NoError(t, err)
 	defer p.closeIdleConnections()
 	w := httptest.NewRecorder()
@@ -66,7 +66,7 @@ func TestReconnectRechecksTheWholeAnswer(t *testing.T) {
 			_, port, err := net.SplitHostPort(up.Listener.Addr().String())
 			require.NoError(t, err)
 			authority := net.JoinHostPort("origin.test", port)
-			leaf, roots := testCertificate(t)
+			ca, roots := testInspectionCA(t)
 			cfg := upstreamConfig{
 				resolver: resolveFunc(func(ctx context.Context, host string) (Resolution, error) {
 					if host != "origin.test" {
@@ -80,7 +80,7 @@ func TestReconnectRechecksTheWholeAnswer(t *testing.T) {
 				}),
 				allowCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
 			}
-			p, err := newInspectionProxy([]inspectionOrigin{{authority: authority, certificate: leaf, rules: []requestRule{{paths: []string{"/**"}}}}}, upRoots, cfg)
+			p, err := newInspectionProxy([]inspectionOrigin{{authority: authority, rules: []requestRule{{paths: []string{"/**"}}}}}, ca, upRoots, cfg)
 			require.NoError(t, err)
 			defer p.closeIdleConnections()
 			server := httptest.NewServer(p)
@@ -148,16 +148,15 @@ func TestAliasRulesAtEachEntryPoint(t *testing.T) {
 					if tc.port == "other" {
 						aliasPort = 1
 					}
-					leaf, roots := testCertificate(t)
+					ca, roots := testInspectionCA(t)
 					origin := inspectionOrigin{authority: target, rules: []requestRule{{}}}
 					if form == "inspected" {
-						origin.certificate = leaf
 						origin.rules = []requestRule{{paths: []string{"/**"}}}
 					}
 					cfg := upstreamConfig{resolver: resolveFunc(func(context.Context, string) (Resolution, error) {
 						return Resolution{Aliases: []string{"middle.test", "Alias.TEST."}, Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}, nil
 					}), allowCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}}
-					p, err := newInspectionProxy([]inspectionOrigin{origin, {authority: net.JoinHostPort("alias.test", strconv.Itoa(int(aliasPort))), rules: []requestRule{tc.rule}}}, upRoots, cfg)
+					p, err := newInspectionProxy([]inspectionOrigin{origin, {authority: net.JoinHostPort("alias.test", strconv.Itoa(int(aliasPort))), rules: []requestRule{tc.rule}}}, ca, upRoots, cfg)
 					require.NoError(t, err)
 					defer p.closeIdleConnections()
 					s := httptest.NewServer(p)
@@ -275,7 +274,7 @@ func TestLookupFailureRefusesConnect(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := upstreamConfig{resolver: resolveFunc(func(context.Context, string) (Resolution, error) { return tc.answer, tc.err })}
-			p, err := newInspectionProxy([]inspectionOrigin{{authority: "origin.test:443", rules: []requestRule{{}}}}, nil, cfg)
+			p, err := newInspectionProxy([]inspectionOrigin{{authority: "origin.test:443", rules: []requestRule{{}}}}, nil, nil, cfg)
 			require.NoError(t, err)
 			w := httptest.NewRecorder()
 			p.ServeHTTP(w, httptest.NewRequest(http.MethodConnect, "origin.test:443", nil))
@@ -292,7 +291,7 @@ func TestAbandonedRequestStopsResolution(t *testing.T) {
 		close(stopped)
 		return Resolution{}, ctx.Err()
 	})
-	p, err := newInspectionProxy([]inspectionOrigin{{authority: "origin.test:80", rules: []requestRule{{}}}}, nil, upstreamConfig{resolver: resolver})
+	p, err := newInspectionProxy([]inspectionOrigin{{authority: "origin.test:80", rules: []requestRule{{}}}}, nil, nil, upstreamConfig{resolver: resolver})
 	require.NoError(t, err)
 	defer p.closeIdleConnections()
 	ctx, cancel := context.WithCancel(t.Context())

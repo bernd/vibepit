@@ -209,11 +209,13 @@ and passes the alias and CIDR checks again.
 discarded after signing). The CLI generates it with the other session
 credentials and delivers its key to the proxy the same way as the control
 API server key, so a proxy restart keeps the same CA and the sandbox's trust
-stays valid. Leaf certificates use ECDSA P-256 (many clients reject Ed25519
-server certs) and are cached per host. Each leaf names only its `CONNECT`
-host, gets a random serial, and is valid for a short period well under
-browser and OS limits (Chrome rejects leaves valid longer than 398 days, as
-goproxy found in #432).
+stays valid. The CA lasts 30 days. Leaf certificates use ECDSA P-256
+(many clients reject Ed25519 server certs). Each leaf names only its
+admitted `CONNECT` host, gets a random serial, and is valid for 24 hours
+or until the CA expires, whichever comes first. This keeps the validity
+well under browser and OS limits (see goproxy #432). The proxy
+caches leaves for the 128 most recently used hosts. A handshake in a leaf's
+last five minutes renews it if the CA can issue a longer-lived certificate.
 
 **Sandbox trust.** The CLI builds the sandbox's trust files once, at session
 start, and mounts them read-only at fixed paths. Nothing is generated inside
@@ -2396,8 +2398,6 @@ it.
   any that a tool no longer reads.
 - The troubleshooting file's mount path (next to the trust files) and its
   final wording.
-- Leaf certificate cache size and lifetime; CA lifetime matching the existing
-  session credentials.
 - Mount paths of the sandbox's trust files, and which JDK versions the
   truststore test covers.
 - Where the trust record is stored (per `config/paths.go`) and the exact
