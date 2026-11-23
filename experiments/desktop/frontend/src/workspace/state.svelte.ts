@@ -1,6 +1,8 @@
 import { tick } from 'svelte';
 import { LayoutError, close, equalize, find, group, isGroup, joinTitle, leaves, setDivider, setFocus, split, transform } from '../core/workspace/layout.ts';
 import type { Destination, Dir, Layout, Node, Pane, PaneType, Size, Tab } from '../core/workspace/layout.ts';
+import { dockOptions, moveOptions } from '../core/workspace/options.ts';
+import type { DockOption, MoveOption } from '../core/workspace/options.ts';
 import { restore } from '../core/workspace/persist.ts';
 
 const storageKey = 'vp.workspace.v1';
@@ -15,6 +17,12 @@ export interface DragState {
   // The committed result of dropping here, or why the drop is unavailable.
   result: Layout | null;
   error: string;
+  // The tab whose workspace is shown while dragging.
+  reveal: string | null;
+  // The pane under the pointer, and the edges of it and of the whole tab
+  // that are available. They are drawn as markers.
+  over: string | null;
+  marks: DockOption[];
 }
 
 const typeNames: Record<PaneType, string> = { session: 'Session', monitor: 'Monitor', logs: 'Logs' };
@@ -63,6 +71,12 @@ export class Workspace {
       throw e;
     }
   }
+
+  // The edges of the given targets, for the markers shown while dragging.
+  marks(src: string, targets: string[]): DockOption[] { return dockOptions(this.layout, src, targets, this.options()); }
+
+  // Every distinct result of moving `src`, for the move dialog.
+  choices(src: string): { options: MoveOption[]; blocked: number } { return moveOptions(this.layout, src, (n) => this.title(n), this.options()); }
 
   commit(next: Layout) {
     this.layout = next;

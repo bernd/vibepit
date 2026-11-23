@@ -2,16 +2,16 @@
   import { dragShare, place } from '../core/workspace/geometry.ts';
   import type { DividerBox } from '../core/workspace/geometry.ts';
   import { find, isGroup, leaves } from '../core/workspace/layout.ts';
-  import type { Rect } from '../core/workspace/layout.ts';
+  import type { Edge, Rect } from '../core/workspace/layout.ts';
   import type { Workspace } from './state.svelte.ts';
-  import Diagram from './Diagram.svelte';
   import Icon from './Icon.svelte';
   import PaneView from './PaneView.svelte';
 
   let { ws, inner = $bindable(null) }: { ws: Workspace; inner?: HTMLElement | null } = $props();
   let stage = $state<HTMLElement | null>(null);
 
-  const tab = $derived(ws.active);
+  // While dragging, the workspace of the tab the pointer rested on is shown.
+  const tab = $derived(ws.layout.tabs.find((t) => t.id === ws.drag?.reveal) ?? ws.active);
   // A drag previews the full layout, so zoom is ignored while one is in progress.
   const visible = $derived(tab ? (ws.zoomed && !ws.drag && find(tab.root, ws.zoomed)) || tab.root : null);
   const placed = $derived(visible && ws.space.w > 0 ? place(visible, ws.space) : null);
@@ -19,11 +19,46 @@
   // Every pane of every tab stays mounted, keyed by its id. Panes of
   // background tabs are hidden, and a move never remounts a pane.
   const panes = $derived(ws.layout.tabs.flatMap((t) => leaves(t.root).map((pane) => ({ pane, multi: isGroup(t.root) }))));
-  const preview = $derived.by(() => {
+  // Markers for the available edges: wide ones on the border for the whole
+  // tab, small ones inside the pane under the pointer.
+  const marks = $derived.by(() => {
     const d = ws.drag;
-    if (!d?.dest || !('target' in d.dest)) return null;
-    return { root: d.result?.tabs.find((t) => t.id === d.result?.active)?.root, error: d.error, src: d.src, target: d.dest.target };
+    if (!d || !placed || !tab) return [];
+    const out: { key: string; rect: Rect; edge: Edge; whole: boolean; active: boolean }[] = [];
+    for (const m of d.marks) {
+      if (m.state !== 'ok') continue;
+      const whole = m.target === tab.root.id;
+      const r = whole ? { x: 0, y: 0, w: placed.size.w, h: placed.size.h } : rects.get(m.target);
+      if (!r) continue;
+      const inset = whole ? 4 : 40;
+      const long = whole ? 44 : 24;
+      const across = m.edge === 'left' || m.edge === 'right';
+      const w = across ? 22 : long;
+      const h = across ? long : 22;
+      const x = m.edge === 'left' ? r.x + inset : m.edge === 'right' ? r.x + r.w - inset - w : r.x + (r.w - w) / 2;
+      const y = m.edge === 'top' ? r.y + inset : m.edge === 'bottom' ? r.y + r.h - inset - h : r.y + (r.h - h) / 2;
+      const active = !!d.dest && 'target' in d.dest && d.dest.target === m.target && d.dest.edge === m.edge;
+      out.push({ key: `${m.target}:${m.edge}`, rect: { x, y, w, h }, edge: m.edge, whole, active });
+    }
+    return out;
   });
+  // Where the dragged content will sit after the drop, with its real size.
+  const landing = $derived.by(() => {
+    const d = ws.drag;
+    const next = d?.result?.tabs.find((t) => t.id === d.result?.active);
+    if (!d?.dest || !('target' in d.dest) || !next) return null;
+    const carried = ws.carried;
+    const after = place(next.root, ws.space);
+    // A moved group lands as its frame, handle included. A pane lands as itself.
+    const frame = after.groups.find((g) => g.id === d.src)?.frame;
+    const boxes = frame ? [frame] : after.panes.filter((p) => carried.has(p.id)).map((p) => p.rect);
+    if (!boxes.length) return null;
+    const x = Math.min(...boxes.map((b) => b.x));
+    const y = Math.min(...boxes.map((b) => b.y));
+    const source = ws.layout.tabs.map((t) => find(t.root, d.src)).find(Boolean);
+    return { rect: { x, y, w: Math.max(...boxes.map((b) => b.x + b.w)) - x, h: Math.max(...boxes.map((b) => b.y + b.h)) - y }, title: source ? ws.title(source) : '' };
+  });
+  const blocked = $derived(ws.drag?.dest && 'target' in ws.drag.dest && !ws.drag.result ? ws.drag.error : '');
 
   $effect(() => {
     if (!stage) return;
@@ -93,6 +128,10 @@
           style={box(d.rect)} onpointerdown={(e) => dividerDown(e, d)} onkeydown={(e) => dividerKey(e, d)}></div>
       {/each}
     {/if}
+    {#each marks as m (m.key)}
+      <div class="dropmark {m.edge}" class:whole={m.whole} class:active={m.active} style={box(m.rect)}><Icon name="chevron" /></div>
+    {/each}
+    {#if landing}<div class="landing" style={box(landing.rect)}><span>{landing.title}</span></div>{/if}
     {#each panes as { pane, multi } (pane.id)}
       <PaneView {ws} {pane} {multi} rect={rects.get(pane.id)} solo={!!visible && !isGroup(visible)} />
     {/each}
@@ -106,9 +145,5 @@
       </div>
     </div>
   {/if}
-  {#if preview}
-    <div class="projection" class:invalid={!preview.root}>
-      {#if preview.root}<Diagram {ws} node={preview.root} incoming={preview.src} target={preview.target} />{:else}{preview.error}{/if}
-    </div>
-  {/if}
+  {#if blocked}<div class="dropnote">{blocked}</div>{/if}
 </div>

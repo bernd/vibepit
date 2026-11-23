@@ -82,6 +82,11 @@ export function dragShare(d: DividerBox, delta: number): number {
 
 const inside = (r: Rect, x: number, y: number) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
+// The pane under a point, if any.
+export function paneAt(placed: Placement, x: number, y: number): string | undefined {
+  return placed.panes.find((p) => inside(p.rect, x, y))?.id;
+}
+
 export function closestEdge(r: Rect, x: number, y: number): Edge {
   const d: [Edge, number][] = [
     ['left', (x - r.x) / r.w], ['right', (r.x + r.w - x) / r.w],

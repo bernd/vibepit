@@ -7,10 +7,8 @@
   let { ws }: { ws: Workspace } = $props();
 
   const gap = $derived(ws.drag?.dest && 'gap' in ws.drag.dest ? ws.drag.dest.gap : -1);
-  const revealed = $derived.by(() => {
-    const dest = ws.drag?.dest;
-    return dest && 'target' in dest ? ws.layout.tabs.find((t) => t.root.id === dest.target)?.id : undefined;
-  });
+  // The tab whose workspace is shown while dragging.
+  const revealed = $derived(ws.drag?.reveal);
 
   function tabMenu(tab: Tab, anchor: HTMLElement) {
     const items: MenuEntry[] = [{ heading: ws.fullTitle(tab.root) }, { label: 'Move tab…', run: () => (ws.moving = tab.root.id) }];

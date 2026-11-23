@@ -1,49 +1,46 @@
 <script lang="ts">
-  import { all, find, isGroup, leaves, sameLayout } from '../core/workspace/layout.ts';
-  import type { Destination, Edge } from '../core/workspace/layout.ts';
+  import { find } from '../core/workspace/layout.ts';
+  import type { MoveOption } from '../core/workspace/options.ts';
   import type { Workspace } from './state.svelte.ts';
   import Diagram from './Diagram.svelte';
   import Icon from './Icon.svelte';
 
-  // The keyboard path for docking. It offers the same sources, targets,
-  // edges and new-tab choices as a drag, and shows the same diagram.
+  // The keyboard path for docking. It shows every distinct result of the
+  // move as a small diagram, and choosing one commits it. The results are
+  // the same ones a drag can reach.
   let { ws }: { ws: Workspace } = $props();
   let dialog = $state<HTMLDialogElement | null>(null);
-  let choice = $state('');
-  let edge = $state<Edge>('right');
-  const edges: [Edge, string][] = [['left', 'Left'], ['top', 'Above'], ['right', 'Right'], ['bottom', 'Below']];
+  let grid = $state<HTMLElement | null>(null);
+  let shownGroup = $state('');
 
   const source = $derived.by(() => {
     const tab = ws.moving ? ws.layout.tabs.find((t) => find(t.root, ws.moving as string)) : undefined;
     const node = tab && find(tab.root, ws.moving as string);
     return tab && node ? { tab, node } : null;
   });
-
-  const options = $derived.by(() => {
-    if (!source) return [];
-    const omit = new Set(all(source.node).map((n) => n.id));
-    const out: { value: string; label: string; other: boolean }[] = [];
-    ws.layout.tabs.forEach((t, i) => {
-      const other = t !== source.tab;
-      out.push({ value: `gap:${i}`, label: `Tab bar · before ${ws.title(t.root)}`, other: false });
-      if (!omit.has(t.root.id)) out.push({ value: t.root.id, label: `Whole tab · ${ws.title(t.root)}`, other });
-      if (isGroup(t.root)) for (const p of leaves(t.root)) if (!omit.has(p.id)) out.push({ value: p.id, label: `Pane · ${ws.paneTitle(p)} (${ws.title(t.root)})`, other });
-    });
-    out.push({ value: `gap:${ws.layout.tabs.length}`, label: 'Tab bar · at end', other: false });
+  const choices = $derived(source ? ws.choices(source.node.id) : { options: [], blocked: 0 });
+  // One group per destination: the source's own tab, each other tab, and the tab bar.
+  const groups = $derived.by(() => {
+    const out: { key: string; label: string; options: MoveOption[] }[] = [];
+    for (const o of choices.options) {
+      const key = o.tab ?? 'bar';
+      let g = out.find((x) => x.key === key);
+      if (!g) {
+        const tab = ws.layout.tabs.find((t) => t.id === o.tab);
+        g = { key, label: !tab ? 'Tab bar' : tab === source?.tab ? 'This tab' : ws.title(tab.root), options: [] };
+        out.push(g);
+      }
+      g.options.push(o);
+    }
     return out;
   });
-
-  const gap = $derived(choice.startsWith('gap:'));
-  const dest = $derived<Destination | null>(!choice ? null : gap ? { gap: Number(choice.slice(4)) } : { target: choice, edge });
-  const preview = $derived(source && dest ? ws.preview(source.node.id, dest) : { layout: null, error: '' });
-  const unchanged = $derived(!!preview.layout && sameLayout(preview.layout, ws.layout));
-  const shown = $derived(preview.layout?.tabs.find((t) => t.id === preview.layout?.active)?.root);
+  const current = $derived(groups.find((g) => g.key === shownGroup) ?? groups[0]);
 
   $effect(() => {
     if (ws.moving && dialog && !dialog.open) {
-      choice = (options.find((o) => o.other) ?? options.at(-1))?.value ?? '';
-      edge = 'right';
+      shownGroup = groups[0]?.key ?? '';
       dialog.showModal();
+      grid?.querySelector<HTMLElement>('button')?.focus();
     }
   });
 
@@ -58,40 +55,59 @@
     // The dialog returns focus to its opener. If that element is gone, focus goes to the active pane.
     setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) void ws.focusPane(); }, 0);
   }
-  function apply() {
-    const next = preview.layout;
+  function pick(o: MoveOption) {
     done();
-    if (next) ws.commit(next);
+    ws.commit(o.layout);
   }
+  function arrows(e: KeyboardEvent) {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step || !grid) return;
+    const items = [...grid.querySelectorAll<HTMLElement>('button')];
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    if (i < 0) return;
+    e.preventDefault();
+    items[(i + step + items.length) % items.length].focus();
+  }
+  const resultRoot = (o: MoveOption) => o.layout.tabs.find((t) => t.id === o.layout.active)?.root;
 </script>
 
-<dialog bind:this={dialog} {onclose} aria-labelledby="move-title">
+<dialog class="movedialog" bind:this={dialog} {onclose} aria-labelledby="move-title">
   {#if source}
     <div class="dialoghead">
       <h2 id="move-title">Move {ws.title(source.node)}</h2>
       <button type="button" class="icon" aria-label="Close dialog" onclick={done}><Icon name="close" /></button>
     </div>
-    <label class="formline">Destination
-      <select bind:value={choice}>
-        {#each options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
-      </select>
-    </label>
-    {#if !gap}
-      <div class="chips" role="group" aria-label="Edge">
-        {#each edges as [side, label] (side)}
-          <button type="button" aria-pressed={edge === side} onclick={() => (edge = side)}>{label}</button>
+    {#if groups.length > 1}
+      <div class="chips" role="group" aria-label="Destination">
+        {#each groups as g (g.key)}
+          <button type="button" aria-pressed={g === current} onclick={() => (shownGroup = g.key)}>{g.label}</button>
         {/each}
       </div>
     {/if}
-    <div class="miniwrap">
-      {#if shown}<Diagram {ws} node={shown} incoming={source.node.id} target={gap ? undefined : choice} />{/if}
-    </div>
-    <p class="note" aria-live="polite">
-      {preview.error || (unchanged ? 'It is already there.' : gap ? 'Places the source in the tab bar at this position.' : 'The dashed outline marks the incoming pane or group.')}
-    </p>
-    <div class="dialogfoot">
-      <button type="button" onclick={done}>Cancel</button>
-      <button type="button" class="primary" disabled={!preview.layout || unchanged} onclick={apply}>Move</button>
-    </div>
+    {#if current}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="options" bind:this={grid} onkeydown={arrows}>
+        {#each current.options as o (o.label + JSON.stringify(o.dest))}
+          {@const root = resultRoot(o)}
+          <button type="button" class="option" onclick={() => pick(o)}>
+            <span class="thumb">
+              {#if o.tab && root}
+                <Diagram {ws} node={root} incoming={source.node.id} />
+              {:else}
+                <span class="tabsketch">
+                  {#each o.layout.tabs as t (t.id)}<span class:incoming={t.id === o.layout.active}>{ws.title(t.root)}</span>{/each}
+                </span>
+              {/if}
+            </span>
+            <span class="optionlabel">{o.label}</span>
+          </button>
+        {/each}
+      </div>
+    {:else}
+      <p class="note">There is no other position for it.</p>
+    {/if}
+    {#if choices.blocked}
+      <p class="note">{choices.blocked} more {choices.blocked === 1 ? 'position needs' : 'positions need'} a larger window.</p>
+    {/if}
   {/if}
 </dialog>

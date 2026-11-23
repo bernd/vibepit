@@ -54,6 +54,13 @@ const center = async (locator) => { const b = await locator.boundingBox(); retur
 // A drag in small steps, so the docking controller sees every stage of it.
 // A point with `rest` holds the pointer there, as a tab needs before it becomes the target.
 const rest = (p) => ({ x: p.x, y: p.y, rest: 250 });
+// The landing block shows where the dragged content will sit after the drop.
+const landing = async () => {
+  const el = page.locator('.landing');
+  if (!(await el.count())) return null;
+  const b = await el.boundingBox();
+  return { ...b, title: (await el.textContent()).trim() };
+};
 async function drag(from, points, { drop = true } = {}) {
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
@@ -156,8 +163,8 @@ test('dividers resize neighbors by pointer and by keyboard', async () => {
 
 test('worked example: drag the Codex + Tests tab onto Logs', async () => {
   const cases = [
-    { edge: 'top', title: 'Codex + 2', point: (s) => ({ x: s.x + s.width / 2, y: s.y + 10 }), check: (c, ts, l) => c.x < ts.x && c.y === ts.y && l.y > c.y && Math.abs(l.width - (ts.x + ts.width - c.x)) < 4 },
-    { edge: 'right', title: 'Logs + 2', point: (s) => ({ x: s.x + s.width - 10, y: s.y + s.height / 2 }), check: (c, ts, l) => l.x < c.x && c.x === ts.x && c.y < ts.y },
+    { edge: 'top', title: 'Codex + 2', point: (s) => ({ x: s.x + s.width / 2, y: s.y + 10 }), lands: (l, s) => Math.abs(l.y - s.y) < 3 && Math.abs(l.width - s.width) < 6 && l.height < s.height * 0.55, check: (c, ts, l) => c.x < ts.x && c.y === ts.y && l.y > c.y && Math.abs(l.width - (ts.x + ts.width - c.x)) < 4 },
+    { edge: 'right', title: 'Logs + 2', point: (s) => ({ x: s.x + s.width - 10, y: s.y + s.height / 2 }), lands: (l, s) => l.x > s.x + s.width * 0.45 && Math.abs(l.height - s.height) < 6, check: (c, ts, l) => l.x < c.x && c.x === ts.x && c.y < ts.y },
   ];
   for (const c of cases) {
     {
@@ -168,14 +175,19 @@ test('worked example: drag the Codex + Tests tab onto Logs', async () => {
       const stage = await page.locator('.stage-inner').boundingBox();
       // Straight down from the tab, so the pointer crosses no other tab on its way.
       await drag(from, [rest(logsTab), { x: logsTab.x, y: stage.y + 80 }, c.point(stage)], { drop: false });
-      const labels = await page.locator('.projection .leafmini').allTextContents();
-      assert.deepEqual([...labels].sort(), ['Codex', 'Logs', 'Tests'], 'the preview draws the panes with their titles');
+      assert.deepEqual(await shownNames(), ['Logs'], 'the hovered tab reveals its workspace');
+      const block = await landing();
+      assert.equal(block?.title, 'Codex + Tests', 'the landing block names what is being moved');
+      assert.ok(c.lands(block, stage), `landing block for the ${c.edge} edge: ${JSON.stringify(block)}`);
+      assert.equal(await page.locator('.dropmark.active').count(), 1);
       assert.deepEqual(await tabLabels(), ['Codex + Tests', 'Logs', 'Monitor'], 'a preview causes no structural edit');
       if (c.edge === 'top') await page.screenshot({ path: `${output}docking-preview.png` });
       await page.mouse.up();
       assert.deepEqual(await tabLabels(), [c.title, 'Monitor']);
       const [codex, tests, logs] = await Promise.all(['Codex', 'Tests', 'Logs'].map((n) => pane(n).boundingBox()));
       assert.ok(c.check(codex, tests, logs), `layout after a ${c.edge} drop: ${JSON.stringify({ codex, tests, logs })}`);
+      const frame = await page.locator('.frame:not(.root)').boundingBox();
+      assert.ok(Math.abs(frame.x - block.x) < 3 && Math.abs(frame.y - block.y) < 3 && Math.abs(frame.width - block.width) < 3, 'the group lands exactly where the block was');
       assert.equal(await page.locator('.gin b').textContent(), 'Codex + Tests', 'the pair keeps a common handle');
       assert.equal(await pane('Tests').locator('input').inputValue(), 'still here', 'views keep their state');
     }
@@ -190,23 +202,38 @@ test('worked example: drag the Codex + Tests tab onto Logs', async () => {
   }
 });
 
+test('markers show the available edges of the whole tab and of the pane under the pointer', async () => {
+  const from = await center(pane('Tests').locator('.phead strong'));
+  const codex = await center(pane('Codex').locator('.body'));
+  await drag(from, [{ x: codex.x, y: codex.y }], { drop: false });
+  const marks = await page.locator('.dropmark').evaluateAll((els) => els.map((e) => [...e.classList].filter((c) => c !== 'dropmark' && c !== 'active').sort().join(' ')).sort());
+  // Tests already sits right of Codex and at the right edge of the tab, so those two edges offer nothing.
+  assert.deepEqual(marks, ['bottom', 'bottom whole', 'left', 'left whole', 'top', 'top whole']);
+  await page.screenshot({ path: `${output}docking-markers.png` });
+  await page.mouse.move(codex.x, codex.y + codex.height / 2 - 30, { steps: 6 });
+  assert.equal(await page.locator('.dropmark.active.bottom:not(.whole)').count(), 1, 'the edge being pushed is highlighted');
+  assert.equal((await landing())?.title, 'Tests');
+  await page.mouse.up();
+  const [c, t] = [await pane('Codex').boundingBox(), await pane('Tests').boundingBox()];
+  assert.ok(t.y >= c.y + c.height && Math.abs(t.x - c.x) < 2);
+});
+
 test('crossing a tab on the way to the workspace does not retarget, resting on it does', async () => {
   const from = await center(pane('Tests').locator('.phead strong'));
   const monitorTab = await center(page.locator('.tab').nth(2));
   const stage = await page.locator('.stage-inner').boundingBox();
   // The left edge, because Tests already sits at the right edge of its own tab.
   const edge = { x: stage.x + 10, y: stage.y + stage.height / 2 };
-  const previewed = async () => (await page.locator('.projection .leafmini').allTextContents()).sort();
 
   await drag(from, [monitorTab, edge], { drop: false });
-  assert.deepEqual(await previewed(), ['Codex', 'Tests'], 'a quick pass over the Monitor tab keeps the current tab as target');
-  assert.equal(await page.locator('.tab.reveal').count(), 1);
-  assert.equal(await page.locator('.tab.reveal .tablabel').textContent(), 'Codex + Tests');
+  assert.equal(await page.locator('.tab.reveal .tablabel').textContent(), 'Codex + Tests', 'a quick pass over the Monitor tab keeps the current tab as target');
+  assert.deepEqual(await shownNames(), ['Codex', 'Tests']);
+  assert.equal((await landing())?.title, 'Tests');
 
   await page.mouse.move(monitorTab.x, monitorTab.y, { steps: 8 });
   await page.waitForTimeout(250);
   assert.equal(await page.locator('.tab.reveal .tablabel').textContent(), 'Monitor', 'resting on the tab makes it the target without moving the pointer');
-  assert.deepEqual(await previewed(), ['Monitor', 'Tests']);
+  assert.deepEqual(await shownNames(), ['Monitor'], 'and reveals its workspace');
   await page.mouse.up();
   assert.deepEqual(await tabLabels(), ['Codex', 'Logs', 'Monitor + Tests']);
 });
@@ -216,32 +243,34 @@ test('the docking preview only changes when the pointer pushes toward a side', a
   await page.locator('.tab-name').nth(0).click();
   const from = await center(page.locator('.tab-name').nth(3));
   const body = await pane('Codex').locator('.body').boundingBox();
+  const whole = await pane('Codex').boundingBox();
   const mid = { x: body.x + body.width / 2, y: body.y + body.height / 2 };
-  // The arrangement of the preview, as the incoming pane's position relative to Codex.
-  const arrangement = async () => page.evaluate(() => {
-    const box = (name) => [...document.querySelectorAll('.projection .leafmini')].find((e) => e.textContent === name)?.getBoundingClientRect();
-    const a = box('Shell 1'), b = box('Codex');
-    if (!a || !b) return 'none';
-    return a.right <= b.left + 1 ? 'left' : a.left >= b.right - 1 ? 'right' : a.bottom <= b.top + 1 ? 'above' : 'below';
-  });
+  // Which part of the Codex pane the landing block covers.
+  const side = async () => {
+    const l = await landing();
+    if (!l) return 'none';
+    if (Math.abs(l.height - whole.height) < 4) return l.x < whole.x + whole.width / 4 ? 'left' : 'right';
+    return l.y < whole.y + whole.height / 4 ? 'above' : 'below';
+  };
 
   await drag(from, [{ x: body.x + 40, y: mid.y }], { drop: false });
-  assert.equal(await arrangement(), 'left', 'pushing toward the left side docks on the left');
+  assert.equal(await side(), 'left', 'pushing toward the left side docks on the left');
 
   await page.mouse.move(mid.x, mid.y, { steps: 10 });
-  const seen = new Set([await arrangement()]);
+  const seen = new Set([await side()]);
   for (const [dx, dy] of [[14, -12], [-10, 15], [18, 9], [-16, -14], [6, 20], [-20, 4], [0, 0]]) {
     await page.mouse.move(mid.x + dx, mid.y + dy, { steps: 2 });
-    seen.add(await arrangement());
+    seen.add(await side());
   }
   assert.deepEqual([...seen], ['left'], 'small movements in the middle of the pane keep the preview');
 
   await page.mouse.move(mid.x, body.y + body.height - 30, { steps: 10 });
-  assert.equal(await arrangement(), 'below', 'pushing toward the bottom changes it');
+  assert.equal(await side(), 'below', 'pushing toward the bottom changes it');
   await page.screenshot({ path: `${output}docking-pane-edge.png` });
+  const block = await landing();
   await page.mouse.up();
-  const [codex, shell] = [await pane('Codex').boundingBox(), await pane('Shell 1').boundingBox()];
-  assert.ok(shell.y >= codex.y + codex.height && Math.abs(shell.x - codex.x) < 2, 'the drop matches the last preview');
+  const shell = await pane('Shell 1').boundingBox();
+  assert.ok(Math.abs(shell.x - block.x) < 3 && Math.abs(shell.y - block.y) < 3 && Math.abs(shell.width - block.width) < 3, 'the pane lands exactly where the block was');
 });
 
 test('dragging the middle of three shells to the left reorders it without resizing', async () => {
@@ -253,19 +282,19 @@ test('dragging the middle of three shells to the left reorders it without resizi
   await page.mouse.move(divider.x, divider.y); await page.mouse.down(); await page.mouse.move(divider.x + 120, divider.y, { steps: 5 }); await page.mouse.up();
   const widths = async () => Object.fromEntries(await Promise.all(['Shell 1', 'Shell 2', 'Shell 3'].map(async (n) => [n, Math.round((await pane(n).boundingBox()).width)])));
   const order = async () => (await Promise.all(['Shell 1', 'Shell 2', 'Shell 3'].map(async (n) => [n, (await pane(n).boundingBox()).x]))).sort((a, b) => a[1] - b[1]).map((e) => e[0]);
-  const previewOrder = async () => page.evaluate(() => [...document.querySelectorAll('.projection .leafmini')].sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left).map((e) => e.textContent));
   const before = await widths();
   const first = await pane('Shell 1').boundingBox();
   const y = first.y + first.height / 2;
   const seen = [];
 
   await drag(await center(pane('Shell 2').locator('.phead strong')), [{ x: first.x + first.width - 20, y }], { drop: false });
-  assert.equal(await page.locator('.projection').count(), 0, 'beside its own left neighbor nothing would change, so there is no preview');
+  assert.equal(await landing(), null, 'beside its own left neighbor nothing would change, so there is no preview');
   for (let x = first.x + first.width - 20; x >= first.x + 2; x -= 15) {
     await page.mouse.move(x, y, { steps: 2 });
-    if (await page.locator('.projection').count()) seen.push((await previewOrder()).join(','));
+    const l = await landing();
+    if (l) seen.push(`${Math.round(l.x - first.x)}:${Math.round(l.width)}`);
   }
-  assert.deepEqual([...new Set(seen)], ['Shell 2,Shell 1,Shell 3'], 'one preview all the way to the border');
+  assert.deepEqual([...new Set(seen)], [`0:${before['Shell 2']}`], 'one preview all the way to the border: first in the row, at its own width');
   await page.screenshot({ path: `${output}docking-reorder.png` });
   await page.mouse.up();
   assert.deepEqual(await order(), ['Shell 2', 'Shell 1', 'Shell 3']);
@@ -310,9 +339,9 @@ test('cancelling a drag restores layout, selection and focus', async () => {
       const logsTab = await center(page.locator('.tab').nth(1));
       const stage = await page.locator('.stage-inner').boundingBox();
       await drag(from, [rest(logsTab), { x: logsTab.x, y: stage.y + 80 }], { drop: false });
-      assert.equal(await page.locator('.projection').count(), 1);
+      assert.equal(await page.locator('.landing').count(), 1);
       await c.end();
-      assert.equal(await page.locator('.projection').count(), 0);
+      assert.equal(await page.locator('.landing, .dropmark').count(), 0);
       assert.deepEqual(await tabLabels(), ['Codex + Tests', 'Logs', 'Monitor']);
       assert.deepEqual(await shownNames(), ['Codex', 'Tests']);
       assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Command in Codex', c.name);
@@ -325,14 +354,14 @@ test('over the source itself there is no preview, and a release there changes no
   const from = await center(page.locator('.gin b'));
   const inside = await center(pane('Shell 1').locator('.body'));
   await drag(from, [inside], { drop: false });
-  assert.equal(await page.locator('.projection').count(), 0, 'no preview and no error over the moving group');
+  assert.equal(await page.locator('.landing, .dropnote').count(), 0, 'no preview and no error over the moving group');
   assert.deepEqual(await page.locator('.pane.carried').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label'))), ['Tests', 'Shell 1'], 'the carried panes are marked');
   const codex = await center(pane('Codex').locator('.body'));
   await page.mouse.move(codex.x - codex.width / 2 + 60, codex.y, { steps: 8 });
-  assert.equal(await page.locator('.projection:not(.invalid)').count(), 1, 'a target outside the group previews as usual');
+  assert.equal(await page.locator('.landing').count(), 1, 'a target outside the group previews as usual');
   await page.screenshot({ path: `${output}docking-carried.png` });
   await page.mouse.move(inside.x, inside.y, { steps: 8 });
-  assert.equal(await page.locator('.projection').count(), 0);
+  assert.equal(await page.locator('.landing, .dropnote').count(), 0);
   await page.mouse.up();
   assert.equal(await page.locator('.pane.carried').count(), 0);
   assert.deepEqual(await shownNames(), ['Codex', 'Tests', 'Shell 1']);
@@ -342,21 +371,25 @@ test('over the source itself there is no preview, and a release there changes no
 test('dragging a pane shows no message at the start of the drag', async () => {
   const from = await center(pane('Tests').locator('.phead strong'));
   await drag(from, [{ x: from.x + 40, y: from.y + 60 }], { drop: false });
-  assert.equal(await page.locator('.projection').count(), 0);
+  assert.equal(await page.locator('.landing, .dropnote').count(), 0);
   assert.equal(await pane('Tests').evaluate((el) => el.classList.contains('carried')), true);
   await page.mouse.up();
 });
 
-test('the move dialog reaches the same layouts from the keyboard', async () => {
+test('the move dialog offers every distinct result and commits the chosen one from the keyboard', async () => {
   await page.locator('.tabmenu').nth(0).focus();
   await page.keyboard.press('Enter');
   await page.keyboard.press('Enter'); // "Move tab…" is the first item and has focus
   const dialog = page.locator('dialog');
   assert.equal(await dialog.evaluate((d) => d.open), true);
-  await dialog.locator('select').selectOption({ label: 'Whole tab · Logs' });
-  await dialog.getByRole('button', { name: 'Above', exact: true }).click();
-  assert.deepEqual((await dialog.locator('.leafmini').allTextContents()).sort(), ['Codex', 'Logs', 'Tests']);
-  await dialog.getByRole('button', { name: 'Move', exact: true }).click();
+  assert.deepEqual(await dialog.locator('.chips button').allTextContents(), ['Logs', 'Monitor', 'Tab bar'], 'a whole tab has no position inside itself');
+  assert.deepEqual(await dialog.locator('.optionlabel').allTextContents(), ['Left of Logs', 'Above Logs', 'Right of Logs', 'Below Logs']);
+  assert.equal(await page.evaluate(() => document.activeElement?.querySelector('.optionlabel')?.textContent), 'Left of Logs', 'the first option has focus');
+  assert.deepEqual((await dialog.locator('.option').nth(1).locator('.leafmini').allTextContents()).sort(), ['Codex', 'Logs', 'Tests'], 'each option shows its result with the real titles');
+  await page.screenshot({ path: `${output}move-dialog.png` });
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(() => document.activeElement?.querySelector('.optionlabel')?.textContent), 'Above Logs');
+  await page.keyboard.press('Enter');
   assert.equal(await dialog.evaluate((d) => d.open), false);
   assert.deepEqual(await tabLabels(), ['Codex + 2', 'Monitor']);
   const [codex, tests, logs] = await Promise.all(['Codex', 'Tests', 'Logs'].map((n) => pane(n).boundingBox()));
@@ -364,16 +397,34 @@ test('the move dialog reaches the same layouts from the keyboard', async () => {
   assert.equal(await page.evaluate(() => document.activeElement?.closest('.pane')?.getAttribute('aria-label')), 'Codex', 'focus follows the moved group');
 });
 
-test('the move dialog disables Move for an unavailable target', async () => {
+test('the move dialog lists the ten moves of the middle of three shells, and the tab bar positions', async () => {
+  await page.getByRole('button', { name: 'New Session tab' }).click();
+  await paneAction('Shell 1', 'Split right');
+  await paneAction('Shell 2', 'Split right');
+  await paneAction('Shell 2', 'Move pane…');
+  const dialog = page.locator('dialog');
+  assert.deepEqual(await dialog.locator('.chips button').allTextContents(), ['This tab', 'Codex + Tests', 'Logs', 'Monitor', 'Tab bar']);
+  assert.deepEqual(await dialog.locator('.optionlabel').allTextContents(), ['Left of Shell 1', 'Above Shell 1', 'Below Shell 1', 'Above Shell 3', 'Right of Shell 3', 'Below Shell 3', 'Above all panes', 'Below all panes']);
+  await dialog.getByRole('button', { name: 'Tab bar', exact: true }).click();
+  assert.deepEqual(await dialog.locator('.optionlabel').allTextContents(), ['New tab before Codex + Tests', 'New tab before Logs', 'New tab before Monitor', 'New tab before Shell 1 + 2', 'New tab at the end']);
+  await dialog.getByRole('button', { name: 'This tab', exact: true }).click();
+  await dialog.locator('.option', { hasText: 'Left of Shell 1' }).click();
+  const xs = await Promise.all(['Shell 2', 'Shell 1', 'Shell 3'].map(async (n) => (await pane(n).boundingBox()).x));
+  assert.ok(xs[0] < xs[1] && xs[1] < xs[2], 'Shell 2 is first in the row');
+});
+
+test('the move dialog leaves out positions that cannot fit and says how many', async () => {
   await page.setViewportSize({ width: 340, height: 400 });
   await page.waitForTimeout(100);
   await tabAction(1, 'Move tab…');
   const dialog = page.locator('dialog');
-  await dialog.locator('select').selectOption({ label: 'Whole tab · Codex + Tests' });
-  assert.match(await dialog.locator('.note').textContent(), /Too little space/);
-  assert.equal(await dialog.getByRole('button', { name: 'Move', exact: true }).isDisabled(), true);
+  await dialog.getByRole('button', { name: 'Codex + Tests', exact: true }).click();
+  const labels = await dialog.locator('.optionlabel').allTextContents();
+  assert.ok(labels.includes('Above all panes') && !labels.includes('Left of Codex') && !labels.includes('Right of Tests'), `a third pane side by side does not fit: ${labels}`);
+  assert.match(await dialog.locator('.note').last().textContent(), /positions? needs? a larger window/);
   await page.keyboard.press('Escape');
   assert.equal(await dialog.evaluate((d) => d.open), false);
+  assert.deepEqual(await tabLabels(), ['Codex + Tests', 'Logs', 'Monitor']);
 });
 
 test('equalize shares the parent and keeps nested proportions', async () => {
@@ -432,7 +483,7 @@ test('a reload restores the committed layout and nothing temporary', async () =>
   const from = await center(page.locator('.tab-name').nth(1));
   const stage = await page.locator('.stage-inner').boundingBox();
   await drag(from, [{ x: stage.x + stage.width - 10, y: stage.y + stage.height / 2 }], { drop: false });
-  assert.equal(await page.locator('.projection').count(), 1);
+  assert.equal(await page.locator('.landing').count(), 1);
   await page.reload();
   await page.waitForSelector('.pane');
   assert.deepEqual(await tabLabels(), ['Codex + 2', 'Logs', 'Monitor'], 'the hover preview was not saved');

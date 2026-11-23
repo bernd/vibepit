@@ -1,4 +1,5 @@
-import { hitStage, place, tabZone } from '../core/workspace/geometry.ts';
+import { tick } from 'svelte';
+import { hitStage, paneAt, place, tabZone } from '../core/workspace/geometry.ts';
 import type { Hit } from '../core/workspace/geometry.ts';
 import { find, owner, sameLayout } from '../core/workspace/layout.ts';
 import type { Destination } from '../core/workspace/layout.ts';
@@ -18,7 +19,9 @@ export function attachDocking(ws: Workspace, stageInner: () => HTMLElement | nul
   const leaveTab = () => { if (hover) clearTimeout(hover.timer); hover = null; };
   let swallowClick = false;
 
-  function destinationAt(x: number, y: number, src: string): { dest: Destination | null; reveal?: string } {
+  interface Found { dest: Destination | null; reveal?: string; over?: string | null }
+
+  function destinationAt(x: number, y: number, src: string): Found {
     const at = document.elementFromPoint(x, y);
     const tabs = ws.layout.tabs;
     const tabEl = at?.closest<HTMLElement>('[data-tab]');
@@ -47,8 +50,9 @@ export function attachDocking(ws: Workspace, stageInner: () => HTMLElement | nul
     const r = inner.getBoundingClientRect();
     // A release outside the workspace and the tab bar has no destination, which cancels the move.
     if (x < r.left || x > r.right || y < r.top || y > r.bottom) return { dest: null };
+    const placed = place(tab.root, ws.space);
     const prev: Hit | undefined = last && 'target' in last ? last : undefined;
-    return { dest: hitStage(tab.root, place(tab.root, ws.space), x - r.left, y - r.top, prev), reveal: tab.id };
+    return { dest: hitStage(tab.root, placed, x - r.left, y - r.top, prev), reveal: tab.id, over: paneAt(placed, x - r.left, y - r.top) ?? null };
   }
 
   function withinSource(src: string, target: string): boolean {
@@ -60,19 +64,25 @@ export function attachDocking(ws: Workspace, stageInner: () => HTMLElement | nul
   function update(x: number, y: number) {
     if (!active || !ws.drag) return;
     active.x = x; active.y = y;
-    const hit = destinationAt(x, y, ws.drag.src);
+    const src = ws.drag.src;
+    const hit = destinationAt(x, y, src);
     if (hit.reveal) active.reveal = hit.reveal;
-    // Over the source itself there is nothing to preview: a release there
+    // Over the source itself there is nothing to offer: a release there
     // leaves the layout as it is.
-    let dest = hit.dest && 'target' in hit.dest && withinSource(ws.drag.src, hit.dest.target) ? null : hit.dest;
+    let dest = hit.dest && 'target' in hit.dest && withinSource(src, hit.dest.target) ? null : hit.dest;
     last = dest;
-    const sig = JSON.stringify(dest);
+    const over = hit.over && !withinSource(src, hit.over) ? hit.over : null;
+    const sig = JSON.stringify([dest, active.reveal, over, hit.over !== undefined]);
     if (sig === active.sig) return;
     active.sig = sig;
-    let { layout, error } = dest ? ws.preview(ws.drag.src, dest) : { layout: null, error: '' };
-    // A destination that would leave everything where it is shows no preview.
+    let { layout, error } = dest ? ws.preview(src, dest) : { layout: null, error: '' };
+    // A destination that would leave everything where it is offers nothing.
     if (layout && sameLayout(layout, ws.layout)) { dest = null; layout = null; error = ''; }
-    ws.drag = { src: ws.drag.src, dest, result: layout, error };
+    // Markers show which edges of the whole tab and of the pane under the
+    // pointer are available, so the choices are visible without exploring.
+    const shown = ws.layout.tabs.find((t) => t.id === active?.reveal);
+    const targets = hit.over === undefined || !shown ? [] : [...new Set([shown.root.id, ...(over ? [over] : [])])].filter((id) => !withinSource(src, id));
+    ws.drag = { src, dest, result: layout, error, reveal: active.reveal, over, marks: ws.marks(src, targets) };
   }
 
   function stop(apply: boolean) {
@@ -88,9 +98,12 @@ export function attachDocking(ws: Workspace, stageInner: () => HTMLElement | nul
     // Only the click that this release produces is swallowed, never a later one.
     swallowClick = true;
     setTimeout(() => { swallowClick = false; }, 0);
-    if (apply && result) ws.commit(result);
-    else if (prior instanceof HTMLElement && prior.isConnected) prior.focus({ preventScroll: true });
-    else void ws.focusPane();
+    if (apply && result) { ws.commit(result); return; }
+    // The revealed tab is swapped back first, so the element that had focus is visible again.
+    void tick().then(() => {
+      if (prior instanceof HTMLElement && prior.isConnected && prior.offsetParent !== null) prior.focus({ preventScroll: true });
+      else void ws.focusPane();
+    });
   }
 
   const down = (e: PointerEvent) => {
@@ -104,7 +117,7 @@ export function attachDocking(ws: Workspace, stageInner: () => HTMLElement | nul
     if (!active && pending && e.pointerId === pending.pid && Math.hypot(e.clientX - pending.x, e.clientY - pending.y) > 7) {
       active = { pid: pending.pid, prior: pending.prior, reveal: ws.layout.active, sig: '', x: e.clientX, y: e.clientY };
       ws.menu = null;
-      ws.drag = { src: pending.src, dest: null, result: null, error: '' };
+      ws.drag = { src: pending.src, dest: null, result: null, error: '', reveal: ws.layout.active, over: null, marks: [] };
       pending = null;
       document.body.style.userSelect = 'none';
     }

@@ -6,7 +6,7 @@ Most work starts in a terminal running a coding agent. A developer wants to watc
 
 ## A worked example
 
-Open a tab containing two terminal panes, **Codex** and **Tests**, in that order. Open a second tab, **Logs**, for the same sandbox. Pick up the first tab and hover over Logs. A diagram of its workspace appears. Moving the pointer over that diagram chooses the destination.
+Open a tab containing two terminal panes, **Codex** and **Tests**, in that order. Open a second tab, **Logs**, for the same sandbox. Pick up the first tab and hover over Logs. Its workspace comes into view. Moving the pointer into that workspace chooses the destination.
 
 | Drop location | What the preview and committed layout show |
 |---|---|
@@ -50,12 +50,12 @@ A dedicated Claude conversation could become another pane type. Its addition sho
 
 The drag source sets the unit of movement. A tab carries its root layout, a group handle carries the whole subtree, and a pane header carries one view. Dragging inside terminal text remains a selection gesture.
 
-1. **Reveal.** Hovering over the center of a tab shows a diagram of its workspace in place of the current one. The diagram draws each pane with its actual title, and it is the same one the keyboard move command shows. Live pane content stays untouched until the drop. A tab becomes the target only after the pointer rests on it for a moment, so crossing other tabs on the way to the workspace does not retarget. Moving through the gaps between tabs instead shows a reorder or new-tab insertion line.
+1. **Reveal.** Hovering over the center of a tab shows that tab’s workspace in place of the current one. Pane content stays untouched until the drop. A tab becomes the target only after the pointer rests on it for a moment, so crossing other tabs on the way to the workspace does not retarget. Moving through the gaps between tabs instead shows a reorder or new-tab insertion line.
    Releasing over the center of a different tab uses the right edge of its workspace as the default. Show that preview before accepting the drop.
-2. **Target.** The workspace’s outer edge targets the whole tab. An edge inside a pane targets that pane. Give the outer edge priority where they overlap. Inside a pane, an edge is chosen only while the pointer is in the outer third on that side. In the middle the preview keeps its last edge, and near a corner it keeps the current edge until another is clearly closer, so a small movement never flips the preview. Outline the selected target and draw the proposed panes with their actual titles.
+2. **Target.** The workspace’s outer edge targets the whole tab. An edge inside a pane targets that pane. Give the outer edge priority where they overlap. Inside a pane, an edge is chosen only while the pointer is in the outer third on that side. In the middle the preview keeps its last edge, and near a corner it keeps the current edge until another is clearly closer, so a small movement never flips the preview. Show the choices in place, so they are visible without exploring. Markers on the border of the workspace show the available edges of the whole tab, and markers inside the pane under the pointer show its available edges. An edge that would change nothing or cannot fit has no marker. Highlight the marker being used, and cover the area the moved content will take with a block that carries its title, at the size it will have.
 3. **Orient.** At the top or bottom, the incoming group’s immediate children run left to right. At the left or right, they run top to bottom. Preserve child order and relative weights. A child that is itself a group retains its own orientation, order and proportions.
 4. **Commit.** Release to apply exactly the preview in one operation. Remove an emptied source tab. If removing a child leaves a group with one child, promote that child. Preserve every group still containing multiple children. The destination tab becomes active, and focus goes to the moved pane, or to the last-focused pane of a moved group. An invalid drop, a release outside the workspace and tab bar, or Escape restores the previous layout, active tab and focus.
-5. **Adjust.** Drag a divider to resize neighboring panes. A group or pane can be picked up again and docked elsewhere or moved into a tab-bar gap. Keyboard-accessible move commands must offer the same source, target, edge and new-tab choices.
+5. **Adjust.** Drag a divider to resize neighboring panes. A group or pane can be picked up again and docked elsewhere or moved into a tab-bar gap. **Move pane**, **Move group**, and **Move tab** open a dialog that shows every distinct result as a small diagram with the real pane titles, grouped by destination tab and tab bar. Choosing one commits it. The dialog offers exactly the results a drag can reach, leaves out positions that change nothing, and says how many positions need a larger window.
 
 **Equalize sizes** in a group’s action menu distributes space equally among its immediate children, subject to their minimum sizes. Nested groups keep their internal weights. Save the adjusted proportions with the layout.
 
@@ -206,7 +206,8 @@ This document covers the workspace layout portion of the desktop UI design. The 
 | Dock the nested Shell + (Codex, Tests) group. | Only Shell and the pair change orientation relative to each other. Explicit child groups survive. |
 | Hover a background tab, switch between outer and pane targets, then cancel. | The outline and preview identify the affected region. Cancellation restores selection, layout and focus. |
 | Drag a pane across another tab without stopping, then into the workspace. Move the pointer slightly in the middle of a pane. | The crossed tab does not become the target. The preview stays the same until the pointer pushes toward a side. |
-| Repeat a move using keyboard commands. | The same layouts and new-tab destinations are reachable. |
+| Repeat a move from the move dialog, using only the keyboard. | The same layouts and new-tab destinations are offered as diagrams. Each result appears once. |
+| Start dragging a pane and hold it over another pane. | Markers show the available edges of that pane and of the whole tab. The block shows where the pane will land, and the drop puts it exactly there. |
 | Split a Logs pane right, then split its shell below. Rename the new session and move it. | New shells open in place and receive focus. The name follows the same session in headers, previews, attention and reattachment. |
 | Resize a nested group, then equalize its parent. | The parent’s children share the space and the nested proportions survive. |
 | Let a simulated network hold expire with the hold list and a Monitor pane open, and `vibepit monitor` attached as a second client. | All three withdraw its controls. The list row stays in place and reads as blocked. The hold’s Logs row changes to timeout and the rules are unchanged. |

@@ -90,8 +90,18 @@ button[aria-pressed='true'] { color: var(--leaf); }
 .choices { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .choices button { font-size: 12px; }
 
-.projection { position: absolute; inset: 8px; z-index: 5; display: flex; padding: 5px; background: #172019f5; border: 2px dashed var(--leaf); border-radius: 4px; pointer-events: none; }
-.projection.invalid { color: var(--warm); border-color: var(--warm); align-items: center; justify-content: center; text-align: center; }
+/* Docking: markers show the available edges, and the landing block shows
+   where the dragged content will sit. They never take pointer events. */
+.dropmark, .landing, .dropnote { position: absolute; pointer-events: none; z-index: 5; }
+.dropmark { display: grid; place-content: center; border-radius: 5px; color: var(--leaf); background: #1f2a22ee; border: 1px solid #6f8a5c; }
+.dropmark.whole { border-style: dashed; }
+.dropmark.active { background: var(--leaf); border-color: var(--leaf); color: #202e1b; }
+.dropmark.left .glyph { transform: rotate(90deg); }
+.dropmark.right .glyph { transform: rotate(-90deg); }
+.dropmark.top .glyph { transform: rotate(180deg); }
+.landing { z-index: 4; display: grid; place-content: center; background: #4c634099; border: 2px dashed var(--leaf); border-radius: 4px; color: var(--leaf); font: 12px var(--mono); text-align: center; }
+.landing span { background: #1f2a22; padding: 2px 8px; border-radius: 3px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropnote { left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; padding: 7px 14px; background: #2b261d; border: 1px solid #7a6038; border-radius: 5px; color: var(--warm); font-size: 12px; text-align: center; }
 .schematic { display: flex; min-width: 0; min-height: 0; gap: 4px; }
 .schematic.rows { flex-direction: column; }
 .groupmini { padding: 3px; border: 1px solid var(--line2); }
@@ -100,7 +110,19 @@ button[aria-pressed='true'] { color: var(--leaf); }
 /* The incoming half is tinted through, so the result reads at a glance. */
 .incoming .leafmini { background: #35472d; border-color: #6f8a5c; color: var(--leaf); }
 .targetmark { outline: 2px solid var(--warm); outline-offset: -2px; }
-.miniwrap { display: flex; height: 140px; margin: 12px 0; background: #151b17; border-radius: 4px; padding: 5px; }
+.movedialog { width: min(680px, 95vw); }
+.movedialog .chips { margin: 12px 0 4px; }
+.options { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; max-height: 60vh; overflow: auto; padding: 2px; }
+.option { display: grid; gap: 6px; padding: 7px; text-align: left; background: #1d241f; }
+.option:hover:not(:disabled), .option:focus-visible { background: #2a3429; border-color: #6f8a5c; }
+.thumb { display: flex; height: 84px; padding: 3px; background: #151b17; border-radius: 3px; overflow: hidden; }
+.thumb .leafmini { font-size: 10px; padding: 2px; }
+.thumb .schematic { gap: 2px; }
+.thumb .groupmini { padding: 2px; }
+.tabsketch { display: flex; flex-wrap: wrap; align-content: center; gap: 3px; width: 100%; }
+.tabsketch span { padding: 2px 6px; border: 1px solid #56645a; border-radius: 3px; background: #252f27; color: var(--mute); font: 10px var(--mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabsketch .incoming { border: 1px dashed var(--leaf); }
+.optionlabel { font-size: 12px; }
 
 .pop, dialog { background: #242d26; border: 1px solid var(--line2); color: var(--fg); box-shadow: 0 12px 35px #0005; border-radius: 7px; }
 .pop { position: fixed; z-index: 9; min-width: 190px; padding: 5px; max-height: 75vh; overflow: auto; }
@@ -112,12 +134,9 @@ dialog { width: min(490px, 95vw); max-height: 90vh; padding: 18px; }
 dialog::backdrop { background: #080e0abe; }
 .dialoghead { justify-content: space-between; gap: 10px; }
 .dialoghead h2 { font-size: 17px; margin: 0; }
-.formline { display: grid; gap: 4px; margin: 12px 0; color: var(--mute); font-size: 12px; }
-.formline select { width: 100%; color: var(--fg); }
 .chips { gap: 2px; flex-wrap: wrap; }
 .chips button { border: 0; background: transparent; font-size: 12px; }
 .chips [aria-pressed='true'] { box-shadow: inset 0 -2px var(--leaf); }
-.dialogfoot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 15px; }
 
 footer { height: 31px; flex: none; gap: 10px; padding: 0 14px; color: var(--mute); font-size: 11px; border-top: 1px solid var(--line); }
 .footdiv { height: 11px; width: 1px; background: var(--line2); }
