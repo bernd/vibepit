@@ -199,15 +199,17 @@ func NewHTTPProxy(policy *Policy, cidr *CIDRBlocker, log *LogBuffer, upstream st
 					msg,
 				)
 			}
+			// The Host header keeps the client's value, also for host.vibepit:
+			// the gateway is only where we dial. Host services that check the
+			// Host header (e.g. dev servers) can then allow host.vibepit, like
+			// they already can for CONNECT, which never touches the header.
+			if req.Host == "" {
+				req.Host = req.URL.Host
+			}
 			if result.rewrite != "" {
 				req.URL.Host = result.rewrite
-				req.Host = result.rewrite
 			} else {
-				// Dial exactly what was checked; the Host header keeps the
-				// client's value.
-				if req.Host == "" {
-					req.Host = req.URL.Host
-				}
+				// Dial exactly what was checked, not the client's spelling.
 				req.URL.Host = net.JoinHostPort(hostname, port)
 			}
 			return req, nil

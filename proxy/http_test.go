@@ -176,8 +176,9 @@ func TestHTTPProxyBlockMessage(t *testing.T) {
 }
 
 func TestHTTPProxyHostVibepit(t *testing.T) {
-	// Backend server that returns "host-service".
+	// Backend server that returns "host-service" and echoes the Host header it received.
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Received-Host", r.Host)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("host-service"))
 	}))
@@ -212,6 +213,26 @@ func TestHTTPProxyHostVibepit(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		body, _ := io.ReadAll(resp.Body)
 		assert.Equal(t, "host-service", string(body))
+	})
+
+	t.Run("keeps the client's Host header for host.vibepit", func(t *testing.T) {
+		al, err := NewHTTPAllowlist(nil)
+		require.NoError(t, err)
+		p := NewHTTPProxy(NewPolicy(al, nil, nil), NewCIDRBlocker(nil, nil), NewLogBuffer(100), DefaultUpstreamDNS)
+		p.SetHostVibepit(backendURL.Hostname(), []int{backendPortInt})
+
+		srv := httptest.NewServer(p.Handler())
+		defer srv.Close()
+
+		proxyURL, _ := url.Parse(srv.URL)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+
+		resp, err := client.Get("http://host.vibepit:" + backendPortStr + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "host.vibepit:"+backendPortStr, resp.Header.Get("X-Received-Host"))
 	})
 
 	t.Run("blocks host.vibepit for unconfigured port", func(t *testing.T) {

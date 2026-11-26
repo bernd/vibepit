@@ -147,6 +147,12 @@ allow-host-ports:
 With this configuration, `curl http://host.vibepit:3000` works inside the
 sandbox, but `curl http://host.vibepit:8080` is blocked.
 
+The service on the host receives the request with the `Host` header the
+sandbox sent, such as `host.vibepit:3000`. Development servers that check the
+`Host` header reject unknown hosts, so add `host.vibepit` to their allowed
+hosts, for example `devServer.allowedHosts` in webpack or
+`server.allowedHosts` in Vite.
+
 `allow-host-ports` is a project config setting only. The global config and CLI
 flags don't support it.
 
